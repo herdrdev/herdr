@@ -46,6 +46,7 @@ pub enum SnapshotReason {
     PreRestore,
     PreClean,
     PreKill,
+    Periodic,
 }
 
 impl SnapshotReason {
@@ -57,6 +58,7 @@ impl SnapshotReason {
             Self::PreRestore => "pre-restore",
             Self::PreClean => "pre-clean",
             Self::PreKill => "pre-kill",
+            Self::Periodic => "periodic",
         }
     }
 
@@ -68,9 +70,10 @@ impl SnapshotReason {
             "pre-restore" => Self::PreRestore,
             "pre-clean" => Self::PreClean,
             "pre-kill" => Self::PreKill,
+            "periodic" => Self::Periodic,
             other => {
                 return Err(format!(
-                    "unknown snapshot reason {other:?} (expected manual|idle|done|pre-restore|pre-clean|pre-kill)"
+                    "unknown snapshot reason {other:?} (expected manual|idle|done|pre-restore|pre-clean|pre-kill|periodic)"
                 ))
             }
         })

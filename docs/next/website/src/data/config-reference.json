@@ -1592,6 +1592,12 @@
           "type": "integer",
           "default": "67108864",
           "description": "A snapshot whose included files add up to more than this many bytes fails instead of being stored."
+        },
+        {
+          "key": "shepherd.snapshots.interval_secs",
+          "type": "integer",
+          "default": "300",
+          "description": "Seconds an agent must stay working before Shepherd takes an automatic periodic snapshot of its worktree. 0 disables periodic snapshots (idle, done, pre-kill and pre-clean snapshots still happen)."
         }
       ]
     }

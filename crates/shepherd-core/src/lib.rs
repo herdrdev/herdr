@@ -189,6 +189,16 @@ pub struct Agent {
     pub started: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub updated: String,
+    /// Snapshots stored for this agent (filled in when listing; omitted when 0).
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub snapshots: u32,
+    /// Id of the agent's newest snapshot (filled in when listing; omitted when none).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub last_snapshot: String,
+}
+
+fn is_zero_u32(n: &u32) -> bool {
+    *n == 0
 }
 
 impl Agent {

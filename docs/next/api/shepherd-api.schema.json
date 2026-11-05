@@ -8151,6 +8151,10 @@
             "label": {
               "type": "string"
             },
+            "last_snapshot": {
+              "description": "Id of the agent's newest snapshot (filled in when listing; omitted when none).",
+              "type": "string"
+            },
             "mcp": {
               "default": false,
               "type": "boolean"
@@ -8185,6 +8189,12 @@
             "skills": {
               "$ref": "#/schemas/success_response/$defs/SkillAdjust",
               "default": {}
+            },
+            "snapshots": {
+              "description": "Snapshots stored for this agent (filled in when listing; omitted when 0).",
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
             },
             "started": {
               "type": "string"
@@ -14092,7 +14102,8 @@
             "done",
             "pre-restore",
             "pre-clean",
-            "pre-kill"
+            "pre-kill",
+            "periodic"
           ],
           "type": "string"
         },

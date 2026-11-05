@@ -341,6 +341,8 @@ pub struct ShepherdSnapshotsConfig {
     pub max_file_bytes: u64,
     /// A snapshot whose included files exceed this many bytes fails. Default: 67108864.
     pub max_capture_bytes: u64,
+    /// Seconds of continuous `working` before an automatic periodic snapshot; 0 disables. Default: 300.
+    pub interval_secs: u64,
 }
 
 impl Default for ShepherdSnapshotsConfig {
@@ -349,6 +351,7 @@ impl Default for ShepherdSnapshotsConfig {
             max_per_agent: 50,
             max_file_bytes: 2 * 1024 * 1024,
             max_capture_bytes: 64 * 1024 * 1024,
+            interval_secs: 300,
         }
     }
 }

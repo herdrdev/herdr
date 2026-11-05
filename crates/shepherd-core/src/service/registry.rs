@@ -2,6 +2,7 @@
 
 use super::OrchestrationService;
 use crate::bus::Message;
+use crate::snapshot::SnapshotReason;
 use crate::terminals::TerminalError;
 use crate::{Agent, AgentRegistryFile};
 use std::path::{Component, Path};
@@ -30,6 +31,7 @@ impl OrchestrationService {
             } else {
                 agent.id.clone()
             };
+            let warning = self.pre_action_snapshot(agent, SnapshotReason::PreKill);
             if !close_target.is_empty() {
                 match self.terminals.close(&close_target) {
                     Ok(()) => {}
@@ -38,7 +40,7 @@ impl OrchestrationService {
                 }
             }
             agent.state = "killed".into();
-            agent.notice.clear();
+            agent.notice = warning.unwrap_or_default();
             agent.updated = self.clock.now_rfc3339();
             let updated = agent.clone();
             self.save_registry(&registry)?;
@@ -97,6 +99,7 @@ impl OrchestrationService {
             for id in targets {
                 validate_plain_agent_id(&id)?;
                 if let Some(agent) = registry.agents.iter().find(|a| a.id == id).cloned() {
+                    self.pre_action_snapshot(&agent, SnapshotReason::PreClean);
                     let close_target = if !agent.tab.is_empty() {
                         agent.tab.clone()
                     } else {

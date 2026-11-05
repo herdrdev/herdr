@@ -138,6 +138,8 @@ pub struct SnapshotsConfig {
     pub max_per_agent: usize,
     pub max_file_bytes: u64,
     pub max_capture_bytes: u64,
+    /// Seconds of continuous `working` before an automatic periodic snapshot (0 disables).
+    pub interval_secs: u64,
 }
 
 impl Default for SnapshotsConfig {
@@ -146,6 +148,7 @@ impl Default for SnapshotsConfig {
             max_per_agent: 50,
             max_file_bytes: 2 * 1024 * 1024,
             max_capture_bytes: 64 * 1024 * 1024,
+            interval_secs: 300,
         }
     }
 }
@@ -333,6 +336,7 @@ struct TomlSnapshotsSection {
     max_per_agent: Option<usize>,
     max_file_bytes: Option<u64>,
     max_capture_bytes: Option<u64>,
+    interval_secs: Option<u64>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -458,6 +462,9 @@ pub fn load_config_with_diagnostics(
                 }
                 if let Some(v) = snap.max_capture_bytes {
                     config.snapshots.max_capture_bytes = v;
+                }
+                if let Some(v) = snap.interval_secs {
+                    config.snapshots.interval_secs = v;
                 }
             }
         }

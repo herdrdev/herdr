@@ -284,6 +284,7 @@ pub struct OrchestrationService {
     pub(crate) topic_wake_notified: Arc<Mutex<HashMap<(String, String), (u64, u64)>>>,
     /// Run id -> ms since which the run has been continuously quiescent.
     pub(crate) run_quiet_since: Arc<Mutex<HashMap<String, (u64, usize)>>>,
+    pub(crate) auto_snapshots: Arc<snapshots::AutoSnapshots>,
 }
 
 impl OrchestrationService {
@@ -319,6 +320,7 @@ impl OrchestrationService {
             failed_requests: Arc::new(Mutex::new(Vec::new())),
             topic_wake_notified: Arc::new(Mutex::new(HashMap::new())),
             run_quiet_since: Arc::new(Mutex::new(HashMap::new())),
+            auto_snapshots: Arc::default(),
         }
     }
 
@@ -398,7 +400,9 @@ impl OrchestrationService {
     pub fn list_public_agents(&self) -> Result<Vec<Agent>, String> {
         let result = (|| {
             let registry = self.load_registry()?;
-            Ok(registry.agents.iter().map(Agent::public).collect())
+            let mut agents: Vec<Agent> = registry.agents.iter().map(Agent::public).collect();
+            self.annotate_snapshots(&mut agents);
+            Ok(agents)
         })();
         self.log_err("agents", result)
     }
@@ -1167,6 +1171,7 @@ pub mod gates;
 pub mod patterns_run;
 pub mod reconcile;
 pub mod registry;
+pub mod snapshots;
 pub mod spawn;
 
 pub(crate) use registry::status_query_target;
@@ -1183,3 +1188,5 @@ mod tests_f8f;
 mod tests_f8g;
 #[cfg(test)]
 mod tests_f8h;
+#[cfg(test)]
+mod tests_f11b;

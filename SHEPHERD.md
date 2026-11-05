@@ -5400,3 +5400,63 @@ Servidor `iso` arrancado en `/tmp/shfiso` (repo temporal `/tmp/shfiso/repo`), CL
 - **F11c**: panel de línea de tiempo en la UI y verificación con agentes reales.
 - Sin límite de disco global (solo por agente y por captura), sin timeouts en las llamadas a git, y `shepherd-core snapshot …` (la CLI antigua de la crate) no lo expone: solo `shepherd snapshot …`. Los datos de `show --full`/`diff --full` no tienen tope de tamaño.
 - Los helpers legados `shepherd.call` no mapean operaciones `snapshot_*` (los métodos nuevos solo existen tipados).
+
+## Estado F11b — snapshots automáticos por eventos (2026-11-05)
+
+Fase F11b según `SHEPHERD-F11B-BRIEF.md`. Local, sin red, sin IA, sin dependencias nuevas, sin commits, sin agentes reales. Las pruebas se escribieron antes que la implementación, pero **no ejecuté la versión «roja»** (no compilaba aún); el primer fallo real que vi fue un error del propio test (índice tomado antes de crear un archivo), corregido.
+
+### 1. Qué dispara qué (`crates/shepherd-core/src/service/snapshots.rs`, nuevo)
+
+| Disparo | Motivo | Dónde |
+|---|---|---|
+| Agente pasa a `idle` (transición, no nivel) | `idle` | `reconcile_once` → `auto_snapshot_tick` |
+| Agente pasa a `done` (incluye `submit_result`) | `done` | idem (se compara con el último estado visto, no con el del registro) |
+| `working` continuado ≥ `interval_secs` | `periodic` (**motivo nuevo**) | idem; el temporizador se reinicia en cada captura y al salir de `working` |
+| Antes de `kill` (y por tanto `pattern stop`/limpieza de run, que llaman a `kill`) | `pre-kill` | `registry.rs::kill` |
+| Antes de `clean` de cada agente | `pre-clean` | `registry.rs::clean` |
+| Arranque del servicio, agente restaurado vivo con worktree existente | `done` si su estado es `done`, si no `idle` | `resume_on_startup` → `recover_snapshots` |
+
+- Todas las capturas automáticas corren en un hilo aparte (no bloquean el bucle de eventos), una por agente a la vez; una captura «colgada» >60 s deja de bloquear a las siguientes. `pre-kill`/`pre-clean` esperan como máximo 60 s (`SNAPSHOT_TIMEOUT`).
+- Árbol sin cambios → no se crea snapshot (F11a). `max_per_agent` se aplica en cada captura (ya lo hacía `capture_in`; se verifica con test).
+- **Fallo de captura no impide la acción**: `kill` sigue y deja el aviso en `notice` del agente devuelto y en `service.log`; `clean` solo lo registra en el log.
+- **Worktree desaparecido**: al arrancar, se anota en `service.log` («worktree of X is gone …; N snapshot(s) kept in the base repo») y `snapshot list --all` sigue mostrando los snapshots de agentes muertos (los refs viven en el repo base; test con worktree enlazado eliminado).
+- **Visibilidad**: `Agent` gana `snapshots` (u32) y `last_snapshot` (id), ambos **omitidos cuando valen 0/vacío** → ningún golden cambió. Se calculan al listar (`list_public_agents`), con una caché de 5 s por repo para no lanzar git en cada refresco. La salida humana de `shepherd agents` no se tocó (golden intacto); el JSON sí trae los campos.
+
+### 2. Configuración
+
+`[shepherd.snapshots] interval_secs` (default 300, 0 = sin captura periódica), declarada en `crates/shepherd-core/src/config.rs`, `src/config/model.rs` y `config-reference.json`. Motivo nuevo `periodic` aceptado por `snapshot capture --reason`. 
+
+### 3. Archivos de herdr tocados (+/−)
+
+`src/config/model.rs` 7/1 · `docs/next/website/src/data/config-reference.json` 6/0 · `docs/next/api/shepherd-api.schema.json` 12/1 (regenerado: campos `snapshots`/`last_snapshot` y `periodic`). Propios: `crates/shepherd-core/src/{config,lib}.rs`, `service/{mod,reconcile,registry}.rs`, `snapshot/{mod,limits}.rs` (limits: solo se quitó «herdr» de un comentario de F11a que hacía fallar `rename --check`); nuevos `service/snapshots.rs`, `service/tests_f11b.rs`. `rustfmt --edition 2021` solo sobre archivos propios; golden existentes: 0 modificados.
+
+### 4. Resultados reales
+
+| Área | Pasados | Fallados | Ignorados |
+|---|---|---|---|
+| `shepherd-core` | 329 = 173 unit (+8 `tests_f11b`) + 155 caracterización + 1 `snapshot_golden` | 0 | 0 |
+| `shepherd::` | 94 | 0 | 0 |
+| `client::shell` | 403 | 0 | 2 |
+| `protocol::` | 159 = 156 + 3 | 0 | 0 |
+| `api::` (`--test-threads=1`) | 319 | 0 | 1 |
+| `server::` | 318 | 0 | 5 |
+| `config::` | 185 | 0 (ver nota) | 0 |
+| contratos v1 (`client_commands`) | 5 | 0 | 0 |
+| `shepherd_bindings` | 9 | 0 | 0 |
+| `scripts.test_config_reference_check` | 14 | 0 | 0 |
+| `rename-from-herdr.sh --check` | OK | – | – |
+
+Nota: en la primera pasada completa, `config::io::tests::config_diagnostic_summary_*` (3 tests) fallaron; al repetir `config::` solo salieron 185/185 verdes. **No investigué la causa** (sospecha: interferencia entre tests paralelos por variables de entorno); no toqué `config/io.rs`. Los 8 tests nuevos cubren: idle/done disparan y árbol igual no crea; periodicidad y `0` desactiva; no solapamiento y expiración de captura colgada; `pre-kill` y su fallo sin bloquear; `pre-clean` y agentes muertos en `list --all`; recuperación tras reinicio (idempotente) y worktree desaparecido; `max_per_agent`; índice/`status`/rama/HEAD del repo del usuario byte a byte intactos; contadores en el listado y omisión cuando es 0.
+
+### 5. Prueba aislada (`shepherd-iso.sh`, `interval_secs = 5`, agente sembrado sobre un pane de shell + `pane.report_agent`)
+
+`snapshot list --all` mostró: `coder-1/1 periodic`, `coder-1/2 idle`, `coder-1/3 pre-kill` (al hacer `shepherd shepherd kill coder-1`), todos solos; `shepherd.call agents` devolvió `snapshots` y `last_snapshot`. **No pude demostrar en vivo la recuperación tras reinicio ni `done`**: tras reiniciar, un pane de shell no es un agente restaurado y el registro lo marcó `exited`; ambos están cubiertos solo por tests unitarios. Con claude/codex reales debería verse.
+
+### 6. Qué NO queda
+
+- **F11c**: panel de línea de tiempo en la UI y verificación con agentes reales.
+- Sin `keep_after_clean_days`: los snapshots se conservan tras `clean`/borrado del worktree hasta `prune` (política por defecto del brief; no añadí la clave).
+- Sin evento/notificación a la futura pestaña Agentes (era opcional; lo consultable es `snapshots`/`last_snapshot`).
+- La acción «eliminar worktree» de la pestaña Git (`remove_worktree`) no tiene implementación en el núcleo, así que no hay `pre-clean` ahí; solo en `clean`.
+- Las capturas disparadas solo ocurren cuando corre la reconciliación (eventos de herdr + respaldo de 10 s): `interval_secs` tiene esa resolución.
+- Sin timeouts dentro de las llamadas a git (el timeout es del llamador; un git colgado deja un hilo huérfano).

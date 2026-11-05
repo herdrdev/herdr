@@ -80,6 +80,8 @@ impl OrchestrationService {
                 }
             }
             self.save_registry(&registry)?;
+            self.auto_snapshot_tick(&registry);
+            self.recover_snapshots(&registry);
             let _ = self.reconcile_pattern_runs(&registry, None);
             Ok(registry)
         })();
@@ -240,6 +242,7 @@ impl OrchestrationService {
                 self.save_registry(&registry)?;
             }
 
+            self.auto_snapshot_tick(&registry);
             self.deliver_pending_non_mcp_messages(&mut registry);
             self.wake_dormant_topic_subscribers(&mut registry, None);
             let _ = self.reconcile_pattern_runs(&registry, None);

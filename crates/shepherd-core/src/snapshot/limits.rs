@@ -1,4 +1,4 @@
-//! Snapshot limits (`[shepherd.snapshots]` in the herdr `config.toml`).
+//! Snapshot limits (`[shepherd.snapshots]` in `config.toml`).
 
 use crate::config::SnapshotsConfig;
 
