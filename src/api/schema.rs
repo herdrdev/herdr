@@ -147,6 +147,22 @@ operations::define_operations! {
     PluginPaneOpen(PluginPaneOpenParams) => "plugin.pane.open", true, false;
     PluginPaneFocus(PluginPaneFocusParams) => "plugin.pane.focus", true, false;
     PluginPaneClose(PluginPaneCloseParams) => "plugin.pane.close", true, false;
+    ShepherdAgentList(ShepherdAgentListParams) => "shepherd.agent.list", false, true;
+    ShepherdAgentSpawn(ShepherdAgentSpawnParams) => "shepherd.agent.spawn", false, true;
+    ShepherdAgentKill(ShepherdAgentTargetParams) => "shepherd.agent.kill", false, true;
+    ShepherdAgentClean(ShepherdAgentCleanParams) => "shepherd.agent.clean", false, true;
+    ShepherdAgentFocus(ShepherdAgentTargetParams) => "shepherd.agent.focus", false, true;
+    ShepherdAgentReconcile(ShepherdEmptyParams) => "shepherd.agent.reconcile", false, true;
+    ShepherdAgentResume(ShepherdEmptyParams) => "shepherd.agent.resume", false, true;
+    ShepherdTaskList(ShepherdTaskListParams) => "shepherd.task.list", false, true;
+    ShepherdTaskCreate(ShepherdTaskCreateParams) => "shepherd.task.create", false, true;
+    ShepherdTaskArchive(ShepherdTaskArchiveParams) => "shepherd.task.archive", false, true;
+    ShepherdRunList(ShepherdRunListParams) => "shepherd.run.list", false, true;
+    ShepherdRunStart(ShepherdRunStartParams) => "shepherd.run.start", false, true;
+    ShepherdRunApprove(ShepherdGateActionParams) => "shepherd.run.approve", false, true;
+    ShepherdRunReject(ShepherdGateRejectParams) => "shepherd.run.reject", false, true;
+    ShepherdSkillList(ShepherdSkillListParams) => "shepherd.skill.list", false, true;
+    ShepherdGitStatus(ShepherdGitStatusParams) => "shepherd.git.status", false, true;
     ShepherdCall(ShepherdCallParams) => "shepherd.call", false, true;
 }
 

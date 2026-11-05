@@ -31,13 +31,15 @@ pub use patterns::{
     Problem, Severity, Topic,
 };
 
+pub use service::{RunSubtaskSummary, RunSummary};
+
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 use unicode_normalization::{char::is_combining_mark, UnicodeNormalization};
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Subtask {
     #[serde(rename = "n")]
     pub number: u32,
@@ -228,7 +230,7 @@ impl std::fmt::Display for PlanError {
 
 impl std::error::Error for PlanError {}
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct IssueRef {
     pub number: u32,
     pub url: String,
@@ -237,7 +239,7 @@ pub struct IssueRef {
 }
 
 /// On-disk task state, kept compatible with Go's `.shepherd/tasks/*/status.json`.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct TaskStatus {
     pub id: u32,
     pub slug: String,
@@ -262,7 +264,7 @@ pub struct TaskStatus {
     pub updated: String,
 }
 
-#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct SkillAdjust {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub add: Vec<String>,
@@ -271,7 +273,7 @@ pub struct SkillAdjust {
 }
 
 /// Shepherd's identity and workflow metadata for an agent. Shepherd remains the owner of its terminal process.
-#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Agent {
     pub id: String,
     #[serde(default)]
@@ -563,7 +565,7 @@ pub struct NewTask {
     pub links: Vec<String>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct CreatedTask {
     pub status: TaskStatus,
     pub directory: std::path::PathBuf,

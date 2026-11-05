@@ -280,6 +280,63 @@ pub enum ResponseResult {
     ShepherdCall {
         data: serde_json::Value,
     },
+    ShepherdAgentList {
+        agents: Vec<shepherd_core::Agent>,
+    },
+    ShepherdAgentSpawned {
+        agent: shepherd_core::Agent,
+    },
+    ShepherdAgentKilled {
+        agent: shepherd_core::Agent,
+    },
+    ShepherdAgentCleaned {
+        cleaned: Vec<String>,
+    },
+    ShepherdAgentFocused {
+        agent: shepherd_core::Agent,
+    },
+    ShepherdAgentReconciled {
+        agents: Vec<shepherd_core::Agent>,
+    },
+    ShepherdAgentResumed {
+        agents: Vec<shepherd_core::Agent>,
+    },
+    ShepherdTaskList {
+        tasks: Vec<shepherd_core::CreatedTask>,
+    },
+    ShepherdTaskCreated {
+        task: shepherd_core::CreatedTask,
+    },
+    ShepherdTaskArchived {
+        archived: bool,
+        path: String,
+    },
+    ShepherdRunList {
+        runs: Vec<shepherd_core::RunSummary>,
+    },
+    ShepherdRunStarted {
+        accepted: bool,
+        job: String,
+        task: String,
+    },
+    ShepherdGateApproved {
+        ok: bool,
+        task: String,
+        approved: String,
+    },
+    ShepherdGateRejected {
+        ok: bool,
+        task: String,
+        rejected: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
+    },
+    ShepherdSkillList {
+        skills: Vec<shepherd_core::skills::Skill>,
+    },
+    ShepherdGitStatus {
+        status: shepherd_core::git::GitRepoStatus,
+    },
     Ok {},
 }
 

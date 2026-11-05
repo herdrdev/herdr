@@ -3893,7 +3893,104 @@
           ],
           "type": "object"
         },
+        "ShepherdAgentCleanParams": {
+          "properties": {
+            "ids": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "workspace": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "type": "object"
+        },
+        "ShepherdAgentListParams": {
+          "type": "object"
+        },
+        "ShepherdAgentSpawnParams": {
+          "properties": {
+            "confirm_over_limit": {
+              "default": false,
+              "type": "boolean"
+            },
+            "deliver_prompt": {
+              "default": true,
+              "type": "boolean"
+            },
+            "mcp_url": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "model": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "parent_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "role": {
+              "type": "string"
+            },
+            "root": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "task": {
+              "type": "string"
+            },
+            "task_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "vendor": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "worktree": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "role",
+            "task"
+          ],
+          "type": "object"
+        },
+        "ShepherdAgentTargetParams": {
+          "properties": {
+            "id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "type": "object"
+        },
         "ShepherdCallParams": {
+          "description": "Deprecated generic dispatcher parameter struct.\nRetained for backwards compatibility with existing clients and scripts.",
           "properties": {
             "args": {
               "default": null
@@ -3905,6 +4002,185 @@
           "required": [
             "op"
           ],
+          "type": "object"
+        },
+        "ShepherdEmptyParams": {
+          "description": "Common parameter struct for Shepherd methods with no arguments.",
+          "type": "object"
+        },
+        "ShepherdGateActionParams": {
+          "properties": {
+            "root": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "target": {
+              "type": "string"
+            },
+            "task": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "task",
+            "target"
+          ],
+          "type": "object"
+        },
+        "ShepherdGateRejectParams": {
+          "properties": {
+            "reason": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "root": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "target": {
+              "type": "string"
+            },
+            "task": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "task",
+            "target"
+          ],
+          "type": "object"
+        },
+        "ShepherdGitStatusParams": {
+          "properties": {
+            "root": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "type": "object"
+        },
+        "ShepherdRunListParams": {
+          "properties": {
+            "root": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "type": "object"
+        },
+        "ShepherdRunStartParams": {
+          "properties": {
+            "auto_push": {
+              "default": false,
+              "type": "boolean"
+            },
+            "mcp_url": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "root": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "task": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "task"
+          ],
+          "type": "object"
+        },
+        "ShepherdSkillListParams": {
+          "properties": {
+            "root": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "type": "object"
+        },
+        "ShepherdTaskArchiveParams": {
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "root": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "type": "object"
+        },
+        "ShepherdTaskCreateParams": {
+          "properties": {
+            "criteria": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "description": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "links": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "root": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "title": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "title"
+          ],
+          "type": "object"
+        },
+        "ShepherdTaskListParams": {
+          "properties": {
+            "archived": {
+              "default": false,
+              "type": "boolean"
+            },
+            "root": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
           "type": "object"
         },
         "SplitDirection": {
@@ -6330,6 +6606,262 @@
         {
           "properties": {
             "method": {
+              "const": "shepherd.agent.list",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/ShepherdAgentListParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "shepherd.agent.spawn",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/ShepherdAgentSpawnParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "shepherd.agent.kill",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/ShepherdAgentTargetParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "shepherd.agent.clean",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/ShepherdAgentCleanParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "shepherd.agent.focus",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/ShepherdAgentTargetParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "shepherd.agent.reconcile",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/ShepherdEmptyParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "shepherd.agent.resume",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/ShepherdEmptyParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "shepherd.task.list",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/ShepherdTaskListParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "shepherd.task.create",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/ShepherdTaskCreateParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "shepherd.task.archive",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/ShepherdTaskArchiveParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "shepherd.run.list",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/ShepherdRunListParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "shepherd.run.start",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/ShepherdRunStartParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "shepherd.run.approve",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/ShepherdGateActionParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "shepherd.run.reject",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/ShepherdGateRejectParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "shepherd.skill.list",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/ShepherdSkillListParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "shepherd.git.status",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/ShepherdGitStatusParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
               "const": "shepherd.call",
               "type": "string"
             },
@@ -6570,6 +7102,116 @@
     },
     "success_response": {
       "$defs": {
+        "Agent": {
+          "description": "Shepherd's identity and workflow metadata for an agent. Shepherd remains the owner of its terminal process.",
+          "properties": {
+            "active_skills": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "branch": {
+              "type": "string"
+            },
+            "delivery_cursor": {
+              "default": 0,
+              "format": "int64",
+              "type": "integer"
+            },
+            "depth": {
+              "default": 0,
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "error": {
+              "type": "string"
+            },
+            "has_result": {
+              "default": false,
+              "type": "boolean"
+            },
+            "id": {
+              "type": "string"
+            },
+            "label": {
+              "type": "string"
+            },
+            "mcp": {
+              "default": false,
+              "type": "boolean"
+            },
+            "model": {
+              "type": "string"
+            },
+            "notice": {
+              "type": "string"
+            },
+            "pane": {
+              "type": "string"
+            },
+            "parent_id": {
+              "type": "string"
+            },
+            "result": {
+              "type": "string"
+            },
+            "role": {
+              "type": "string"
+            },
+            "root": {
+              "type": "string"
+            },
+            "seq": {
+              "default": 0,
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "skills": {
+              "$ref": "#/schemas/success_response/$defs/SkillAdjust",
+              "default": {}
+            },
+            "started": {
+              "type": "string"
+            },
+            "state": {
+              "type": "string"
+            },
+            "tab": {
+              "type": "string"
+            },
+            "task_id": {
+              "type": "string"
+            },
+            "task_text": {
+              "type": "string"
+            },
+            "token": {
+              "type": "string"
+            },
+            "updated": {
+              "type": "string"
+            },
+            "vendor": {
+              "type": "string"
+            },
+            "workspace": {
+              "type": "string"
+            },
+            "worktree": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "role",
+            "vendor",
+            "state"
+          ],
+          "type": "object"
+        },
         "AgentInfo": {
           "properties": {
             "agent": {
@@ -6856,6 +7498,21 @@
             "failed"
           ],
           "type": "string"
+        },
+        "CreatedTask": {
+          "properties": {
+            "directory": {
+              "type": "string"
+            },
+            "status": {
+              "$ref": "#/schemas/success_response/$defs/TaskStatus"
+            }
+          },
+          "required": [
+            "status",
+            "directory"
+          ],
+          "type": "object"
         },
         "EventData": {
           "oneOf": [
@@ -7550,6 +8207,135 @@
           ],
           "type": "string"
         },
+        "GitPrSummary": {
+          "description": "Summary of a Pull Request associated with a branch.",
+          "properties": {
+            "is_draft": {
+              "type": "boolean"
+            },
+            "number": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "state": {
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            },
+            "url": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "number",
+            "title",
+            "state",
+            "url",
+            "is_draft"
+          ],
+          "type": "object"
+        },
+        "GitRepoStatus": {
+          "description": "Full repository git status returned by `git_status` API call.",
+          "properties": {
+            "error": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "gh_available": {
+              "type": "boolean"
+            },
+            "gh_note": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "root": {
+              "type": "string"
+            },
+            "worktrees": {
+              "items": {
+                "$ref": "#/schemas/success_response/$defs/GitWorktreeInfo"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "root",
+            "worktrees",
+            "gh_available"
+          ],
+          "type": "object"
+        },
+        "GitWorktreeInfo": {
+          "description": "Information about a single worktree in the repository.",
+          "properties": {
+            "agent_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "ahead": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "behind": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "branch": {
+              "type": "string"
+            },
+            "dirty_count": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "is_clean": {
+              "type": "boolean"
+            },
+            "is_main": {
+              "type": "boolean"
+            },
+            "path": {
+              "type": "string"
+            },
+            "pr": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/success_response/$defs/GitPrSummary"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "upstream": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "path",
+            "branch",
+            "is_main",
+            "is_clean",
+            "dirty_count",
+            "ahead",
+            "behind"
+          ],
+          "type": "object"
+        },
         "InstalledPluginInfo": {
           "properties": {
             "actions": {
@@ -7731,6 +8517,26 @@
           },
           "required": [
             "messages"
+          ],
+          "type": "object"
+        },
+        "IssueRef": {
+          "properties": {
+            "number": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "repo": {
+              "type": "string"
+            },
+            "url": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "number",
+            "url"
           ],
           "type": "object"
         },
@@ -10485,6 +11291,317 @@
             },
             {
               "properties": {
+                "agents": {
+                  "items": {
+                    "$ref": "#/schemas/success_response/$defs/Agent"
+                  },
+                  "type": "array"
+                },
+                "type": {
+                  "const": "shepherd_agent_list",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "agents"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "agent": {
+                  "$ref": "#/schemas/success_response/$defs/Agent"
+                },
+                "type": {
+                  "const": "shepherd_agent_spawned",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "agent"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "agent": {
+                  "$ref": "#/schemas/success_response/$defs/Agent"
+                },
+                "type": {
+                  "const": "shepherd_agent_killed",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "agent"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "cleaned": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "type": {
+                  "const": "shepherd_agent_cleaned",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "cleaned"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "agent": {
+                  "$ref": "#/schemas/success_response/$defs/Agent"
+                },
+                "type": {
+                  "const": "shepherd_agent_focused",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "agent"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "agents": {
+                  "items": {
+                    "$ref": "#/schemas/success_response/$defs/Agent"
+                  },
+                  "type": "array"
+                },
+                "type": {
+                  "const": "shepherd_agent_reconciled",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "agents"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "agents": {
+                  "items": {
+                    "$ref": "#/schemas/success_response/$defs/Agent"
+                  },
+                  "type": "array"
+                },
+                "type": {
+                  "const": "shepherd_agent_resumed",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "agents"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "tasks": {
+                  "items": {
+                    "$ref": "#/schemas/success_response/$defs/CreatedTask"
+                  },
+                  "type": "array"
+                },
+                "type": {
+                  "const": "shepherd_task_list",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "tasks"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "task": {
+                  "$ref": "#/schemas/success_response/$defs/CreatedTask"
+                },
+                "type": {
+                  "const": "shepherd_task_created",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "task"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "archived": {
+                  "type": "boolean"
+                },
+                "path": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "shepherd_task_archived",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "archived",
+                "path"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "runs": {
+                  "items": {
+                    "$ref": "#/schemas/success_response/$defs/RunSummary"
+                  },
+                  "type": "array"
+                },
+                "type": {
+                  "const": "shepherd_run_list",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "runs"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "accepted": {
+                  "type": "boolean"
+                },
+                "job": {
+                  "type": "string"
+                },
+                "task": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "shepherd_run_started",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "accepted",
+                "job",
+                "task"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "approved": {
+                  "type": "string"
+                },
+                "ok": {
+                  "type": "boolean"
+                },
+                "task": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "shepherd_gate_approved",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "ok",
+                "task",
+                "approved"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "ok": {
+                  "type": "boolean"
+                },
+                "reason": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "rejected": {
+                  "type": "string"
+                },
+                "task": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "shepherd_gate_rejected",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "ok",
+                "task",
+                "rejected"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "skills": {
+                  "items": {
+                    "$ref": "#/schemas/success_response/$defs/Skill"
+                  },
+                  "type": "array"
+                },
+                "type": {
+                  "const": "shepherd_skill_list",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "skills"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "status": {
+                  "$ref": "#/schemas/success_response/$defs/GitRepoStatus"
+                },
+                "type": {
+                  "const": "shepherd_git_status",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "status"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
                 "type": {
                   "const": "ok",
                   "type": "string"
@@ -10496,6 +11613,113 @@
               "type": "object"
             }
           ]
+        },
+        "RunSubtaskSummary": {
+          "properties": {
+            "branch": {
+              "type": "string"
+            },
+            "coder": {
+              "type": "string"
+            },
+            "n": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "note": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "pr": {
+              "type": "string"
+            },
+            "reviewer": {
+              "type": "string"
+            },
+            "state": {
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "n",
+            "title",
+            "state",
+            "branch",
+            "pr",
+            "coder",
+            "reviewer"
+          ],
+          "type": "object"
+        },
+        "RunSummary": {
+          "properties": {
+            "active_agents": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "current_stage": {
+              "type": "string"
+            },
+            "has_saved_plan": {
+              "type": "boolean"
+            },
+            "pending_gate": true,
+            "status": {
+              "type": "string"
+            },
+            "subtasks": {
+              "default": [],
+              "items": {
+                "$ref": "#/schemas/success_response/$defs/RunSubtaskSummary"
+              },
+              "type": "array"
+            },
+            "subtasks_progress": {
+              "items": {
+                "format": "uint",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "maxItems": 2,
+              "minItems": 2,
+              "type": "array"
+            },
+            "task_id": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "task_title": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "task_id",
+            "task_title",
+            "status",
+            "current_stage",
+            "has_saved_plan",
+            "subtasks_progress"
+          ],
+          "type": "object"
+        },
+        "Scope": {
+          "description": "Origin scope of a skill (`Repo > User > Default`).",
+          "enum": [
+            "default",
+            "user",
+            "repo"
+          ],
+          "type": "string"
         },
         "ServerCapabilities": {
           "properties": {
@@ -10606,12 +11830,124 @@
           ],
           "type": "object"
         },
+        "Skill": {
+          "description": "A discovered skill in the catalog (`Repo > User > Default`).",
+          "properties": {
+            "description": {
+              "type": "string"
+            },
+            "dir": {
+              "type": "string"
+            },
+            "global": {
+              "type": "boolean"
+            },
+            "name": {
+              "type": "string"
+            },
+            "problems": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "scope": {
+              "$ref": "#/schemas/success_response/$defs/Scope"
+            }
+          },
+          "required": [
+            "name",
+            "description",
+            "scope",
+            "global",
+            "dir"
+          ],
+          "type": "object"
+        },
+        "SkillAdjust": {
+          "properties": {
+            "add": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "remove": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "type": "object"
+        },
         "SplitDirection": {
           "enum": [
             "right",
             "down"
           ],
           "type": "string"
+        },
+        "Subtask": {
+          "properties": {
+            "body": {
+              "type": "string"
+            },
+            "branch": {
+              "type": "string"
+            },
+            "coder": {
+              "type": "string"
+            },
+            "depends": {
+              "items": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "type": "array"
+            },
+            "n": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "note": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "pr": {
+              "type": "string"
+            },
+            "reviewer": {
+              "type": "string"
+            },
+            "round": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "state": {
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            },
+            "verify": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "n",
+            "title",
+            "state"
+          ],
+          "type": "object"
         },
         "TabInfo": {
           "properties": {
@@ -10649,6 +11985,77 @@
             "focused",
             "pane_count",
             "agent_status"
+          ],
+          "type": "object"
+        },
+        "TaskStatus": {
+          "description": "On-disk task state, kept compatible with Go's `.shepherd/tasks/*/status.json`.",
+          "properties": {
+            "agents": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "branch": {
+              "type": "string"
+            },
+            "created": {
+              "description": "RFC3339 strings preserve Go's `time.Time` JSON representation.",
+              "type": "string"
+            },
+            "id": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "issue": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/success_response/$defs/IssueRef"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "note": {
+              "type": "string"
+            },
+            "pr": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "slug": {
+              "type": "string"
+            },
+            "state": {
+              "type": "string"
+            },
+            "subtasks": {
+              "items": {
+                "$ref": "#/schemas/success_response/$defs/Subtask"
+              },
+              "type": "array"
+            },
+            "title": {
+              "type": "string"
+            },
+            "updated": {
+              "type": "string"
+            },
+            "waiting": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "slug",
+            "title",
+            "state",
+            "created",
+            "updated"
           ],
           "type": "object"
         },

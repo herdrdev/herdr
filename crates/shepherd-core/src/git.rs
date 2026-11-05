@@ -291,7 +291,7 @@ pub fn parse_rev_list_left_right(text: &str) -> (u32, u32) {
 }
 
 /// Summary of a Pull Request associated with a branch.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct GitPrSummary {
     pub number: u64,
     pub title: String,
@@ -301,7 +301,7 @@ pub struct GitPrSummary {
 }
 
 /// Information about a single worktree in the repository.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct GitWorktreeInfo {
     pub path: String,
     pub branch: String,
@@ -316,7 +316,7 @@ pub struct GitWorktreeInfo {
 }
 
 /// Full repository git status returned by `git_status` API call.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct GitRepoStatus {
     pub root: String,
     pub worktrees: Vec<GitWorktreeInfo>,

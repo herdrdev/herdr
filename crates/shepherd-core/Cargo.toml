@@ -15,6 +15,7 @@ path = "src/main.rs"
 
 [dependencies]
 getrandom = "0.4.3"
+schemars = { version = "1.2.1", features = ["derive"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 serde_yaml_ng = "0.10.0"

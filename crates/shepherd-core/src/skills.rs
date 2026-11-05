@@ -15,7 +15,19 @@ use std::{
 };
 
 /// Origin scope of a skill (`Repo > User > Default`).
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Hash,
+    Serialize,
+    Deserialize,
+    schemars::JsonSchema,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum Scope {
     Default,
@@ -65,7 +77,7 @@ impl std::fmt::Display for Level {
 }
 
 /// A discovered skill in the catalog (`Repo > User > Default`).
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Skill {
     pub name: String,
     pub description: String,

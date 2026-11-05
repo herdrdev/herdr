@@ -2958,3 +2958,128 @@ Confirmación estricta de **cero cambios de código de producción**:
    - `service.rs`, `terminals.rs`, `mcp.rs` se conservan sin partir hasta F9d para mantener diffs limpios y verificar contra los golden files en cada paso.
 4. **Pruebas con agentes LLM reales**:
    - Prohibidas expresamente en esta fase; toda la validación se realizó sobre fakes aislados en memoria y sesión aislada con `./scripts/shepherd-iso.sh`.
+
+---
+
+## Estado F9b-1 — Métodos de API tipados al estilo de herdr (agentes, tareas, runs, skills, git) (2026-11-05)
+
+Fase F9b-1 completada según el brief `SHEPHERD-F9B1-BRIEF.md`, respetando todas las reglas de herdr y manteniendo comportamiento y contratos binarios y wire 100% compatibles.
+
+### 1. Qué se ha implementado
+
+1. **Extracción y tipado en Shepherd Core (`crates/shepherd-core`)**:
+   - Se añadió `schemars = { version = "1.2.1", features = ["derive"] }` a `Cargo.toml`.
+   - Derivación de `schemars::JsonSchema` en todos los modelos de dominio usados por los métodos: `Agent`, `SkillAdjust`, `CreatedTask`, `TaskStatus`, `Subtask`, `IssueRef`, `Scope`, `Skill`, `GitRepoStatus`, `GitWorktreeInfo`, `GitPrSummary`.
+   - Creados tipos públicos `RunSummary` y `RunSubtaskSummary` con derivación `JsonSchema`, reexportados en `crates/shepherd-core/src/lib.rs`.
+   - Extraídos métodos reutilizables fuertemente tipados en `OrchestrationService` (`crates/shepherd-core/src/service.rs`):
+     - `reconcile_agents(&self) -> Result<Vec<Agent>, String>`
+     - `resume_agents(&self) -> Result<Vec<Agent>, String>`
+     - `list_tasks(&self, root: &Path, archived: bool) -> Result<Vec<CreatedTask>, String>`
+     - `create_task(&self, root: &Path, title: String, description: String, criteria: Vec<String>, links: Vec<String>) -> Result<CreatedTask, String>`
+     - `archive_task(&self, root: &Path, id: &str) -> Result<PathBuf, String>`
+     - `start_run(&self, ...)`
+     - `list_runs(&self, root: &Path) -> Result<Vec<RunSummary>, String>`
+     - `list_skills(&self, root: &Path) -> Result<Vec<skills::Skill>, String>`
+     - `git_status(&self, root: &Path) -> Result<git::GitRepoStatus, String>`
+   - `handle_call` en `crates/shepherd-core` fue refactorizado para invocar estos métodos tipados internos, manteniendo idénticas las respuestas JSON existentes.
+
+2. **Árbol de esquemas de parámetros (`src/api/schema/shepherd/`)**:
+   - Reemplazado el anterior `src/api/schema/shepherd.rs` monolítico por un módulo modular y estructurado:
+     - `src/api/schema/shepherd/mod.rs`: declara submódulos, exporta `ShepherdEmptyParams` y mantiene `ShepherdCallParams` para compatibilidad retroactiva.
+     - `src/api/schema/shepherd/agents.rs`: `ShepherdAgentListParams`, `ShepherdAgentSpawnParams`, `ShepherdAgentTargetParams`, `ShepherdAgentCleanParams`.
+     - `src/api/schema/shepherd/tasks.rs`: `ShepherdTaskListParams`, `ShepherdTaskCreateParams`, `ShepherdTaskArchiveParams` (con deserializador flexible para `id` como número o string).
+     - `src/api/schema/shepherd/runs.rs`: `ShepherdRunListParams`, `ShepherdRunStartParams`, `ShepherdGateActionParams`, `ShepherdGateRejectParams`.
+     - `src/api/schema/shepherd/skills.rs`: `ShepherdSkillListParams`.
+     - `src/api/schema/shepherd/git.rs`: `ShepherdGitStatusParams`.
+
+3. **Registro en Herdr Core (`src/api/schema.rs` y `src/api/schema/response.rs`)**:
+   - Registrados 16 métodos en `define_operations!` con atributos `changes_ui: false, client_shell: true`:
+     - `shepherd.agent.list`, `shepherd.agent.spawn`, `shepherd.agent.kill`, `shepherd.agent.clean`, `shepherd.agent.focus`, `shepherd.agent.reconcile`, `shepherd.agent.resume`
+     - `shepherd.task.list`, `shepherd.task.create`, `shepherd.task.archive`
+     - `shepherd.run.list`, `shepherd.run.start`, `shepherd.run.approve`, `shepherd.run.reject`
+     - `shepherd.skill.list`
+     - `shepherd.git.status`
+     - `shepherd.call` (se mantiene como alias con su firma intacta).
+   - Registradas 16 variantes fuertemente tipadas en `ResponseResult` de `src/api/schema/response.rs`.
+
+4. **Compatibilidad Wire, Digests SHA-256 y Esquema JSON**:
+   - En `src/server/client_commands.rs`, congelados los 16 digests SHA-256 de forma aditiva:
+     - `shepherd.agent.clean`: `e153d9ce126213ce5efa29ecf562eac02a95cb8e93c340f0a16dc916b0dee275`
+     - `shepherd.agent.focus`: `708b276b9062c8779ca14da948bb5285a159f9b18945925af2583b268be61440`
+     - `shepherd.agent.kill`: `4c04fdb8b354f8c44619c1a1666480f89feb4b554986f6aba0bf799bf8f85a13`
+     - `shepherd.agent.list`: `79ef8afef4e46c41427934a191e4549d72a02ee61b46cba1b18655990f16103b`
+     - `shepherd.agent.reconcile`: `680009ac892cc8055c506eed5733ffa4d900bf1c6b7d8e41f1639c6075207610`
+     - `shepherd.agent.resume`: `a0df2ed784ecd239be63ba82dd178b9c25ad178a93342030521057fae60ea878`
+     - `shepherd.agent.spawn`: `840d71c5609cfaf30c8a8c3307bb717db3a7d6bb653be1d35ec665b9070b5b22`
+     - `shepherd.git.status`: `9a23d30ceab2e8185bc3efb41023523e75dc8f89110dccd2cbfda0d2012feb42`
+     - `shepherd.run.approve`: `6bab0c13537073cf0a4333c302713fb5fcac01d931d67a9c05b318a429a1145f`
+     - `shepherd.run.list`: `e21720b95bcca606d9e4a52e77edc6f1e3b6083d8799359ae606269bf1cd7b0d`
+     - `shepherd.run.reject`: `b8c0ec64ef78d27f767d1cea7ea216e76968385e9abf4a49b8f0383ad4c90018`
+     - `shepherd.run.start`: `85468c27ec93c9920361d3c16591f1e4c62e23b75467995c6fea03fc00514c72`
+     - `shepherd.skill.list`: `6a2a7432ac2fc06380a018c9871361fb531a40e6e34d99511ca57fd0a7ddd038`
+     - `shepherd.task.archive`: `7b5637c22ed7e0a315fa02feabbb4e2c8902c49856bd095ce14f3f5f345d7745`
+     - `shepherd.task.create`: `1dac4b8982d0e4cb4c82271009152dd5a3976e6f9d1848966085a256df3c28e5`
+     - `shepherd.task.list`: `d5a20d5985bef170d0a875c679e0238f795e6917b2c875acd3d97c186b232646`
+     - `shepherd.call`: `3fd905e0f2b2ff38463cb28ff9c30d51b3f89155d536c4fe0aca751842c4f1fe` (idéntico al fixture anterior).
+   - El fixture congelado `tests/fixtures/endpoint-method-shapes-v1.json` permanece inalterado.
+   - Regenerado deterministamente el artefacto `docs/next/api/shepherd-api.schema.json` mediante `SHEPHERD_UPDATE_API_SCHEMA=1`.
+
+5. **Despacho en Runtime y Servidor**:
+   - `src/server/headless.rs`: `is_shepherd_method` reconoce los 16 métodos tipados y encola peticiones hacia el worker de background con `ShepherdCallJob`.
+   - `src/app/api.rs`: `call_method_sync` despacha de forma síncrona cualquiera de los 16 métodos tipados o `shepherd.call`.
+   - `src/shepherd/service.rs`: `execute_shepherd_method` ejecuta las llamadas delegando en `OrchestrationService` y construyendo las variantes tipadas de `ResponseResult`.
+
+6. **Cliente TUI (`src/client/shell/shepherd.rs`)**:
+   - `shepherd_op_to_method`: mapea operaciones (`agents`, `reconcile`, `resume`, `tasks`, `runs`, `skills`, `git_status`) a sus métodos tipados equivalentes.
+   - `refresh_shepherd_views`: despacha las consultas del sidebar y overlay usando los métodos tipados.
+   - Procesamiento de respuestas tipadas en `handle_shepherd_response` con soporte transparente para `ResponseResult::Shepherd*` y fallback a `ResponseResult::ShepherdCall`.
+
+7. **Pruebas de Caracterización de Métodos Tipados**:
+   - Añadidos 8 nuevos tests de caracterización en `crates/shepherd-core/tests/characterization.rs` (`test_typed_*_matches_golden`).
+   - Los **90 golden files** originales de `crates/shepherd-core/tests/golden/` permanecen en verde **SIN regenerarse** (cero cambios en sus contenidos o hashes).
+
+### 2. Batería de verificación
+
+- `./cargo-fork.sh build`: Compilación limpia en verde.
+- `./cargo-fork.sh test -p shepherd-core`: **215 tests pasados** (117 unitarios + 98 de caracterización: 90 golden originales intactos + 8 de métodos tipados), 0 fallados en 1.89s.
+- `grep -c testRepo` en salida de `shepherd-core`: **0**.
+- Tests por áreas ejecutados directamente:
+  - `./cargo-fork.sh test shepherd::`: **52 passed**, 0 failed.
+  - `./cargo-fork.sh test client::shell`: **391 passed**, 0 failed (2 ignored).
+  - `./cargo-fork.sh test protocol::`: **159 passed** (156 en `src/main.rs`, 3 en `tests/cli.rs`), 0 failed.
+  - `./cargo-fork.sh test api::`: **319 passed**, 0 failed (1 ignored).
+  - `./cargo-fork.sh test server::`: **318 passed**, 0 failed (5 ignored).
+- `./scripts/rename-from-herdr.sh --check`: **[OK] Limpio**, 0 ocurrencias no excluidas de herdr.
+- Formato: Solo archivos propios (`crates/shepherd-core/**`, `src/shepherd/**`, `src/api/schema/shepherd/**`, `src/client/shell/shepherd.rs`). Archivos de herdr reformateados por `fmt` fueron inmediatamente revertidos.
+- Verificación real aislada con `./scripts/shepherd-iso.sh`:
+  - `start` y `stop` limpios sin tocar el estado real del usuario.
+  - Comprobadas respuestas socket JSON de `shepherd.agent.list`, `shepherd.call`, `shepherd.task.list`, `shepherd.run.list`, `shepherd.skill.list`, `shepherd.git.status`.
+  - Capturado overlay con `screen`: navegación por pestañas Tareas, Runs, Skills, Git con datos reales leídos por los nuevos métodos tipados, y cierre limpio con Esc.
+- Upstream sync dry run (`./scripts/upstream-sync.sh --dry-run --allow-branch master`): Verificación exitosa en seco.
+
+### 3. Archivos de herdr modificados
+
+Todos los cambios en archivos de herdr son estrictamente aditivos y mínimos:
+
+| Archivo de Herdr | Líneas Modificadas | Motivo de enganche |
+|---|---|---|
+| `src/api/schema.rs` | +16 | Registro de los 16 métodos en macro `define_operations!` (`changes_ui: false, client_shell: true`) y reexport de submódulo `shepherd`. |
+| `src/api/schema/response.rs` | +57 | Registro de las 16 variantes fuertemente tipadas en enum `ResponseResult`. |
+| `src/app/api.rs` | +28, -10 | Despacho unificado de `Method::Shepherd*` hacia `shepherd_service.call_method_sync`. |
+| `src/server/client_commands.rs` | +64 | Registro de 16 asserts para los digests SHA-256 en `advertised_client_shell_method_shapes_stay_at_the_v1_contract`. |
+| `src/server/headless.rs` | +31, -4 | Función auxiliar `is_shepherd_method` y encolado en background de métodos `shepherd.*` hacia `ShepherdCallJob`. |
+
+Total de líneas añadidas en archivos de Herdr: ~196 líneas aditivas repartidas en 5 puntos de enganche arquitectónicamente obligatorios.
+
+### 4. Qué queda para fases posteriores
+
+1. **Fase F9b-2 (Dominios restantes: patrones y tópicos)**:
+   - Declaración de parámetros tipados para `shepherd.pattern.*` (`list`, `get`, `save`, `delete`, `validate`) y `shepherd.topic.*` (`list`, `create`, `publish`, `tail`, `replay`, `groups`).
+   - Registro en `define_operations!`, `ResponseResult` y digests SHA-256 asociados.
+2. **Fase F9c (CLI declarativo)**:
+   - Sustituir el despachador artesanal `cli.rs` por bindings `cli_params!` sobre los métodos tipados expuestos.
+3. **Fase F9d (Partición modular)**:
+   - Partir `service.rs`, `terminals.rs` y `mcp.rs` manteniendo la suite de golden files verde en cada paso.
+4. **Fase F9e (Configuración y persistencia)**:
+   - Unificación de directivas de configuración sin romper compatibilidad.
+

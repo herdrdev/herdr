@@ -2,6 +2,90 @@ use super::*;
 use crate::shepherd::overlay::ShepherdActionDispatcher;
 use std::path::Path;
 
+fn shepherd_op_to_method(op: &str, args: serde_json::Value) -> crate::api::schema::Method {
+    use crate::api::schema::*;
+    match op {
+        "agents" => Method::ShepherdAgentList(ShepherdAgentListParams {}),
+        "spawn" => {
+            let params: ShepherdAgentSpawnParams =
+                serde_json::from_value(args.clone()).unwrap_or_default();
+            Method::ShepherdAgentSpawn(params)
+        }
+        "kill" => {
+            let id = args
+                .get("id")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            Method::ShepherdAgentKill(ShepherdAgentTargetParams { id })
+        }
+        "clean" => {
+            let params: ShepherdAgentCleanParams =
+                serde_json::from_value(args.clone()).unwrap_or_default();
+            Method::ShepherdAgentClean(params)
+        }
+        "focus" => {
+            let id = args
+                .get("id")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            Method::ShepherdAgentFocus(ShepherdAgentTargetParams { id })
+        }
+        "reconcile" => Method::ShepherdAgentReconcile(ShepherdEmptyParams {}),
+        "resume" => Method::ShepherdAgentResume(ShepherdEmptyParams {}),
+        "tasks" => {
+            let params: ShepherdTaskListParams =
+                serde_json::from_value(args.clone()).unwrap_or_default();
+            Method::ShepherdTaskList(params)
+        }
+        "task_create" | "create_task" => {
+            let params: ShepherdTaskCreateParams =
+                serde_json::from_value(args.clone()).unwrap_or_default();
+            Method::ShepherdTaskCreate(params)
+        }
+        "task_archive" | "archive_task" => {
+            let params: ShepherdTaskArchiveParams =
+                serde_json::from_value(args.clone()).unwrap_or_default();
+            Method::ShepherdTaskArchive(params)
+        }
+        "runs" => {
+            let params: ShepherdRunListParams =
+                serde_json::from_value(args.clone()).unwrap_or_default();
+            Method::ShepherdRunList(params)
+        }
+        "run" => {
+            let params: ShepherdRunStartParams =
+                serde_json::from_value(args.clone()).unwrap_or_default();
+            Method::ShepherdRunStart(params)
+        }
+        "approve" => {
+            let params: ShepherdGateActionParams =
+                serde_json::from_value(args.clone()).unwrap_or_default();
+            Method::ShepherdRunApprove(params)
+        }
+        "reject" | "reject_gate" => {
+            let params: ShepherdGateRejectParams =
+                serde_json::from_value(args.clone()).unwrap_or_default();
+            Method::ShepherdRunReject(params)
+        }
+        "skills" => {
+            let params: ShepherdSkillListParams =
+                serde_json::from_value(args.clone()).unwrap_or_default();
+            Method::ShepherdSkillList(params)
+        }
+        "git_status" => {
+            let params: ShepherdGitStatusParams =
+                serde_json::from_value(args.clone()).unwrap_or_default();
+            Method::ShepherdGitStatus(params)
+        }
+        _ => Method::ShepherdCall(ShepherdCallParams {
+            op: op.to_string(),
+            args,
+        }),
+    }
+}
+
 struct ClientActionDispatcher<'a> {
     state: &'a mut ClientShellState,
     outcome: &'a mut ClientShellInput,
@@ -9,11 +93,9 @@ struct ClientActionDispatcher<'a> {
 
 impl<'a> crate::shepherd::ShepherdActionDispatcher for ClientActionDispatcher<'a> {
     fn dispatch_call(&mut self, op: &str, args: serde_json::Value) {
+        let method = shepherd_op_to_method(op, args);
         self.state.push_endpoint_method_with_kind(
-            crate::api::schema::Method::ShepherdCall(crate::api::schema::ShepherdCallParams {
-                op: op.to_string(),
-                args,
-            }),
+            method,
             PendingEndpointKind::ShepherdCall { op: op.to_string() },
             self.outcome,
         );
@@ -136,10 +218,9 @@ impl ClientShellState {
         }
         // Fetch tasks
         self.push_endpoint_method_with_kind(
-            crate::api::schema::Method::ShepherdCall(crate::api::schema::ShepherdCallParams {
-                op: "tasks".to_string(),
-                args: serde_json::json!({}),
-            }),
+            crate::api::schema::Method::ShepherdTaskList(
+                crate::api::schema::ShepherdTaskListParams::default(),
+            ),
             PendingEndpointKind::ShepherdCall {
                 op: "tasks".to_string(),
             },
@@ -147,10 +228,9 @@ impl ClientShellState {
         );
         // Fetch runs
         self.push_endpoint_method_with_kind(
-            crate::api::schema::Method::ShepherdCall(crate::api::schema::ShepherdCallParams {
-                op: "runs".to_string(),
-                args: serde_json::json!({}),
-            }),
+            crate::api::schema::Method::ShepherdRunList(
+                crate::api::schema::ShepherdRunListParams::default(),
+            ),
             PendingEndpointKind::ShepherdCall {
                 op: "runs".to_string(),
             },
@@ -158,10 +238,9 @@ impl ClientShellState {
         );
         // Fetch skills
         self.push_endpoint_method_with_kind(
-            crate::api::schema::Method::ShepherdCall(crate::api::schema::ShepherdCallParams {
-                op: "skills".to_string(),
-                args: serde_json::json!({}),
-            }),
+            crate::api::schema::Method::ShepherdSkillList(
+                crate::api::schema::ShepherdSkillListParams::default(),
+            ),
             PendingEndpointKind::ShepherdCall {
                 op: "skills".to_string(),
             },
@@ -171,11 +250,8 @@ impl ClientShellState {
         if let Some(ClientShellOverlay::Shepherd(ref overlay)) = self.overlay {
             if overlay.active_tab == crate::shepherd::ShepherdTab::Git {
                 self.push_endpoint_method_with_kind(
-                    crate::api::schema::Method::ShepherdCall(
-                        crate::api::schema::ShepherdCallParams {
-                            op: "git_status".to_string(),
-                            args: serde_json::json!({}),
-                        },
+                    crate::api::schema::Method::ShepherdGitStatus(
+                        crate::api::schema::ShepherdGitStatusParams::default(),
                     ),
                     PendingEndpointKind::ShepherdCall {
                         op: "git_status".to_string(),
@@ -202,13 +278,9 @@ impl ClientShellState {
                 );
 
                 for (op, args) in fake_dispatcher.calls {
+                    let method = shepherd_op_to_method(&op, args);
                     self.push_endpoint_method_with_kind(
-                        crate::api::schema::Method::ShepherdCall(
-                            crate::api::schema::ShepherdCallParams {
-                                op: op.clone(),
-                                args,
-                            },
-                        ),
+                        method,
                         PendingEndpointKind::ShepherdCall { op },
                         outcome,
                     );
@@ -270,13 +342,9 @@ impl ClientShellState {
                 );
 
                 for (op, args) in fake_dispatcher.calls {
+                    let method = shepherd_op_to_method(&op, args);
                     self.push_endpoint_method_with_kind(
-                        crate::api::schema::Method::ShepherdCall(
-                            crate::api::schema::ShepherdCallParams {
-                                op: op.clone(),
-                                args,
-                            },
-                        ),
+                        method,
                         PendingEndpointKind::ShepherdCall { op },
                         outcome,
                     );
@@ -334,13 +402,9 @@ impl ClientShellState {
             );
 
             for (op, args) in fake_dispatcher.calls {
+                let method = shepherd_op_to_method(&op, args);
                 self.push_endpoint_method_with_kind(
-                    crate::api::schema::Method::ShepherdCall(
-                        crate::api::schema::ShepherdCallParams {
-                            op: op.clone(),
-                            args,
-                        },
-                    ),
+                    method,
                     PendingEndpointKind::ShepherdCall { op },
                     outcome,
                 );
@@ -404,6 +468,62 @@ impl ClientShellState {
         };
 
         match result {
+            Ok(crate::api::schema::ResponseResult::ShepherdTaskList { tasks }) => {
+                overlay.tasks.tasks = tasks
+                    .iter()
+                    .map(crate::shepherd::tasks::ShepherdTaskRow::from_created_task)
+                    .collect();
+                outcome.repaint = true;
+            }
+            Ok(crate::api::schema::ResponseResult::ShepherdRunList { runs }) => {
+                overlay.runs.runs = runs
+                    .iter()
+                    .filter_map(|r| {
+                        serde_json::to_value(r)
+                            .ok()
+                            .and_then(|v| crate::shepherd::runs::ShepherdRunRow::from_value(&v))
+                    })
+                    .collect();
+                overlay.status_message = None;
+                outcome.repaint = true;
+            }
+            Ok(crate::api::schema::ResponseResult::ShepherdSkillList { skills }) => {
+                overlay.skills.catalog_skills = skills
+                    .iter()
+                    .map(crate::shepherd::skills::CatalogSkillItem::from)
+                    .collect();
+                overlay.status_message = None;
+                outcome.repaint = true;
+            }
+            Ok(crate::api::schema::ResponseResult::ShepherdGitStatus { status }) => {
+                overlay.git.update_from_status(&status);
+                overlay.status_message = None;
+                outcome.repaint = true;
+            }
+            Ok(crate::api::schema::ResponseResult::ShepherdTaskCreated { .. })
+            | Ok(crate::api::schema::ResponseResult::ShepherdTaskArchived { .. }) => {
+                overlay.status_message = Some(format!("Tarea actualizada exitosamente ({op})"));
+                self.refresh_shepherd_views(outcome);
+                outcome.repaint = true;
+            }
+            Ok(crate::api::schema::ResponseResult::ShepherdRunStarted { .. })
+            | Ok(crate::api::schema::ResponseResult::ShepherdGateApproved { .. })
+            | Ok(crate::api::schema::ResponseResult::ShepherdGateRejected { .. }) => {
+                overlay.status_message = Some(format!("Operación completada ({op})"));
+                self.refresh_shepherd_views(outcome);
+                outcome.repaint = true;
+            }
+            Ok(crate::api::schema::ResponseResult::ShepherdAgentSpawned { .. })
+            | Ok(crate::api::schema::ResponseResult::ShepherdAgentKilled { .. })
+            | Ok(crate::api::schema::ResponseResult::ShepherdAgentCleaned { .. })
+            | Ok(crate::api::schema::ResponseResult::ShepherdAgentFocused { .. })
+            | Ok(crate::api::schema::ResponseResult::ShepherdAgentReconciled { .. })
+            | Ok(crate::api::schema::ResponseResult::ShepherdAgentResumed { .. })
+            | Ok(crate::api::schema::ResponseResult::ShepherdAgentList { .. }) => {
+                overlay.status_message = Some(format!("Operación de agente completada ({op})"));
+                self.refresh_shepherd_views(outcome);
+                outcome.repaint = true;
+            }
             Ok(crate::api::schema::ResponseResult::ShepherdCall { data }) => {
                 match op {
                     "tasks" => {

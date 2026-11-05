@@ -2111,7 +2111,8 @@ impl HeadlessServer {
                 size,
                 max,
             } => {
-                let detail = format!("Input message is {size} bytes; Shepherd's limit is {max} bytes");
+                let detail =
+                    format!("Input message is {size} bytes; Shepherd's limit is {max} bytes");
                 let message = if matches!(
                     self.clients.get(&client_id).map(|client| &client.mode),
                     Some(ClientConnectionMode::ClientShell)
@@ -2908,6 +2909,29 @@ impl HeadlessServer {
         let _ = msg.respond_to.send(response);
     }
 
+    fn is_shepherd_method(method: &api::schema::Method) -> bool {
+        matches!(
+            method,
+            api::schema::Method::ShepherdCall(_)
+                | api::schema::Method::ShepherdAgentList(_)
+                | api::schema::Method::ShepherdAgentSpawn(_)
+                | api::schema::Method::ShepherdAgentKill(_)
+                | api::schema::Method::ShepherdAgentClean(_)
+                | api::schema::Method::ShepherdAgentFocus(_)
+                | api::schema::Method::ShepherdAgentReconcile(_)
+                | api::schema::Method::ShepherdAgentResume(_)
+                | api::schema::Method::ShepherdTaskList(_)
+                | api::schema::Method::ShepherdTaskCreate(_)
+                | api::schema::Method::ShepherdTaskArchive(_)
+                | api::schema::Method::ShepherdRunList(_)
+                | api::schema::Method::ShepherdRunStart(_)
+                | api::schema::Method::ShepherdRunApprove(_)
+                | api::schema::Method::ShepherdRunReject(_)
+                | api::schema::Method::ShepherdSkillList(_)
+                | api::schema::Method::ShepherdGitStatus(_)
+        )
+    }
+
     fn handle_api_request_with_shutdown_check_inner(
         &mut self,
         msg: api::ApiRequestMessage,
@@ -2962,12 +2986,11 @@ impl HeadlessServer {
             return true;
         }
 
-        if let api::schema::Method::ShepherdCall(params) = &msg.request.method {
+        if Self::is_shepherd_method(&msg.request.method) {
             if let Some(ref svc) = self.app.shepherd_service {
                 let job = crate::shepherd::ShepherdCallJob {
                     request_id: msg.request.id.clone(),
-                    op: params.op.clone(),
-                    args: params.args.clone(),
+                    method: msg.request.method.clone(),
                     respond_to: msg.respond_to.clone(),
                 };
                 if let Err(err) = svc.enqueue_call(job) {

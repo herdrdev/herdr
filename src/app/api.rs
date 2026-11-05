@@ -1259,17 +1259,25 @@ impl App {
             Method::PluginPaneClose(params) => {
                 return self.handle_plugin_pane_close(request.id, params);
             }
-            Method::ShepherdCall(params) => {
+            Method::ShepherdCall(_)
+            | Method::ShepherdAgentList(_)
+            | Method::ShepherdAgentSpawn(_)
+            | Method::ShepherdAgentKill(_)
+            | Method::ShepherdAgentClean(_)
+            | Method::ShepherdAgentFocus(_)
+            | Method::ShepherdAgentReconcile(_)
+            | Method::ShepherdAgentResume(_)
+            | Method::ShepherdTaskList(_)
+            | Method::ShepherdTaskCreate(_)
+            | Method::ShepherdTaskArchive(_)
+            | Method::ShepherdRunList(_)
+            | Method::ShepherdRunStart(_)
+            | Method::ShepherdRunApprove(_)
+            | Method::ShepherdRunReject(_)
+            | Method::ShepherdSkillList(_)
+            | Method::ShepherdGitStatus(_) => {
                 if let Some(ref svc) = self.shepherd_service {
-                    match svc.call_sync(&params.op, params.args) {
-                        Ok(data) => SuccessResponse {
-                            id: request.id,
-                            result: ResponseResult::ShepherdCall { data },
-                        },
-                        Err(message) => {
-                            return responses::encode_error(request.id, "shepherd_error", &message);
-                        }
-                    }
+                    return svc.call_method_sync(&request.id, request.method);
                 } else {
                     return responses::encode_error(
                         request.id,

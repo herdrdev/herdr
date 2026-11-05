@@ -1896,3 +1896,97 @@ fn test_characterization_mcp_permission_error() {
     let norm = normalize_json(&res, &rig.env);
     assert_golden("mcp_permission_error", &norm);
 }
+
+// =========================================================================
+// 4. Characterization tests for typed domain methods (F9b-1)
+// =========================================================================
+
+#[test]
+fn test_typed_agent_list_matches_golden() {
+    let env = TestEnv::new("typed-agent-list");
+    env.seed_agent("coder-1", "coder", "idle");
+    let agents = env.service.reconcile_agents().unwrap();
+    let res = serde_json::to_value(&agents).unwrap();
+    let norm = normalize_json(&res, &env);
+    assert_golden("handle_call_agents", &norm);
+}
+
+#[test]
+fn test_typed_agent_resume_matches_golden() {
+    let env = TestEnv::new("typed-agent-resume");
+    env.seed_agent("coder-1", "coder", "starting");
+    let agents = env.service.resume_agents().unwrap();
+    let res = serde_json::to_value(&agents).unwrap();
+    let norm = normalize_json(&res, &env);
+    assert_golden("handle_call_resume", &norm);
+}
+
+#[test]
+fn test_typed_task_list_matches_golden() {
+    let env = TestEnv::new("typed-task-list");
+    env.seed_task(1, "First Task");
+    env.seed_task(2, "Second Task");
+    let tasks = env.service.list_tasks(&env.root, false).unwrap();
+    let res = serde_json::to_value(&tasks).unwrap();
+    let norm = normalize_json(&res, &env);
+    assert_golden("handle_call_tasks", &norm);
+}
+
+#[test]
+fn test_typed_task_create_matches_golden() {
+    let env = TestEnv::new("typed-task-create");
+    let created = env
+        .service
+        .create_task(
+            &env.root,
+            "Created via handle_call".to_string(),
+            "Task creation description".to_string(),
+            vec!["Must pass characterization test".to_string()],
+            vec![],
+        )
+        .unwrap();
+    let res = serde_json::to_value(&created).unwrap();
+    let norm = normalize_json(&res, &env);
+    assert_golden("handle_call_task_create", &norm);
+}
+
+#[test]
+fn test_typed_task_archive_matches_golden() {
+    let env = TestEnv::new("typed-task-archive");
+    env.seed_task(1, "To be archived");
+    let path = env.service.archive_task(&env.root, "1").unwrap();
+    let res = serde_json::json!({
+        "archived": true,
+        "path": path.display().to_string(),
+    });
+    let norm = normalize_json(&res, &env);
+    assert_golden("handle_call_task_archive", &norm);
+}
+
+#[test]
+fn test_typed_run_list_matches_golden() {
+    let env = TestEnv::new("typed-run-list");
+    env.seed_task(1, "Runs progress task");
+    let runs = env.service.list_runs(&env.root).unwrap();
+    let res = serde_json::to_value(&runs).unwrap();
+    let norm = normalize_json(&res, &env);
+    assert_golden("handle_call_runs", &norm);
+}
+
+#[test]
+fn test_typed_skill_list_matches_golden() {
+    let env = TestEnv::new("typed-skill-list");
+    let skills = env.service.list_skills(&env.root).unwrap();
+    let res = serde_json::to_value(&skills).unwrap();
+    let norm = normalize_json(&res, &env);
+    assert_golden("handle_call_skills", &norm);
+}
+
+#[test]
+fn test_typed_git_status_matches_golden() {
+    let env = TestEnv::new("typed-git-status");
+    let status = env.service.git_status(&env.root).unwrap();
+    let res = serde_json::to_value(&status).unwrap();
+    let norm = normalize_json(&res, &env);
+    assert_golden("handle_call_git_status", &norm);
+}

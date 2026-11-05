@@ -10,7 +10,7 @@ use std::sync::{
 };
 use std::thread::JoinHandle;
 
-use serde_json::{json, Value};
+use serde_json::Value;
 use shepherd_core::{
     config as shep_config,
     mcp::RunningMcpServer,
@@ -24,9 +24,210 @@ use crate::shepherd::in_process_from_app_channel;
 
 pub struct ShepherdCallJob {
     pub request_id: String,
-    pub op: String,
-    pub args: Value,
+    pub method: crate::api::schema::Method,
     pub respond_to: mpsc::Sender<String>,
+}
+
+impl ShepherdCallJob {
+    pub fn legacy(
+        request_id: String,
+        op: String,
+        args: Value,
+        respond_to: mpsc::Sender<String>,
+    ) -> Self {
+        Self {
+            request_id,
+            method: crate::api::schema::Method::ShepherdCall(
+                crate::api::schema::ShepherdCallParams { op, args },
+            ),
+            respond_to,
+        }
+    }
+}
+
+fn spawn_params_to_request(
+    params: crate::api::schema::ShepherdAgentSpawnParams,
+) -> shepherd_core::service::ServiceSpawnRequest {
+    shepherd_core::service::ServiceSpawnRequest {
+        root: params
+            .root
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(".")),
+        role: params.role,
+        task: params.task,
+        task_id: params.task_id,
+        vendor: params.vendor,
+        model: params.model,
+        parent_id: params.parent_id,
+        worktree: params.worktree,
+        skills: Default::default(),
+        mcp_url: params.mcp_url,
+        confirm_over_limit: params.confirm_over_limit,
+        deliver_prompt: params.deliver_prompt,
+    }
+}
+
+pub fn execute_shepherd_method(
+    core: &OrchestrationService,
+    request_id: &str,
+    method: crate::api::schema::Method,
+) -> String {
+    use crate::api::schema::{ErrorBody, ErrorResponse, Method, ResponseResult, SuccessResponse};
+
+    let result: Result<ResponseResult, String> = match method {
+        Method::ShepherdCall(params) => core
+            .handle_call(&params.op, params.args)
+            .map(|data| ResponseResult::ShepherdCall { data }),
+        Method::ShepherdAgentList(_) => core
+            .list_public_agents()
+            .map(|agents| ResponseResult::ShepherdAgentList { agents }),
+        Method::ShepherdAgentSpawn(params) => {
+            let req = spawn_params_to_request(params);
+            core.spawn(req)
+                .map(|agent| ResponseResult::ShepherdAgentSpawned {
+                    agent: agent.public(),
+                })
+        }
+        Method::ShepherdAgentKill(params) => {
+            core.kill(&params.id)
+                .map(|agent| ResponseResult::ShepherdAgentKilled {
+                    agent: agent.public(),
+                })
+        }
+        Method::ShepherdAgentClean(params) => core
+            .clean(&params.ids, params.workspace.as_deref())
+            .map(|cleaned| ResponseResult::ShepherdAgentCleaned { cleaned }),
+        Method::ShepherdAgentFocus(params) => core
+            .focus(&params.id)
+            .map(|agent| ResponseResult::ShepherdAgentFocused { agent }),
+        Method::ShepherdAgentReconcile(_) => core
+            .reconcile_agents()
+            .map(|agents| ResponseResult::ShepherdAgentReconciled { agents }),
+        Method::ShepherdAgentResume(_) => core
+            .resume_agents()
+            .map(|agents| ResponseResult::ShepherdAgentResumed { agents }),
+        Method::ShepherdTaskList(params) => {
+            let root = params
+                .root
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from("."));
+            core.list_tasks(&root, params.archived)
+                .map(|tasks| ResponseResult::ShepherdTaskList { tasks })
+        }
+        Method::ShepherdTaskCreate(params) => {
+            let root = params
+                .root
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from("."));
+            core.create_task(
+                &root,
+                params.title,
+                params.description.unwrap_or_default(),
+                params.criteria,
+                params.links,
+            )
+            .map(|task| ResponseResult::ShepherdTaskCreated { task })
+        }
+        Method::ShepherdTaskArchive(params) => {
+            let root = params
+                .root
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from("."));
+            core.archive_task(&root, &params.id)
+                .map(|path| ResponseResult::ShepherdTaskArchived {
+                    archived: true,
+                    path: path.display().to_string(),
+                })
+        }
+        Method::ShepherdRunList(params) => {
+            let root = params
+                .root
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from("."));
+            core.list_runs(&root)
+                .map(|runs| ResponseResult::ShepherdRunList { runs })
+        }
+        Method::ShepherdRunStart(params) => {
+            let root = params
+                .root
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from("."));
+            core.start_run(root, params.task, params.auto_push, params.mcp_url)
+                .map(|(accepted, job, task)| ResponseResult::ShepherdRunStarted {
+                    accepted,
+                    job,
+                    task,
+                })
+        }
+        Method::ShepherdRunApprove(params) => {
+            let root = params
+                .root
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from("."));
+            core.approve(root, &params.task, &params.target).map(|_| {
+                ResponseResult::ShepherdGateApproved {
+                    ok: true,
+                    task: params.task,
+                    approved: params.target,
+                }
+            })
+        }
+        Method::ShepherdRunReject(params) => {
+            let root = params
+                .root
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from("."));
+            core.reject(root, &params.task, &params.target, params.reason.as_deref())
+                .map(|_| ResponseResult::ShepherdGateRejected {
+                    ok: true,
+                    task: params.task,
+                    rejected: params.target,
+                    reason: params.reason,
+                })
+        }
+        Method::ShepherdSkillList(params) => {
+            let root = params
+                .root
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from("."));
+            core.list_skills(&root)
+                .map(|skills| ResponseResult::ShepherdSkillList { skills })
+        }
+        Method::ShepherdGitStatus(params) => {
+            let root = params
+                .root
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from("."));
+            core.git_status(&root)
+                .map(|status| ResponseResult::ShepherdGitStatus { status })
+        }
+        _ => Err(format!("unsupported shepherd method: {:?}", method)),
+    };
+
+    match result {
+        Ok(res) => serde_json::to_string(&SuccessResponse {
+            id: request_id.to_string(),
+            result: res,
+        })
+        .unwrap_or_else(|e| {
+            serde_json::to_string(&ErrorResponse {
+                id: request_id.to_string(),
+                error: ErrorBody {
+                    code: "serialization_error".into(),
+                    message: e.to_string(),
+                },
+            })
+            .unwrap_or_default()
+        }),
+        Err(message) => serde_json::to_string(&ErrorResponse {
+            id: request_id.to_string(),
+            error: ErrorBody {
+                code: "shepherd_error".into(),
+                message,
+            },
+        })
+        .unwrap_or_default(),
+    }
 }
 
 /// Runtime handle for the in-process Shepherd orchestration service.
@@ -117,29 +318,14 @@ impl ShepherdRuntimeService {
                             }
                         }
                     }
-                    let result = core_for_calls.handle_call(&job.op, job.args);
+                    let payload =
+                        execute_shepherd_method(&core_for_calls, &job.request_id, job.method);
                     if let Ok(reg) = core_for_calls.load_registry() {
                         if let Ok(mut guard) = reg_for_calls.lock() {
                             *guard = reg;
                         }
                     }
-                    let payload = match result {
-                        Ok(data) => json!({
-                            "id": job.request_id,
-                            "result": {
-                                "type": "shepherd_call",
-                                "data": data,
-                            }
-                        }),
-                        Err(message) => json!({
-                            "id": job.request_id,
-                            "error": {
-                                "code": "shepherd_error",
-                                "message": message,
-                            }
-                        }),
-                    };
-                    let _ = job.respond_to.send(payload.to_string());
+                    let _ = job.respond_to.send(payload);
                 }
             })
             .map_err(|e| e.to_string())?;
@@ -265,6 +451,17 @@ impl ShepherdRuntimeService {
         res
     }
 
+    /// Synchronously execute any Shepherd API method and return the serialized JSON response.
+    pub fn call_method_sync(&self, request_id: &str, method: crate::api::schema::Method) -> String {
+        let res = execute_shepherd_method(&self.core, request_id, method);
+        if let Ok(reg) = self.core.load_registry() {
+            if let Ok(mut guard) = self.latest_registry.lock() {
+                *guard = reg;
+            }
+        }
+        res
+    }
+
     /// Trigger one reconciliation pass and update the cached registry snapshot.
     pub fn reconcile_now(&self) -> Result<AgentRegistryFile, String> {
         let reg = self.core.reconcile_once()?;
@@ -308,6 +505,7 @@ impl Drop for ShepherdRuntimeService {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
     use shepherd_core::{
         service::ManualClock,
         terminals::{InMemoryTerminals, TerminalAgentStatus},
@@ -412,12 +610,12 @@ mod tests {
 
         // Verify async enqueue_call works without blocking caller
         let (tx, rx) = mpsc::channel();
-        svc.enqueue_call(ShepherdCallJob {
-            request_id: "req-1".into(),
-            op: "agents".into(),
-            args: json!({}),
-            respond_to: tx,
-        })
+        svc.enqueue_call(ShepherdCallJob::legacy(
+            "req-1".into(),
+            "agents".into(),
+            json!({}),
+            tx,
+        ))
         .unwrap();
         let raw_reply = rx.recv_timeout(Duration::from_secs(2)).unwrap();
         let parsed: Value = serde_json::from_str(&raw_reply).unwrap();

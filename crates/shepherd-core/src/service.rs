@@ -25,8 +25,8 @@ use crate::skills;
 use crate::spawn::{mcp_launch_args, role_prompt, RUNTIME_CONSTRAINTS};
 use crate::terminals::{OpenAgentRequest, PromptOutcome, TerminalError, Terminals, WorktreeSpec};
 use crate::{
-    find_task, load_agent_registry, now_rfc3339, save_agent_registry, task_context, task_slug,
-    Agent, AgentRegistryFile, SkillAdjust,
+    find_task, git, load_agent_registry, now_rfc3339, save_agent_registry, task_context, task_slug,
+    Agent, AgentRegistryFile, CreatedTask, SkillAdjust,
 };
 
 pub const BLOCKED_HUMAN_NOTICE: &str =
@@ -181,6 +181,34 @@ pub struct FailedRequestLogEntry {
     pub timestamp: String,
     pub method: String,
     pub message: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct RunSubtaskSummary {
+    pub n: u32,
+    pub title: String,
+    pub state: String,
+    pub branch: String,
+    pub pr: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+    pub coder: String,
+    pub reviewer: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct RunSummary {
+    pub task_id: u32,
+    pub task_title: String,
+    pub status: String,
+    pub current_stage: String,
+    pub has_saved_plan: bool,
+    pub pending_gate: Option<serde_json::Value>,
+    #[serde(default)]
+    pub active_agents: Vec<String>,
+    pub subtasks_progress: [usize; 2],
+    #[serde(default)]
+    pub subtasks: Vec<RunSubtaskSummary>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1582,6 +1610,134 @@ impl OrchestrationService {
         self.log_err("reject", result)
     }
 
+    pub fn reconcile_agents(&self) -> Result<Vec<Agent>, String> {
+        let reg = self.reconcile_once()?;
+        Ok(reg.agents.iter().map(Agent::public).collect())
+    }
+
+    pub fn resume_agents(&self) -> Result<Vec<Agent>, String> {
+        let reg = self.resume_on_startup()?;
+        Ok(reg.agents.iter().map(Agent::public).collect())
+    }
+
+    pub fn list_tasks(&self, root: &Path, archived: bool) -> Result<Vec<CreatedTask>, String> {
+        crate::list_tasks(root, archived).map_err(|e| e.to_string())
+    }
+
+    pub fn create_task(
+        &self,
+        root: &Path,
+        title: String,
+        description: String,
+        criteria: Vec<String>,
+        links: Vec<String>,
+    ) -> Result<CreatedTask, String> {
+        let new_task = crate::NewTask {
+            id: 0,
+            title,
+            description,
+            criteria,
+            issue: None,
+            issue_markdown: None,
+            links,
+        };
+        crate::create_task(root, new_task).map_err(|e| e.to_string())
+    }
+
+    pub fn archive_task(&self, root: &Path, id: &str) -> Result<PathBuf, String> {
+        crate::archive_task(root, id).map_err(|e| e.to_string())
+    }
+
+    pub fn start_run(
+        &self,
+        root: PathBuf,
+        task: String,
+        auto_push: bool,
+        mcp_url: Option<String>,
+    ) -> Result<(bool, String, String), String> {
+        let job_id = format!("run-{}", task);
+        let this = self.clone();
+        let task_clone = task.clone();
+        std::thread::Builder::new()
+            .name(format!("shepherd-run-{}", task))
+            .spawn(move || {
+                let _ = this.run_workflow(root, task_clone, mcp_url, auto_push);
+            })
+            .map_err(|e| e.to_string())?;
+        Ok((true, job_id, task))
+    }
+
+    pub fn list_runs(&self, root: &Path) -> Result<Vec<RunSummary>, String> {
+        let tasks = crate::list_tasks(root, false).unwrap_or_default();
+        let runs = tasks
+            .into_iter()
+            .map(|t| {
+                let has_plan = t.directory.join("plan.md").is_file();
+                let pending_gate = if t.status.waiting == "plan" {
+                    Some(serde_json::json!("plan"))
+                } else if let Some(subtask) = t
+                    .status
+                    .subtasks
+                    .iter()
+                    .find(|s| s.state == "awaiting-approval")
+                {
+                    Some(serde_json::json!({
+                        "kind": "push_pr",
+                        "subtask": subtask.number,
+                    }))
+                } else {
+                    None
+                };
+                let total = t.status.subtasks.len();
+                let done_count = t
+                    .status
+                    .subtasks
+                    .iter()
+                    .filter(|s| matches!(s.state.as_str(), "pr" | "done"))
+                    .count();
+                let subtasks = t
+                    .status
+                    .subtasks
+                    .iter()
+                    .map(|s| RunSubtaskSummary {
+                        n: s.number,
+                        title: s.title.clone(),
+                        state: s.state.clone(),
+                        branch: s.branch.clone(),
+                        pr: s.pr.clone(),
+                        note: s.note.clone(),
+                        coder: s.coder.clone(),
+                        reviewer: s.reviewer.clone(),
+                    })
+                    .collect();
+                RunSummary {
+                    task_id: t.status.id,
+                    task_title: t.status.title,
+                    status: t.status.state.clone(),
+                    current_stage: t.status.state,
+                    has_saved_plan: has_plan,
+                    pending_gate,
+                    active_agents: t.status.agents,
+                    subtasks_progress: [done_count, total],
+                    subtasks,
+                }
+            })
+            .collect();
+        Ok(runs)
+    }
+
+    pub fn list_skills(&self, root: &Path) -> Result<Vec<skills::Skill>, String> {
+        let cat = crate::skills::Catalog::load(Some(root), None);
+        Ok(cat.all())
+    }
+
+    pub fn git_status(&self, root: &Path) -> Result<git::GitRepoStatus, String> {
+        let registry = self.load_registry().unwrap_or_default();
+        let base_worktrees = self.terminals.list_worktrees(root).ok();
+        crate::git::collect_git_status_with_base(root, &registry.agents, base_worktrees)
+            .map_err(|e| e.to_string())
+    }
+
     /// Generic dispatcher for `shepherd.call {op, args}`.
     pub fn handle_call(&self, op: &str, args: Value) -> Result<Value, String> {
         match op {
@@ -1656,17 +1812,9 @@ impl OrchestrationService {
                     .get("auto_push")
                     .and_then(Value::as_bool)
                     .unwrap_or(false);
-                let job_id = format!("run-{}", task);
-                let this = self.clone();
-                let task_clone = task.clone();
-                std::thread::Builder::new()
-                    .name(format!("shepherd-run-{}", task))
-                    .spawn(move || {
-                        let _ = this.run_workflow(root, task_clone, mcp_url, auto_push);
-                    })
-                    .map_err(|e| e.to_string())?;
+                let (accepted, job_id, task) = self.start_run(root, task, auto_push, mcp_url)?;
                 Ok(serde_json::json!({
-                    "accepted": true,
+                    "accepted": accepted,
                     "job": job_id,
                     "task": task,
                 }))
@@ -1713,13 +1861,11 @@ impl OrchestrationService {
                 self.reject(root, task, target, reason)
             }
             "reconcile" => {
-                let reg = self.reconcile_once()?;
-                let public: Vec<Agent> = reg.agents.iter().map(Agent::public).collect();
+                let public = self.reconcile_agents()?;
                 serde_json::to_value(public).map_err(|e| e.to_string())
             }
             "resume" => {
-                let reg = self.resume_on_startup()?;
-                let public: Vec<Agent> = reg.agents.iter().map(Agent::public).collect();
+                let public = self.resume_agents()?;
                 serde_json::to_value(public).map_err(|e| e.to_string())
             }
             "tasks" => {
@@ -1734,7 +1880,7 @@ impl OrchestrationService {
                     .get("archived")
                     .and_then(Value::as_bool)
                     .unwrap_or(false);
-                let tasks = crate::list_tasks(&root, archived).map_err(|e| e.to_string())?;
+                let tasks = self.list_tasks(&root, archived)?;
                 serde_json::to_value(tasks).map_err(|e| e.to_string())
             }
             "task_create" | "create_task" => {
@@ -1767,6 +1913,7 @@ impl OrchestrationService {
                     .unwrap_or_default();
                 let attachments: Vec<String> = args
                     .get("attachments")
+                    .or_else(|| args.get("links"))
                     .and_then(Value::as_array)
                     .map(|a| {
                         a.iter()
@@ -1775,16 +1922,7 @@ impl OrchestrationService {
                             .collect()
                     })
                     .unwrap_or_default();
-                let new_task = crate::NewTask {
-                    id: 0,
-                    title,
-                    description,
-                    criteria,
-                    issue: None,
-                    issue_markdown: None,
-                    links: attachments,
-                };
-                let created = crate::create_task(&root, new_task).map_err(|e| e.to_string())?;
+                let created = self.create_task(&root, title, description, criteria, attachments)?;
                 serde_json::to_value(created).map_err(|e| e.to_string())
             }
             "task_archive" | "archive_task" => {
@@ -1803,7 +1941,7 @@ impl OrchestrationService {
                             .or_else(|| v.as_str().map(str::to_owned))
                     })
                     .ok_or_else(|| "missing 'id' for task_archive".to_owned())?;
-                let path = crate::archive_task(&root, &id).map_err(|e| e.to_string())?;
+                let path = self.archive_task(&root, &id)?;
                 Ok(serde_json::json!({ "archived": true, "path": path.display().to_string() }))
             }
             "skills" => {
@@ -1814,8 +1952,7 @@ impl OrchestrationService {
                     .unwrap_or_else(|| {
                         std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
                     });
-                let cat = crate::skills::Catalog::load(Some(&root), None);
-                let all = cat.all();
+                let all = self.list_skills(&root)?;
                 serde_json::to_value(all).map_err(|e| e.to_string())
             }
             "patterns" => {
@@ -1945,64 +2082,8 @@ impl OrchestrationService {
                     .unwrap_or_else(|| {
                         std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
                     });
-                let tasks = crate::list_tasks(&root, false).unwrap_or_default();
-                let runs: Vec<serde_json::Value> = tasks
-                    .into_iter()
-                    .map(|t| {
-                        let has_plan = t.directory.join("plan.md").is_file();
-                        let pending_gate = if t.status.waiting == "plan" {
-                            Some(serde_json::json!("plan"))
-                        } else if let Some(subtask) = t
-                            .status
-                            .subtasks
-                            .iter()
-                            .find(|s| s.state == "awaiting-approval")
-                        {
-                            Some(serde_json::json!({
-                                "kind": "push_pr",
-                                "subtask": subtask.number,
-                            }))
-                        } else {
-                            None
-                        };
-                        let total = t.status.subtasks.len();
-                        let done_count = t
-                            .status
-                            .subtasks
-                            .iter()
-                            .filter(|s| matches!(s.state.as_str(), "pr" | "done"))
-                            .count();
-                        let subtasks: Vec<serde_json::Value> = t
-                            .status
-                            .subtasks
-                            .iter()
-                            .map(|s| {
-                                serde_json::json!({
-                                    "n": s.number,
-                                    "title": s.title,
-                                    "state": s.state,
-                                    "branch": s.branch,
-                                    "pr": s.pr,
-                                    "note": s.note,
-                                    "coder": s.coder,
-                                    "reviewer": s.reviewer,
-                                })
-                            })
-                            .collect();
-                        serde_json::json!({
-                            "task_id": t.status.id,
-                            "task_title": t.status.title,
-                            "status": t.status.state,
-                            "current_stage": t.status.state,
-                            "has_saved_plan": has_plan,
-                            "pending_gate": pending_gate,
-                            "active_agents": t.status.agents,
-                            "subtasks_progress": [done_count, total],
-                            "subtasks": subtasks,
-                        })
-                    })
-                    .collect();
-                Ok(serde_json::json!(runs))
+                let runs = self.list_runs(&root)?;
+                serde_json::to_value(runs).map_err(|e| e.to_string())
             }
             "git_status" => {
                 let root = args
@@ -2012,14 +2093,7 @@ impl OrchestrationService {
                     .unwrap_or_else(|| {
                         std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
                     });
-                let registry = self.load_registry().unwrap_or_default();
-                let base_worktrees = self.terminals.list_worktrees(&root).ok();
-                let status = crate::git::collect_git_status_with_base(
-                    &root,
-                    &registry.agents,
-                    base_worktrees,
-                )
-                .map_err(|e| e.to_string())?;
+                let status = self.git_status(&root)?;
                 serde_json::to_value(status).map_err(|e| e.to_string())
             }
             "topics" => {
