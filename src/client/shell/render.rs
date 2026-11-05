@@ -57,17 +57,14 @@ pub(super) fn render_mode_bar(
         .fg(palette.accent)
         .bg(palette.panel_bg)
         .add_modifier(Modifier::BOLD);
-    let mode_style = Style::default()
-        .fg(match palette.panel_bg {
-            ratatui::style::Color::Reset => palette.surface_dim,
-            color => color,
-        })
-        .bg(if mode == ClientShellMode::Resize {
+    let mode_style = mode_badge_style(
+        palette,
+        if mode == ClientShellMode::Resize {
             palette.mauve
         } else {
             palette.accent
-        })
-        .add_modifier(Modifier::BOLD);
+        },
+    );
     let prefix = keybinds.primary_prefix_label();
     let prefix_rhs = |bindings: &crate::config::ActionKeybinds| {
         bindings
@@ -227,6 +224,98 @@ pub(super) fn render_mode_bar(
         );
     }
     Some(bar)
+}
+
+/// One pane of the retained surface, in absolute shell coordinates.
+pub(super) struct ResizeModePane {
+    pub(super) rect: Rect,
+    pub(super) inner_rect: Rect,
+    pub(super) scrollbar_rect: Option<Rect>,
+    pub(super) focused: bool,
+}
+
+const RESIZE_BADGE: &str = " RESIZE ";
+
+/// Resize mode makes every pane read-only, so mark it where the user is looking:
+/// the focused pane's frame takes the resize color, other frames fade, and the
+/// focused pane carries a RESIZE badge on its top edge, when it has one.
+/// Returns the badge area.
+pub(super) fn render_resize_mode_panes(
+    buffer: &mut Buffer,
+    panes: &[ResizeModePane],
+    palette: &Palette,
+) -> Option<Rect> {
+    let pale = Style::default().fg(palette.surface1);
+    let bright = Style::default()
+        .fg(palette.mauve)
+        .add_modifier(Modifier::BOLD);
+    // Unfocused frames first, so cells shared with the focused frame end bright.
+    for pane in panes.iter().filter(|pane| !pane.focused) {
+        restyle_pane_frame(buffer, pane, pale);
+    }
+    let focused = panes.iter().find(|pane| pane.focused)?;
+    restyle_pane_frame(buffer, focused, bright);
+
+    let badge_width = display_width(RESIZE_BADGE);
+    let area = focused.rect.intersection(buffer.area);
+    let has_top_edge = focused.rect.y < focused.inner_rect.y;
+    if !has_top_edge || area.width < badge_width.saturating_add(4) || area.height == 0 {
+        return None;
+    }
+    let badge = Rect::new(
+        area.x + (area.width - badge_width) / 2,
+        area.y,
+        badge_width,
+        1,
+    );
+    put_text(
+        buffer,
+        badge.x,
+        badge.y,
+        badge.width,
+        RESIZE_BADGE,
+        mode_badge_style(palette, palette.mauve),
+    );
+    Some(badge)
+}
+
+/// Restyle the box-drawing cells between a pane's outer and inner rects.
+/// Border titles and the scrollbar keep their own styling.
+fn restyle_pane_frame(buffer: &mut Buffer, pane: &ResizeModePane, style: Style) {
+    let area = pane.rect.intersection(buffer.area);
+    for y in area.top()..area.bottom() {
+        for x in area.left()..area.right() {
+            let position = ratatui::layout::Position::new(x, y);
+            if pane.inner_rect.contains(position)
+                || pane
+                    .scrollbar_rect
+                    .is_some_and(|scrollbar| scrollbar.contains(position))
+            {
+                continue;
+            }
+            let cell = &mut buffer[(x, y)];
+            if is_box_drawing(cell.symbol()) {
+                cell.set_style(style);
+            }
+        }
+    }
+}
+
+fn is_box_drawing(symbol: &str) -> bool {
+    !symbol.is_empty()
+        && symbol
+            .chars()
+            .all(|c| ('\u{2500}'..='\u{257f}').contains(&c))
+}
+
+fn mode_badge_style(palette: &Palette, bg: ratatui::style::Color) -> Style {
+    Style::default()
+        .fg(match palette.panel_bg {
+            ratatui::style::Color::Reset => palette.surface_dim,
+            color => color,
+        })
+        .bg(bg)
+        .add_modifier(Modifier::BOLD)
 }
 
 pub(super) struct ShellRenderState<'a> {

@@ -412,6 +412,28 @@ impl ClientShellState {
             }
             frame.replace_from_ratatui_buffer_preserving_effects(&composed, cursor);
         }
+        if self.mode == ClientShellMode::Resize && self.overlay.is_none() {
+            // `hits.panes` was built from `surface.panes` above, in the same order.
+            let panes = surface
+                .panes
+                .iter()
+                .zip(&self.hits.panes)
+                .map(|(pane, hit)| render::ResizeModePane {
+                    rect: hit.rect,
+                    inner_rect: hit.inner_rect,
+                    scrollbar_rect: hit.scrollbar_rect,
+                    focused: pane.focused,
+                })
+                .collect::<Vec<_>>();
+            let cursor = frame.cursor.clone();
+            let mut composed = frame.to_ratatui_buffer()?;
+            if let Some(badge) =
+                render::render_resize_mode_panes(&mut composed, &panes, &self.config.palette)
+            {
+                occlusion.cover(badge);
+            }
+            frame.replace_from_ratatui_buffer_preserving_effects(&composed, cursor);
+        }
         self.render_link_hover(&mut frame, &mut occlusion);
         if self.mode == ClientShellMode::Copy {
             frame.cursor = None;

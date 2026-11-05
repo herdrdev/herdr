@@ -261,4 +261,5 @@ mod link_hover;
 mod mobile;
 mod mouse_selection;
 mod popup_focus_projection;
+mod resize_mode;
 mod startup_overlays;
