@@ -44,7 +44,7 @@ pub(crate) fn run_shepherd_command(args: &[String]) -> std::io::Result<i32> {
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let operation = match operation {
         ShepherdOperation::Api(mut request) => {
-            fill_snapshot_root(&mut request.method, &cwd);
+            fill_root(&mut request.method, &cwd);
             ShepherdOperation::Api(request)
         }
         local => local,
@@ -140,20 +140,22 @@ pub(crate) fn run_shepherd_command(args: &[String]) -> std::io::Result<i32> {
     }
 }
 
-/// Snapshot methods act on the worktree the CLI runs in, not on the server's cwd.
-fn fill_snapshot_root(method: &mut Method, cwd: &std::path::Path) {
-    let root = match method {
-        Method::ShepherdSnapshotCapture(p) => &mut p.root,
-        Method::ShepherdSnapshotList(p) => &mut p.root,
-        Method::ShepherdSnapshotShow(p) => &mut p.root,
-        Method::ShepherdSnapshotDiff(p) => &mut p.root,
-        Method::ShepherdSnapshotRestore(p) => &mut p.root,
-        Method::ShepherdSnapshotDelete(p) => &mut p.root,
-        Method::ShepherdSnapshotPrune(p) => &mut p.root,
-        _ => return,
+/// Methods with an optional `root` act on the project the CLI runs in, not on the
+/// server's cwd. Fill it generically: inject `root` into the params and keep the result
+/// only if the method actually has that field (otherwise the round-trip is a no-op).
+fn fill_root(method: &mut Method, cwd: &std::path::Path) {
+    let Ok(mut value) = serde_json::to_value(&*method) else {
+        return;
     };
-    if root.is_none() {
-        *root = Some(cwd.display().to_string());
+    let Some(params) = value.get_mut("params").and_then(Value::as_object_mut) else {
+        return;
+    };
+    if params.get("root").is_some_and(|r| !r.is_null()) {
+        return;
+    }
+    params.insert("root".into(), Value::String(cwd.display().to_string()));
+    if let Ok(filled) = serde_json::from_value::<Method>(value) {
+        *method = filled;
     }
 }
 
@@ -873,5 +875,39 @@ mod tests {
             text,
             "TOPIC\tGROUP\tMEMBERS\tCOMMITTED\tTOTAL\tLAG\nresults\tcoder-1\t1\tp0:#0\t3\tp0:2\n"
         );
+    }
+
+    #[test]
+    fn fill_root_sets_cwd_for_any_method_with_root_and_keeps_explicit() {
+        let cwd = std::path::Path::new("/repo");
+        let mut m = Method::ShepherdAgentSpawn(Default::default());
+        fill_root(&mut m, cwd);
+        let Method::ShepherdAgentSpawn(p) = &m else {
+            panic!()
+        };
+        assert_eq!(p.root.as_deref(), Some("/repo"));
+
+        let mut m = Method::ShepherdTaskList(Default::default());
+        fill_root(&mut m, cwd);
+        let Method::ShepherdTaskList(p) = &m else {
+            panic!()
+        };
+        assert_eq!(p.root.as_deref(), Some("/repo"));
+
+        let mut m = Method::ShepherdAgentSpawn(crate::api::schema::ShepherdAgentSpawnParams {
+            root: Some("/other".into()),
+            ..Default::default()
+        });
+        fill_root(&mut m, cwd);
+        let Method::ShepherdAgentSpawn(p) = &m else {
+            panic!()
+        };
+        assert_eq!(p.root.as_deref(), Some("/other"));
+
+        // Method without a root field is untouched.
+        let mut m = Method::ShepherdAgentList(Default::default());
+        let before = m.clone();
+        fill_root(&mut m, cwd);
+        assert_eq!(m, before);
     }
 }

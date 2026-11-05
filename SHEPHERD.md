@@ -5787,3 +5787,16 @@ Mismos patrones mínimos (`mini-hierarchical`: director→manager(rol `reviewer`
 - Pendiente de probar con agentes reales: `stalled` (agente bloqueado de verdad), patrón orquestador-worker con 3+ workers, patrones con vendors mezclados claude+codex+agy.
 
 Limpieza: sesión aislada parada y reseteada, worktrees eliminados.
+
+## Estado F13
+
+**Fallo 1 (spawn CLI sin raíz).** `fill_snapshot_root` pasa a `fill_root` (`src/cli/shepherd.rs`): serializa el `Method`, inyecta `root` = cwd en `params` si falta y lo deserializa; solo se conserva si el método tiene ese campo (round-trip idéntico si no), así cubre spawn, run, task, pattern, git, skills y snapshot sin lista a mano. Defensa en servidor (`service/spawn.rs`): un `root` relativo se canonicaliza; si no existe, error «root must be an absolute path (…)» en vez de «worktree path must be absolute».
+
+**Fallo 2 (grupo de consumo).** Causa: `MessageBus::subscribe` sin `group` usaba el id del agente y lo sacaba del grupo del run (creando `coder-4`, `coder-5`). Ahora, sin `group`, se conserva el grupo que el consumidor ya tiene en el tópico (si no, su id); un `group` explícito sigue moviéndolo. `poll`/`ack` ya usaban el grupo asignado. Skill `shepherd-events` y prompt de modo patrón: «no pases `group` salvo necesidad».
+
+**Tests.** `bus::plain_subscribe_keeps_assigned_group_and_members_split_partitions` (2 workers, 4 particiones: 2+2 sin solapes; un solo grupo con 2 miembros); `tests_f8g::spawn_with_relative_root_is_absolutized_or_rejected_clearly`; `cli::shepherd::tests::fill_root_sets_cwd_for_any_method_with_root_and_keeps_explicit`. Cambiado `tests_f8g::moving_a_consumer_…`: el `subscribe` sin grupo ya no mueve; el movimiento se hace con grupo explícito.
+
+**Archivos:** `src/cli/shepherd.rs`, `crates/shepherd-core/src/{bus.rs,service/spawn.rs,service/pattern_prompt.rs,service/tests_f8g.rs}`, `assets/skills/shepherd-events/SKILL.md`, `SHEPHERD.md`. Archivos de herdr tocados: 0 (`src/cli/shepherd.rs` es de Shepherd).
+
+**Límites.** Un tópico con 1 partición (valor por defecto) solo da trabajo a un miembro del grupo; hay que crear el tópico con ≥ nº de workers. La quiescencia/despertar no se tocaron (tests F8h verdes). En esta máquina no hay Zig, así que el binario `shepherd` no compila y **no se pudieron ejecutar** los tests `--bin` (`cli::shepherd`, `shepherd::`, `client::shell`, `protocol::`, `server::`, `api::`, `config::`) ni la prueba real del CLI; el cambio del CLI no está compilado.
+

@@ -483,7 +483,8 @@ impl MessageBus {
     }
 
     /// Subscribe a consumer agent to a topic in a consumer group.
-    /// Default group is consumer's own ID (pub/sub style).
+    /// Without `group`, an existing membership on the topic is kept (so an agent inherits the
+    /// group a pattern run assigned it); otherwise the default is the consumer's own ID.
     pub fn subscribe(
         &self,
         consumer: &str,
@@ -503,7 +504,11 @@ impl MessageBus {
         }
         let grp = match group {
             Some(g) if !g.trim().is_empty() => g.trim().to_owned(),
-            _ => consumer.to_owned(),
+            _ => state
+                .subscriptions
+                .get(topic)
+                .and_then(|_| find_consumer_group(&state.subscriptions, topic, consumer))
+                .unwrap_or_else(|| consumer.to_owned()),
         };
 
         let committed = state
@@ -1042,6 +1047,32 @@ mod tests {
             [1, 2, 3, 4, 5]
         );
 
+        clean_bus_files(&path);
+    }
+
+    #[test]
+    fn plain_subscribe_keeps_assigned_group_and_members_split_partitions() {
+        let path =
+            std::env::temp_dir().join(format!("shepherd-f13-group-{}.jsonl", std::process::id()));
+        clean_bus_files(&path);
+        let bus = MessageBus::open(&path).unwrap();
+        bus.topic_create("orders", 4).unwrap();
+        for c in ["coder-4", "coder-5"] {
+            bus.subscribe(c, "orders", Some("worker-pool")).unwrap(); // pattern run
+            assert_eq!(bus.subscribe(c, "orders", None).unwrap(), "worker-pool");
+            // agent
+        }
+        for p in 0..4 {
+            bus.publish("orders", "o", None, Some(p), "brain-1")
+                .unwrap();
+        }
+        let a = bus.poll("coder-4", "orders", None).unwrap();
+        let b = bus.poll("coder-5", "orders", None).unwrap();
+        assert_eq!((a.len(), b.len()), (2, 2));
+        assert!(a.iter().all(|m| !b.iter().any(|n| n.id == m.id)));
+        let groups = bus.consumer_groups(Some("orders")).unwrap();
+        assert_eq!(groups.len(), 1, "{groups:?}");
+        assert_eq!(groups[0].members.len(), 2);
         clean_bus_files(&path);
     }
 

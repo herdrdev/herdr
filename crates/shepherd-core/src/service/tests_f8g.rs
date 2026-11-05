@@ -118,12 +118,15 @@ fn publish_does_not_reopen_stopped_or_unrelated_topic_runs() {
 
 #[test]
 fn moving_a_consumer_to_another_group_drops_the_never_used_empty_group() {
+    // F13: a plain `subscribe` keeps the assigned group; an explicit group moves the consumer.
     let tmp = TestDir::new("f8g-ghost");
     let (service, _t, _c) = test_service(tmp.path());
     let bus = service.bus().unwrap();
     bus.topic_create("results", 1).unwrap();
     bus.subscribe("brain-1", "results", Some("brain")).unwrap(); // topology
-    bus.subscribe("brain-1", "results", None).unwrap(); // agent's own subscribe
+    bus.subscribe("brain-1", "results", None).unwrap(); // agent's own subscribe: inherits
+    bus.subscribe("brain-1", "results", Some("brain-1"))
+        .unwrap(); // explicit move
     bus.publish("results", "m", None, Some(0), "x").unwrap();
     let groups = service.consumer_groups(Some("results")).unwrap();
     assert_eq!(groups.len(), 1, "{groups:?}");
@@ -161,4 +164,19 @@ fn agent_mcp_publish_also_reopens_quiesced_run() {
     ack_all(&service);
     let r = service.get_pattern_run(tmp.path(), &run.id).unwrap();
     assert_eq!(r.state, PatternRunState::Running);
+}
+
+#[test]
+fn spawn_with_relative_root_is_absolutized_or_rejected_clearly() {
+    let tmp = TestDir::new("f13-relroot");
+    let (service, _t, _c) = test_service(tmp.path());
+    let req = |root: &str| super::ServiceSpawnRequest {
+        root: root.into(),
+        role: "coder".into(),
+        task: "x".into(),
+        ..Default::default()
+    };
+    let err = service.spawn(req("definitely/not/there")).unwrap_err();
+    assert!(err.contains("root must be an absolute path"), "{err}");
+    assert!(!err.contains("worktree path must be absolute"), "{err}");
 }

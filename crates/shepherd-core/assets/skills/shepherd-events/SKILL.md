@@ -17,7 +17,7 @@ Shepherd provides an event log for asynchronous and decoupled multi-agent patter
 3. **Consumer Groups (`group`)**: Use consumer groups to coordinate a pool of workers.
    - Partitions are distributed deterministically across active members of the group.
    - If an agent exits or dies, the group automatically rebalances without lost or duplicated confirmed work.
-   - When no group is specified, your own agent ID is the group (pub/sub style: you receive messages from all partitions).
+   - When no group is specified, you keep the group you were already assigned on that topic (e.g. by a pattern run); only if you have none, your own agent ID is the group (pub/sub style: you receive messages from all partitions). In a pattern, do not pass `group` unless you really need a different one.
 4. **Acknowledgments (`ack`)**: Confirm processed messages up through their offset.
    - `poll()` returns messages after the last confirmed offset.
    - If you crash or exit without acking, the next assigned consumer receives those messages again (at-least-once guarantee).
@@ -35,7 +35,7 @@ Shepherd provides an event log for asynchronous and decoupled multi-agent patter
 | Tool | Usage |
 |---|---|
 | `publish(topic, content, key?)` | Publish an event to `topic`. Optional `key` guarantees partition routing. |
-| `subscribe(topic, group?)` | Subscribe to `topic`. Joins `group` (defaults to your own ID). |
+| `subscribe(topic, group?)` | Subscribe to `topic`. Joins `group` (defaults to the group you already have on the topic, else your own ID). |
 | `poll(topic, max?)` | Read unacknowledged events assigned to you in your group. |
 | `ack(topic, offset?, partition?)` | Commit processed messages up through `offset`. |
 | `replay(topic, from_offset, partition?, limit?)` | Inspect history from `from_offset` without affecting consumer offsets. |

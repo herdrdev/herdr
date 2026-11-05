@@ -19,7 +19,17 @@ impl OrchestrationService {
         self.log_err("spawn", result)
     }
 
-    fn spawn_inner(&self, req: ServiceSpawnRequest) -> Result<Agent, String> {
+    fn spawn_inner(&self, mut req: ServiceSpawnRequest) -> Result<Agent, String> {
+        // A relative root (e.g. "." from a client that omitted it) resolves against the
+        // server's cwd, which would later yield a relative worktree path.
+        if !req.root.as_os_str().is_empty() && !req.root.is_absolute() {
+            req.root = std::fs::canonicalize(&req.root).map_err(|e| {
+                format!(
+                    "root must be an absolute path ({}: {e})",
+                    req.root.display()
+                )
+            })?;
+        }
         if req.role.trim().is_empty() {
             return Err("role is required".into());
         }
