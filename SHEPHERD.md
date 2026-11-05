@@ -3575,3 +3575,496 @@ Se verificó el servidor aislado en `/tmp/shfiso`:
 
 
 
+
+
+## Diseño F10a — Interfaz dentro de la ventana de Herdr sin ventanas emergentes (2026-11-05)
+
+Documento de investigación técnica y diseño de arquitectura para la fase F10 (F10a–F10d). Resuelve cómo integrar todas las opciones de Shepherd dentro de la ventana de Herdr sin ventanas emergentes ni combinaciones de teclas obligatorias, manteniendo el aislamiento del código y facilitando las fusiones periódicas con upstream (`herdrdev/herdr`).
+
+---
+
+### 1. Cómo aloja Herdr contenido propio dentro de su ventana
+
+Se ha inspeccionado el código fuente de Herdr en `src/client/shell/*`, `src/workspace/*`, `src/app/api/plugins/*` y `src/ui/*`:
+
+1. **Barra de pestañas (`tabs`)** (`src/client/shell/tabs.rs:7-175`, `src/workspace/tab.rs:38-52`, `src/client/shell/config.rs:419-440`):
+   - En Herdr, las pestañas de la barra de pestañas (`layout.tab_bar`, altura 1) están asociadas estrictamente al espacio de trabajo activo (`snapshot.focused_workspace_id`).
+   - Cada pestaña en el servidor (`Tab`) gestiona obligatoriamente un árbol de terminales PTY (`panes: HashMap<PaneId, PaneState>`, `root_pane: PaneId`, `layout: TileLayout`).
+   - No existe en la arquitectura de Herdr el concepto de una pestaña que aloje widgets de interfaz pura en lugar de procesos terminales.
+2. **Paneles y pestañas que no son PTY** (`src/workspace.rs:176-207`, `src/terminal/mod.rs`):
+   - **No existen**. En el modelo de servidor/runtime de Herdr, todo `Pane` está respaldado por un `TerminalRuntime` / PTY (o un runtime de test en pruebas).
+   - El servidor compone periódicamente el árbol de terminales del tab activo en un búfer de celdas (`PaneSurfaceFrame`), el cual se envía serializado al cliente.
+3. **Superficie central (`layout.pane_surface`)** (`src/client/shell/composition.rs:114, 173-188, 346`, `src/client/shell/config.rs:400, 421-447`):
+   - El cliente divide la ventana en: `sidebar` (lateral izquierdo), `tab_bar` (franja superior de pestañas de altura 1) y `pane_surface` (área rectangular restante donde residen los terminales).
+   - En cada tick de render (`composition.rs:346`), el cliente ejecuta `blit_pane_surface(&mut frame, &surface.frame, layout.pane_surface)` copiando las celdas de los terminales recibidos del servidor.
+   - Si el servidor reporta un popup terminal (`surface.popup`), el cliente dibuja un borde y blitea el contenido en `composition.rs:562-585`.
+4. **Paneles de plugin** (`src/app/api/plugins/panes.rs:11-140`):
+   - Los plugins de Herdr **no disponen de widgets de UI en Ratatui ni de vistas integradas en memoria**.
+   - Cuando un plugin solicita abrir un panel (`open_plugin_popup_pane`, `open_plugin_overlay_pane`, `open_plugin_split_pane`), Herdr ejecuta el comando del plugin (`pane.command`) como un subproceso externo en un terminal PTY ordinario mediante `spawn_popup_argv_command`, `spawn_overlay_argv_command` o `split_pane_argv_command`.
+5. **Barra lateral (`sidebar`)** (`src/client/shell/sidebar.rs:200-300`, `src/client/shell/agent_sidebar.rs:55-90`, `src/ui/sidebar.rs:1-120`):
+   - Se renderiza de forma pura en el cliente (`render_sidebar`). Se divide verticalmente en dos secciones mediante un separador draggable: arriba espacios de trabajo (`workspace_area`) y abajo el panel de agentes (`detail_area` / `render_agent_panel`).
+   - Si la barra se colapsa (`sidebar_collapsed`), se reduce a 4 columnas compactas o se oculta (ancho 0) según la configuración (`src/client/shell/config.rs:404-416`).
+6. **Vistas de workspace y barra de estado (`mode_bar`)** (`src/client/shell/render.rs:31-137`):
+   - Cambiar de workspace conmuta el conjunto de pestañas y panes activos.
+   - La barra de modo (`render_mode_bar`) solo se dibuja en la última fila (altura 1) cuando la sesión entra en modo Prefix, Resize, Copy o hay un error de conexión (`endpoint_error`); en modo normal de terminal no consume espacio vertical (`None`).
+7. **¿Existe un mecanismo para una pestaña o panel con contenido propio dentro de la ventana, sin overlay?**:
+   - **No**. Todas las interfaces nativas ricas de Herdr (Ajustes, Navegador, Ayuda, Creación de Worktree, Apertura de Worktree, Release Notes, Onboarding) se implementan **exclusivamente como overlays** (`ClientShellOverlay`, en `src/client/shell/state.rs:590-629`, `src/client/shell/overlays.rs:37, 724, 1137`, `src/client/shell/settings_overlay.rs:36`, `src/client/shell/worktree_overlays.rs:3`).
+8. **Hit-testing con el ratón** (`src/client/shell/mouse.rs:690-780, 1230-1400, 1940-2160`, `src/client/shell/composition.rs:238-300, 666-680`, `src/client/shell/state.rs:650-750`):
+   - La composición produce un mapa de impacto puro (`ShellHitMap`) que recopila los rectángulos (`Rect`) de cada elemento interactivo (pestañas, filas de agentes, botones de overlay, divisores).
+   - En `mouse.rs`, los eventos de ratón se comparan con `ShellHitMap` con prioridad estricta:
+     1. Si hay overlay activo (`self.overlay.is_some()`), se despacha exclusivamente al overlay (`handle_overlay_mouse_click`, `handle_shepherd_mouse_click`).
+     2. Menús contextuales y globales (`hits.context_menu_rows`, `hits.global_menu_rows`).
+     3. Notificaciones y barras de estado.
+     4. Elementos del shell (conmutador de sidebar, pestañas, workspaces, agentes).
+     5. Clics en panes (enfoque, selección de texto, o paso de eventos SGR al PTY).
+
+---
+
+### 2. Catálogo de comportamientos de UI de Herdr (Contrato para F10b–F10d)
+
+Tabla normativa de controles y comportamientos de Herdr para construir y revisar las pantallas de Shepherd:
+
+| Elemento / Control | Comportamiento y Convenciones en Herdr | Tokens de Tema Utilizados | Referencia de Código |
+|---|---|---|---|
+| **Pestañas (Tabs)** | Fila horizontal; pestaña activa resaltada con fondo diferenciado; scroll horizontal automático (`<` y `>`) si desborda; clic enfoca la pestaña. | Fondo inactivo `palette.panel_bg`, activa `palette.surface0`, texto activo `palette.text`, texto inactivo `palette.overlay0`. | `src/client/shell/tabs.rs:7-175` |
+| **Listas con scroll** | Desplazamiento métrico basado en altura visible vs total; revela elemento seleccionado; barra de scroll vertical con caracteres `█` / `│`; rueda del ratón y teclas `j`/`k`, `Up`/`Down`. | Fondo de selección `palette.selection_bg` / `palette.active_row_bg`, texto `palette.text`, scrollbar `palette.surface1`. | `src/client/shell/scroll.rs:1-120`, `src/ui/scrollbar.rs:1-130`, `src/client/shell/sidebar.rs:268-300` |
+| **Botones interactivos** | Cajas con texto delimitado (p. ej. `[ esc close ]`, `[ enter confirm ]`); cambio de estilo en hover/press; atajo de teclado visible entre corchetes; área de clic registrada en `ShellHitMap`. | Fondo `palette.surface0` / `palette.surface1`, texto `palette.text`, borde o acento `palette.accent`. | `src/client/shell/overlays.rs:20-35`, `src/ui/release_notes.rs:15-60` |
+| **Campos de texto (Input)** | Renderizado con cursor posicional o bloque inverso; atajos de edición estándar (`Backspace`, `Delete`, `Ctrl+u`, `Ctrl+a`, `Ctrl+e`); validación de entrada. | Fondo `palette.surface0`, texto `palette.text`, placeholder `palette.overlay0`, cursor `Modifier::REVERSED`. | `src/client/shell/text_editor.rs:1-150`, `src/client/shell/worktree_overlays.rs:29-36` |
+| **Selector de opciones (Radio/Choice)** | Lista vertical con marcador `▸` en la fila activa y `✓` en el valor actualmente configurado; `Space` o `Enter` conmuta la selección. | Seleccionado: `contrast(palette)` sobre `palette.accent` con `Modifier::BOLD`; inactivo: `palette.text` sobre `palette.panel_bg`. | `src/client/shell/settings_overlay.rs:14-34` |
+| **Convención Esc** | En sub-formularios o búsquedas: cancela la edición y vuelve a la lista. En vista de nivel superior: cierra la vista o vuelve a los terminales. | — | `src/client/shell/overlay_input.rs:20-150`, `src/client/shell/input.rs:250-290` |
+| **Convención Enter** | Ejecuta la acción primaria de la fila seleccionada o envía el formulario activo. | — | `src/client/shell/overlay_input.rs:80-160` |
+| **Convención Ratón** | Ratón primero: todo elemento accionable tiene un rectángulo en `hits`; clic selecciona o acciona; rueda desplaza scroll; hover opcional. | — | `src/client/shell/mouse.rs:1230-1400` |
+| **Terminales pequeños (<80x24)** | Umbral móvil `mobile_width_threshold` (<=80 cols); si el ancho es insuficiente, la sidebar se oculta automáticamente; los overlays limitan su tamaño con `.min(cols - 2).min(rows - 2)`; si el área es menor a 20x8 devuelve `None` de forma segura sin pánico. | — | `src/client/shell/config.rs:394-416`, `src/client/shell/mobile.rs:1-200`, `src/shepherd/overlay.rs:274-288` |
+| **Patrón Estado + Render + Hits** | Estado en structs puros sin PTY ni async; `render(&mut Buffer, &State, &Palette) -> Option<Hits>` puramente funcional; `Hits` alimenta el despachador de eventos en `mouse.rs`. | `Palette` pura (`panel_bg`, `sidebar_bg`, `surface0`, `surface1`, `surface_dim`, `accent`, `text`, `overlay0`, alertas `red`, `green`, `yellow`, `mauve`). | `src/client/shell/composition.rs:207-235`, `src/client/shell/state.rs:650-750` |
+
+---
+
+### 3. Estado actual de los componentes de Shepherd y qué se reutiliza
+
+Se ha evaluado la implementación en `src/shepherd/` (`overlay.rs`, `panel.rs`, `tasks.rs`, `runs.rs`, `skills.rs`, `git.rs`, `src/client/shell/shepherd.rs`):
+
+| Módulo | Estado Actual | Qué se Reutiliza Tal Cual | Qué se Modifica / Elimina en F10b–F10d |
+|---|---|---|---|
+| `src/shepherd/overlay.rs` | Overlay modal flotante (96x28) con oscurecimiento exterior (`Modifier::DIM`) y atajo `Ctrl+b a`. | Definición de pestañas (`ShepherdTab`), interfaz de despacho `ShepherdActionDispatcher`, manejo de teclado/ratón base, estructuras de hits. | Se elimina el recuadro flotante de 96x28 y la atenuación exterior; se transforma en el armazón a pantalla completa o sobre `pane_surface`. |
+| `src/shepherd/panel.rs` | Gestión de agentes, submodales flotantes `SpawnForm`, `ConfirmKill`, `ConfirmClean`, `ConfirmCleanAll`. | Modelos `ShepherdAgentsPanelState`, `ShepherdAgentRow`, lógica de validación de spawn, conteos y filtros de agentes. | Se eliminan los submodales flotantes; el formulario de lanzamiento se renderiza en línea en el panel derecho; las confirmaciones destructivas se convierten en franjas integradas. |
+| `src/shepherd/tasks.rs` | Lista de tareas, submodales flotantes `CreateTask`, `ImportGh`, `ConfirmArchive`, visor Markdown. | Modelo `ShepherdTasksState`, renderizador y analizador de Markdown de specs/criterios, reglas de validación (no vacío, ficheros adjuntos no rotos). | Se eliminan los submodales de creación, importación y confirmación flotantes; pasan a formularios en el panel derecho y franjas de confirmación al pie. |
+| `src/shepherd/runs.rs` | Lista de runs, formulario de opciones (`auto_push`, replan) y modales de confirmación de gates. | Modelo `ShepherdRunsState`, validaciones estrictas (`auto_push` arranca en false; replan bloqueado sin plan previo), guardas de gates de Push/PR. | Se eliminan los popups de lanzamiento y de aprobación/rechazo; la aprobación de gates se ubica como franja visible en el detalle del run. |
+| `src/shepherd/skills.rs` | Catálogo e inspección por agente, resolución jerárquica de 3 capas, detección de shadowing. | Modelo `ShepherdSkillsState`, resolución jerárquica (global/rol/agente), detección y avisos de shadowing, protección contra borrado de `default`. | Se reemplazan los diálogos flotantes de borrado/restauración por confirmaciones en línea; se añaden botones visibles para conmutar catálogo y activar/desactivar. |
+| `src/shepherd/git.rs` | Estado de git, worktrees y ramas. | Modelo `ShepherdGitState`, detección de ramas y ahead/behind. | Formularios de creación de worktree/rama pasan a ser en línea dentro del panel. |
+| `src/client/shell/shepherd.rs` | Enganche entre el cliente de Herdr y Shepherd (`ClientActionDispatcher`, `open_shepherd_overlay`). | Mapeo tipado `shepherd_op_to_method`, despacho asíncrono con `push_endpoint_method_with_kind`, sincronización de datos con el servidor. | Se adapta la apertura para invocar la vista integrada según la opción que decida el dueño. |
+
+---
+
+### 4. Decisión de diseño con evidencia y Dilema para el Dueño
+
+#### Comparativa de Opciones de Integración
+
+| Opción | Encaje con «Sin Pop-ups» | Coste de Fusión (Archivos y Líneas en Herdr) | Riesgo de Regresión Upstream | Esfuerzo de Implementación |
+|---|---|---|---|---|
+| **(a) Sección Shepherd como pestaña en la barra de pestañas de Herdr (`tab_bar`)** | **Total**: Aparece como una pestaña más en la franja superior de Herdr. | **Muy Alto**: Modifica el modelo central de `Workspace` y `Tab` en servidor (`src/workspace/tab.rs`, `src/workspace.rs`, `src/app/state.rs`, `src/persist/snapshot.rs`), serialización, API (`TabInfo`) y bifurca `composition.rs` y `surface_patch.rs`. >350 líneas en ~10 archivos centrales de Herdr. | **Muy Alto**: Herdr asume que todo tab tiene PTYs y PIDs. Cada rebase desde upstream que toque el layout o el snapshot causará conflictos severos. | Alto (rompe invariantes del servidor). |
+| **(b) Panel anclado / Vista de workspace dedicada** | **Alto**: Ocupa un workspace dedicado o un panel acoplado permanente. | **Alto**: Modifica el cálculo de layout de Herdr (`ClientShellLayout` en `config.rs`, `composition.rs`, `mouse.rs`) para redimensionar `pane_surface` y gestionar foco partido. ~200 líneas en 6 archivos de Herdr. | **Medio-Alto**: Modifica bucles de rendimiento multiplicativos (`compose()`) y hit-testing de terminales. | Medio-Alto. |
+| **(c) Overlay a pantalla completa tipo pestaña (patrón nativo de Herdr)** | **Muy Alto en espíritu**: Se abre a toda la ventana (`buffer.area`) sin recuadro flotante ni atenuación. Dentro de la pantalla no hay ningún popup (todo lista/detalle, formularios en línea y franja de confirmación). Al pulsar `Esc` o `[ Cerrar ]` vuelve a los terminales. | **Mínimo**: 0 líneas nuevas en archivos de Herdr. Reutiliza el enganche existente `ClientShellOverlay::Shepherd` ya presente en `state.rs`, `composition.rs`, `input.rs` y `mouse.rs`. Todo el código nuevo vive aislado en `src/shepherd/`. | **Cero**: Aislamiento total en `src/shepherd/`. Las fusiones de Herdr upstream pasan sin conflictos. | Bajo-Medio. |
+| **(d) Sustitución in-place de `pane_surface` en cliente (Takeover de superficie)** | **Máximo**: La barra lateral de Herdr permanece visible y funcional a la izquierda; el área central (`pane_surface`) sustituye los terminales por la sección Shepherd con sus pestañas y paneles propios. | **Bajo**: Requiere una bandera en el cliente (`shepherd_surface_active`) que en `composition.rs:346` conmuta entre `blit_pane_surface` y `render_shepherd_surface`. ~40 líneas en 4 archivos de Herdr (`composition.rs`, `state.rs`, `mouse.rs`, `input.rs`). | **Bajo**: No toca el servidor ni el modelo de `Tab`/`Workspace`. Solo intercepta la proyección gráfica en el cliente. | Medio. |
+
+#### El Dilema de Diseño para el Dueño
+
+De acuerdo con la «Regla ampliada: también el comportamiento de la interfaz sigue a herdr», existe una tensión técnica demostrada:
+1. Herdr **no posee pestañas ni paneles que no sean terminales PTY**. Todas sus interfaces ricas propias (Settings, Navigator, Help, Worktrees) son **overlays**.
+2. Por tanto, una pestaña no-PTY en la barra de pestañas de Herdr (Opción A) obligaría a desviar profundamente el runtime del servidor de Herdr, disparando la deuda técnica y el coste de cada fusión upstream.
+3. Se presentan al dueño las dos opciones viables para resolver el dilema:
+   - **Recomendación 1 (Opción D — Sustitución in-place de `pane_surface`)**: Mantiene la ventana de Herdr idéntica (sidebar visible a la izquierda con espacios y agentes), sustituyendo únicamente la cuadrícula de terminales central por el armazón de pestañas y paneles de Shepherd. Coste de fusión muy reducido (~40 líneas en el cliente, 0 en el servidor).
+   - **Recomendación 2 (Opción C — Overlay a pantalla completa tipo pestaña)**: Sigue el 100% de la arquitectura de Herdr (`ClientShellOverlay`), pero eliminando el recuadro flotante (96x28) y renderizando de borde a borde con pestañas superiores y sin ningún diálogo emergente. Coste de fusión nulo (0 líneas nuevas en Herdr).
+
+---
+
+### 5. Mapa de pantallas con maquetas ASCII
+
+Estructura uniforme de cada pantalla:
+- **Encabezado superior**: pestañas de sección (`Agentes`, `Tareas`, `Runs`, `Patrones`, `Skills`, `Git`, `Eventos`) y botón `[ × Cerrar (Esc) ]`.
+- **Cuerpo dividido**: lista interactiva a la izquierda (30–35% del ancho) con buscador/filtros, y panel de detalle / formulario en línea a la derecha (65–70% del ancho).
+- **Pie de página**: estado del sistema, avisos destacados y ayuda contextual con atajos secundarios.
+- **Acciones destructivas**: franja de confirmación embebida al pie del panel derecho con botones claros `[ Confirmar ]` y `[ Cancelar ]`.
+
+#### 5.1 Pantalla de Agentes
+
+```text
+┌─ Shepherd ─────────────────────────────────────────────────────────────────────────────────── [ × Cerrar (Esc) ] ─┐
+│ [ Agentes ]  [ Tareas ]  [ Runs ]  [ Patrones ]  [ Skills ]  [ Git ]  [ Eventos ]                                    │
+├────────────────────────────────┬──────────────────────────────────────────────────────────────────────────────────┤
+│ AGENTES ACTIVOS   [+ Nuevo (s)]│ DETALLE DEL AGENTE: coder-24 (ID: ag-04f2)                   [ Ir a Terminal (Enter) ]   │
+│ Buscar: [/]                    │ Estado: blocked  |  Rol: coder  |  Vendor: claude-3-7-sonnet  |  PID: 41209              │
+├────────────────────────────────┼──────────────────────────────────────────────────────────────────────────────────┤
+│ ▸ coder-24  [BLOCKED]          │ Último prompt: "Implementa el parseo de opciones en src/cli.rs..."               │
+│   coder-23  [WORKING]          │ Directorio de trabajo: /tmp/shfiso/repo/.shepherd/worktrees/task-12              │
+│   reviewer  [IDLE]             │                                                                                  │
+│   planner-1 [DONE]             │ ┌─ AVISO DESTACADO (NEEDS YOU) ────────────────────────────────────────────────┐ │
+│                                │ │ Esperando al humano: diálogo de confianza o login en la terminal nativa.     │ │
+│                                │ └──────────────────────────────────────────────────────────────────────────────┘ │
+│                                │ Skills activas (3): [git-safe] [rust-tools] [project-context]                    │
+│                                │                                                                                  │
+│                                │ ACCIONES:                                                                        │
+│                                │ [ Matar Agente (K) ]    [ Limpiar Sesión (x) ]    [ Ver Log de Eventos (e) ]     │
+│                                │ ┌─ CONFIRMACIÓN ───────────────────────────────────────────────────────────────┐ │
+│                                │ │ ⚠ ¿Enviar SIGKILL al proceso 41209?           [ Confirmar (Enter) ] [ Cancelar ]│ │
+│                                │ └──────────────────────────────────────────────────────────────────────────────┘ │
+├────────────────────────────────┴──────────────────────────────────────────────────────────────────────────────────┤
+│ 4 agentes registrados (1 requiere atención) | ↑/↓: navegar | Tab: cambiar panel | s: nuevo | K: matar | Esc: salir│
+└───────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### 5.2 Formulario de Lanzamiento de Agente (En Línea, sin modal)
+
+```text
+┌─ Shepherd ─────────────────────────────────────────────────────────────────────────────────── [ × Cerrar (Esc) ] ─┐
+│ [ Agentes ]  [ Tareas ]  [ Runs ]  [ Patrones ]  [ Skills ]  [ Git ]  [ Eventos ]                                    │
+├────────────────────────────────┬──────────────────────────────────────────────────────────────────────────────────┤
+│ AGENTES ACTIVOS   [+ Nuevo (s)]│ NUEVO AGENTE (Formulario en línea)                                               │
+│ Buscar: [/]                    │                                                                                  │
+├────────────────────────────────┤ Rol obligatorio:                                                                 │
+│ ▸ (Nuevo agente en curso)      │ [ coder                                                                        ] │
+│   coder-24  [BLOCKED]          │ Tarea asignada (ID o descripción):                                               │
+│   coder-23  [WORKING]          │ [ 12 - Soporte para banderas booleanas en CLI                                  ] │
+│   reviewer  [IDLE]             │ Vendor / Modelo (opcional):                                                      │
+│                                │ [ anthropic/claude-3-7-sonnet                                                  ] │
+│                                │ Skills adicionales (separadas por coma):                                         │
+│                                │ [ debug-trace, sql-inspect                                                     ] │
+│                                │                                                                                  │
+│                                │ ✓ Parámetros validados correctamente.                                            │
+│                                │                                                                                  │
+│                                │ [ Lanzar Agente (Enter) ]                         [ Cancelar Formulario (Esc) ]  │
+├────────────────────────────────┴──────────────────────────────────────────────────────────────────────────────────┤
+│ Formulario de spawn activo | Tab: siguiente campo | Enter: lanzar | Esc: descartar cambios                       │
+└───────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### 5.3 Pantalla de Tareas
+
+```text
+┌─ Shepherd ─────────────────────────────────────────────────────────────────────────────────── [ × Cerrar (Esc) ] ─┐
+│ [ Agentes ]  [ Tareas ]  [ Runs ]  [ Patrones ]  [ Skills ]  [ Git ]  [ Eventos ]                                    │
+├────────────────────────────────┬──────────────────────────────────────────────────────────────────────────────────┤
+│ TAREAS          [+ Nueva (n)]  │ TAREA #12: Soporte para banderas booleanas en CLI         [ Editar en Pane (e) ] │
+│ Filtro: [Todas] [Abiertas] [✓] │ Estado: Open  |  Asignado: coder-24  |  Rama: issue/12-bool-flags                │
+├────────────────────────────────┼──────────────────────────────────────────────────────────────────────────────────┤
+│ ▸ #12 Soporte banderas boolean │ ESPECIFICACIÓN:                                                                  │
+│   #11 Reconciliación de daemon │ Añadir soporte declarativo para banderas sin argumentos en el parser CLI.        │
+│   #10 Integración de MCP bus   │                                                                                  │
+│   #09 Formato puro de TUI      │ CRITERIOS DE ACEPTACIÓN:                                                         │
+│                                │ [x] Parsear banderas estilo `--flag` y `-f`.                                     │
+│                                │ [ ] Pasar suite de pruebas unitarias en `src/cli.rs`.                            │
+│                                │ [ ] No generar advertencias en `cargo check`.                                    │
+│                                │                                                                                  │
+│                                │ ARCHIVOS ADJUNTOS:                                                               │
+│                                │ • src/cli.rs (existente, 420 líneas)                                             │
+│                                │ • tests/cli_flags.rs (nuevo fichero)                                             │
+│                                │                                                                                  │
+│                                │ ACCIONES:                                                                        │
+│                                │ [ Iniciar Run (r) ]     [ Archivar Tarea (a) ]     [ Importar GitHub (i) ]       │
+├────────────────────────────────┴──────────────────────────────────────────────────────────────────────────────────┤
+│ 4 tareas (3 abiertas) | ↑/↓: navegar lista | n: nueva | e: editar fichero | a: archivar | r: lanzar run           │
+└───────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### 5.4 Formulario de Creación de Tareas con Validación en Vivo
+
+```text
+┌─ Shepherd ─────────────────────────────────────────────────────────────────────────────────── [ × Cerrar (Esc) ] ─┐
+│ [ Agentes ]  [ Tareas ]  [ Runs ]  [ Patrones ]  [ Skills ]  [ Git ]  [ Eventos ]                                    │
+├────────────────────────────────┬──────────────────────────────────────────────────────────────────────────────────┤
+│ TAREAS          [+ Nueva (n)]  │ CREAR TAREA (Formulario en línea)                                                │
+│ Filtro: [Todas] [Abiertas] [✓] │                                                                                  │
+├────────────────────────────────┤ Título de la tarea:                                                              │
+│ ▸ (Borrador de nueva tarea)    │ [ Refactorizar bucle de eventos del bus                                        ] │
+│   #12 Soporte banderas boolean │ Descripción / Especificación:                                                    │
+│   #11 Reconciliación de daemon │ [ Migrar el despachador de eventos a un canal acotado sin asignaciones en bucle] │
+│                                │ Criterios de aceptación (uno por línea):                                         │
+│                                │ [ 1. Capacidad acotada a 1024 mensajes                                         ] │
+│                                │ [ 2. Test unitario de saturación sin pérdida                                   ] │
+│                                │ Archivos adjuntos (rutas validadas en vivo):                                     │
+│                                │ [ src/bus.rs, src/inexistente.rs                                               ] │
+│                                │ ⚠ Error de validación: El archivo 'src/inexistente.rs' no existe en el disco.     │
+│                                │                                                                                  │
+│                                │ [ Guardar Tarea (Enter - deshabilitado) ]         [ Cancelar (Esc) ]             │
+├────────────────────────────────┴──────────────────────────────────────────────────────────────────────────────────┤
+│ Complete los campos requeridos | Corrige las rutas no válidas para habilitar el guardado                         │
+└───────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### 5.5 Estado Vacío (Empty State)
+
+```text
+┌─ Shepherd ─────────────────────────────────────────────────────────────────────────────────── [ × Cerrar (Esc) ] ─┐
+│ [ Agentes ]  [ Tareas ]  [ Runs ]  [ Patrones ]  [ Skills ]  [ Git ]  [ Eventos ]                                    │
+├────────────────────────────────┬──────────────────────────────────────────────────────────────────────────────────┤
+│ TAREAS          [+ Nueva (n)]  │                                                                                  │
+│ Filtro: [Todas] [Abiertas] [✓] │                            NO HAY TAREAS REGISTRADAS                             │
+├────────────────────────────────┤                                                                                  │
+│ (Lista vacía)                  │ No se encontraron tareas que coincidan con el filtro actual.                     │
+│                                │ Puedes registrar una tarea manualmente o importar un issue de GitHub.           │
+│                                │                                                                                  │
+│                                │         [ + Crear Primera Tarea (n) ]      [ Importar de GitHub (i) ]            │
+│                                │                                                                                  │
+├────────────────────────────────┴──────────────────────────────────────────────────────────────────────────────────┤
+│ Sin tareas en esta sesión | Pulsa 'n' o haz clic en [+ Crear Primera Tarea] para comenzar                        │
+└───────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### 5.6 Pantalla de Runs con Franja de Confirmación de Gate
+
+```text
+┌─ Shepherd ─────────────────────────────────────────────────────────────────────────────────── [ × Cerrar (Esc) ] ─┐
+│ [ Agentes ]  [ Tareas ]  [ Runs ]  [ Patrones ]  [ Skills ]  [ Git ]  [ Eventos ]                                    │
+├────────────────────────────────┬──────────────────────────────────────────────────────────────────────────────────┤
+│ EJECUCIONES     [+ Iniciar (l)]│ RUN #102: Tarea #12 (Soporte banderas booleanas)                                 │
+│ Buscar: [/]                    │ Estado: Esperando Aprobación Humana (Gate Push/PR)                               │
+├────────────────────────────────┼──────────────────────────────────────────────────────────────────────────────────┤
+│ ▸ run-102  [GATE: PUSH/PR]     │ Plan ejecutado:                                                                  │
+│   run-101  [COMPLETED]         │   ✓ Fase 1: Planificación inicial (planner-1)                                    │
+│   run-100  [FAILED]            │   ✓ Fase 2: Implementación de parser (coder-24)                                  │
+│                                │   ✓ Fase 3: Pruebas y validación (reviewer)                                      │
+│                                │   ▸ Fase 4: Puerta humana (Gate) antes de publicar en GitHub                     │
+│                                │                                                                                  │
+│                                │ Rama lista para publicar: issue/12-bool-flags (3 commits locales)                 │
+│                                │                                                                                  │
+│                                │ ┌─ FRANJA DE APROBACIÓN DE GATE ───────────────────────────────────────────────┐ │
+│                                │ │ 🔒 AVISO: Aprobar publicará la rama en el repositorio remoto y creará un PR. │ │
+│                                │ │    [ ✓ Aprobar Push & Crear PR (a) ]     [ ✗ Rechazar Gate (d) ]             │ │
+│                                │ └──────────────────────────────────────────────────────────────────────────────┘ │
+├────────────────────────────────┴──────────────────────────────────────────────────────────────────────────────────┤
+│ Run pausado esperando tu decisión | 'a': aprobar y publicar | 'd': rechazar | 'c': cancelar ejecución            │
+└───────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### 5.7 Pantalla de Patrones
+
+```text
+┌─ Shepherd ─────────────────────────────────────────────────────────────────────────────────── [ × Cerrar (Esc) ] ─┐
+│ [ Agentes ]  [ Tareas ]  [ Runs ]  [ Patrones ]  [ Skills ]  [ Git ]  [ Eventos ]                                    │
+├────────────────────────────────┬──────────────────────────────────────────────────────────────────────────────────┤
+│ PATRONES MULTI-AGENTE [+ Nuevo]│ PATRÓN: orchestrator-worker (Origen: default)           [ Validar YAML (v) ]     │
+│ Buscar: [/]                    │ Topología: Jerárquica  |  Máx profundidad: 2  |  Roles: planner, coder, reviewer│
+├────────────────────────────────┼──────────────────────────────────────────────────────────────────────────────────┤
+│ ▸ orchestrator-worker [default]│ DEFINICIÓN (YAML):                                                               │
+│   blackboard          [default]│   version: "1.0"                                                                 │
+│   market              [default]│   topology: orchestrator-worker                                                  │
+│   custom-tui-flow     [user]   │   roles:                                                                         │
+│                                │     orchestrator: { role: planner, can_spawn: [coder, reviewer] }                │
+│                                │     workers: [coder]                                                             │
+│                                │     verifier: [reviewer]                                                         │
+│                                │                                                                                  │
+│                                │ [ Clonar como Patrón de Usuario ]    [ Eliminar (d - solo ámbito usuario) ]      │
+├────────────────────────────────┴──────────────────────────────────────────────────────────────────────────────────┤
+│ 4 patrones disponibles (3 del sistema protegidos) | ↑/↓: seleccionar | v: validar sintaxis | Esc: volver          │
+└───────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### 5.8 Pantalla de Skills
+
+```text
+┌─ Shepherd ─────────────────────────────────────────────────────────────────────────────────── [ × Cerrar (Esc) ] ─┐
+│ [ Agentes ]  [ Tareas ]  [ Runs ]  [ Patrones ]  [ Skills ]  [ Git ]  [ Eventos ]                                    │
+├────────────────────────────────┬──────────────────────────────────────────────────────────────────────────────────┤
+│ VISTA: [Por Agente] [Catálogo] │ SKILL: git-safe (Ámbito: default)                                                │
+│ Agente: coder-24 (coder)       │ Estado: Activa  |  Origen: empaquetada por defecto  |  Modificada: No            │
+├────────────────────────────────┼──────────────────────────────────────────────────────────────────────────────────┤
+│ ▸ [✓] git-safe      [default]  │ DESCRIPCIÓN:                                                                     │
+│   [✓] rust-tools    [user]     │ Proporciona instrucciones y restricciones estrictas para operaciones seguras     │
+│   [ ] sql-inspect   [repo]     │ de Git en ramas de trabajo y prevención de force-push.                           │
+│                                │                                                                                  │
+│                                │ AVISO DE APLICACIÓN:                                                             │
+│                                │ • Añadir o quitar skills surte efecto al REINICIAR el agente.                    │
+│                                │ • Editar el texto de la skill se propaga EN VIVO inmediatamente.                 │
+│                                │                                                                                  │
+│                                │ [ Desactivar Skill (Space) ]     [ Editar Contenido (e) ]     [ Restaurar (r) ]  │
+├────────────────────────────────┴──────────────────────────────────────────────────────────────────────────────────┤
+│ Espacio: alternar activación | e: editar texto en vivo | r: restaurar copia original | c: ver catálogo completo   │
+└───────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### 5.9 Pantalla de Git
+
+```text
+┌─ Shepherd ─────────────────────────────────────────────────────────────────────────────────── [ × Cerrar (Esc) ] ─┐
+│ [ Agentes ]  [ Tareas ]  [ Runs ]  [ Patrones ]  [ Skills ]  [ Git ]  [ Eventos ]                                    │
+├────────────────────────────────┬──────────────────────────────────────────────────────────────────────────────────┤
+│ RAMAS Y WORKTREES [+ Worktree] │ WORKTREE: /tmp/shfiso/repo/.shepherd/worktrees/task-12                           │
+│ Repositorio: /tmp/shfiso/repo  │ Rama activa: issue/12-bool-flags  |  Agente vinculado: coder-24                  │
+├────────────────────────────────┼──────────────────────────────────────────────────────────────────────────────────┤
+│ ▸ issue/12-bool-flags  [ahead 2│ ESTADO DEL ÍNDICE Y ÁRBOL DE TRABAJO:                                            │
+│   master               [clean] │   M src/cli.rs (+45 -12)                                                         │
+│   fix/timeout          [behind1│   A tests/cli_flags.rs (+88 -0)                                                  │
+│                                │                                                                                  │
+│                                │ ACCIONES DISPONIBLES:                                                            │
+│                                │ [ Ver Diffs de Cambios (d) ]        [ Crear Commit Local (c) ]                   │
+│                                │ [ Publicar Rama en Remoto (p) ]     [ Eliminar Worktree Limpio (x) ]             │
+├────────────────────────────────┴──────────────────────────────────────────────────────────────────────────────────┤
+│ ↑/↓: seleccionar worktree | d: ver diff | p: push | x: limpiar worktree huérfano                                 │
+└───────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### 5.10 Pantalla de Eventos (Bus JSONL)
+
+```text
+┌─ Shepherd ─────────────────────────────────────────────────────────────────────────────────── [ × Cerrar (Esc) ] ─┐
+│ [ Agentes ]  [ Tareas ]  [ Runs ]  [ Patrones ]  [ Skills ]  [ Git ]  [ Eventos ]                                    │
+├────────────────────────────────┬──────────────────────────────────────────────────────────────────────────────────┤
+│ TOPICS DEL BUS      [Replay (R)│ LIVE STREAM: shepherd.events (Filtro: todos)             [ Pausar Flujo (Space) ]│
+│ Buscar evento: [/]             │ Formato: JSONL secuencial append-only                                            │
+├────────────────────────────────┼──────────────────────────────────────────────────────────────────────────────────┤
+│ ▸ shepherd.events   (148 msgs) │ [09:12:01.214] #145 [agent.spawn] id="coder-24" role="coder" status="starting"   │
+│   shepherd.tasks    (32 msgs)  │ [09:12:03.540] #146 [agent.status] id="coder-24" status="working"                │
+│   shepherd.agents   (89 msgs)  │ [09:12:15.890] #147 [agent.status] id="coder-24" status="blocked" notice="login" │
+│   shepherd.gates    (6 msgs)   │ [09:12:30.102] #148 [gate.waiting] run="run-102" gate="push_pr"                  │
+│                                │                                                                                  │
+│                                │ DETALLE DEL EVENTO #148:                                                         │
+│                                │ { "seq": 148, "topic": "shepherd.gates", "type": "gate.waiting", "run": 102 }    │
+│                                │                                                                                  │
+│                                │ [ Reanudar Stream (Space) ]      [ Replay desde seq 0 (R) ]                      │
+├────────────────────────────────┴──────────────────────────────────────────────────────────────────────────────────┤
+│ Transmisión en tiempo real | Barra espaciadora: congelar/reanudar scroll | R: rebobinar historial               │
+└───────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### 5.11 Adaptación a Terminal Pequeño (80x24)
+
+En terminales de 80 columnas por 24 filas, la pantalla elimina paddings superfluos y distribuye el espacio de forma compacta (26 columnas para la lista, 52 columnas para el detalle):
+
+```text
+┌─ Shepherd ────────────────────────────────────────────────── [ × (Esc) ] ─┐
+│ [Agentes] [Tareas] [Runs] [Patrones] [Skills] [Git] [Eventos]              │
+├──────────────────────────┬─────────────────────────────────────────────────┤
+│ TAREAS          [+ (n)]  │ #12: Soporte booleanas CLI       [ Editar (e) ] │
+│ [Todas] [Abiertas]       │ Estado: Open | Asignado: coder-24               │
+├──────────────────────────┼─────────────────────────────────────────────────┤
+│▸#12 Banderas booleanas   │ ESPECIFICACIÓN:                                 │
+│ #11 Reconciliación daemon│ Parser declarativo para banderas CLI.           │
+│ #10 Integración bus MCP  │                                                 │
+│ #09 Formato TUI puro     │ CRITERIOS:                                      │
+│                          │ [x] Banderas `--flag` y `-f`.                   │
+│                          │ [ ] Tests unitarios en `src/cli.rs`.            │
+│                          │                                                 │
+│                          │ [ Iniciar Run (r) ]      [ Archivar (a) ]       │
+├──────────────────────────┴─────────────────────────────────────────────────┤
+│ ↑/↓: lista | n: nueva | e: editar | r: run | Esc: salir                    │
+└────────────────────────────────────────────────────────────────────────────┘
+```
+Si el ancho cae por debajo de 70 columnas (modo ultra-compacto), la vista conmuta automáticamente a modo de panel único conmutable con `Tab` (`[ Ver Lista ]` <-> `[ Ver Detalle ]`), garantizando que los formularios y textos nunca se corten ni provoquen desbordamiento.
+
+---
+
+### 6. Inventario de acciones actuales y equivalente en botón/panel clicable
+
+| Pantalla | Acción Actual | Mecanismo Previo | Nuevo Equivalente Visual Clicable | Atajo Secundario |
+|---|---|---|---|---|
+| **Global** | Abrir sección Shepherd | Tecla `Ctrl+b a` o menú global | Opción destacada en Menú Global y clic en encabezado lateral | `prefix + a` |
+| **Global** | Cerrar / volver | Tecla `Esc` en modal | Botón visible `[ × Cerrar (Esc) ]` en la esquina superior | `Esc` |
+| **Global** | Cambiar de pestaña | Teclas `Tab`, `Left`, `Right` | Pestañas superiores clicables: `[ Agentes ] [ Tareas ] ...` | `1`–`7`, `Tab`, `Left`/`Right` |
+| **Agentes** | Lanzar agente | Submodal flotante (`s`) | Botón visible `[ + Nuevo Agente (s) ]` -> formulario en línea | `s` |
+| **Agentes** | Enfocar terminal | Tecla `Enter` / doble clic | Botón visible `[ Ir a Terminal (Enter) ]` en cabecera | `Enter` |
+| **Agentes** | Matar agente | Submodal confirmación (`K`) | Botón `[ Matar Agente (K) ]` -> franja de confirmación en línea | `K` |
+| **Agentes** | Limpiar agente | Submodal confirmación (`x`) | Botón `[ Limpiar (x) ]` -> franja de confirmación en línea | `x` |
+| **Agentes** | Limpiar terminados | Submodal confirmación (`X`) | Botón `[ Limpiar Definitivos (X) ]` -> franja en línea | `X` |
+| **Tareas** | Crear tarea | Submodal flotante (`n`) | Botón visible `[ + Nueva Tarea (n) ]` -> formulario en línea | `n` |
+| **Tareas** | Importar de GitHub | Submodal flotante (`i`) | Botón visible `[ Importar GitHub (i) ]` -> formulario en línea | `i` |
+| **Tareas** | Archivar tarea | Submodal confirmación (`a`) | Botón `[ Archivar (a) ]` -> franja de confirmación en línea | `a` |
+| **Tareas** | Editar en editor | Tecla `e` (abre nuevo pane) | Botón visible `[ Editar en Pane (e) ]` | `e` |
+| **Tareas** | Filtrar lista | Tecla `f` cíclica | Pestañas de filtro clicables `[ Todas ] [ Abiertas ] [ Completadas ]` | `f` |
+| **Runs** | Iniciar ejecución | Submodal flotante (`l`/`r`)| Botón visible `[ + Nuevo Run (l) ]` -> formulario en línea | `l` o `r` |
+| **Runs** | Cancelar ejecución | Submodal confirmación (`c`) | Botón `[ Cancelar Run (c) ]` -> franja de confirmación en línea | `c` |
+| **Runs** | Aprobar Gate (Push/PR)| Submodal confirmación (`a`) | Botón visible `[ ✓ Aprobar Push & Crear PR (a) ]` en franja | `a` |
+| **Runs** | Rechazar Gate | Submodal confirmación (`d`) | Botón visible `[ ✗ Rechazar Gate (d) ]` en franja | `d` |
+| **Patrones** | Crear patrón | — (no existía en TUI) | Botón visible `[ + Nuevo Patrón (n) ]` -> editor en línea | `n` |
+| **Patrones** | Validar YAML | — (no existía en TUI) | Botón visible `[ Validar YAML (v) ]` | `v` |
+| **Patrones** | Eliminar patrón | — (no existía en TUI) | Botón `[ Eliminar (d) ]` -> franja de confirmación en línea | `d` |
+| **Skills** | Conmutar catálogo | Tecla `c` | Conmutador clicable `[ Por Agente ]` / `[ Catálogo ]` | `c` |
+| **Skills** | Activar/desactivar | Tecla `Space` | Checkbox clicable `[✓]` / `[ ]` en la fila | `Space` |
+| **Skills** | Restaurar copia | Submodal confirmación (`r`) | Botón `[ Restaurar (r) ]` -> franja de confirmación en línea | `r` |
+| **Skills** | Eliminar de catálogo | Submodal confirmación (`d`) | Botón `[ Eliminar (d) ]` -> franja de confirmación en línea | `d` |
+| **Git** | Crear worktree | Submodal flotante (`w`) | Botón visible `[ + Nuevo Worktree (w) ]` -> formulario en línea | `w` |
+| **Git** | Crear rama | Submodal flotante (`b`) | Botón visible `[ + Nueva Rama (b) ]` -> formulario en línea | `b` |
+| **Git** | Publicar rama | Submodal confirmación (`p`) | Botón `[ Publicar (p) ]` -> franja de confirmación en línea | `p` |
+| **Eventos** | Pausar/reanudar | Tecla `Space` | Botón visible `[ Pausar Flujo (Space) ]` / `[ Reanudar ]` | `Space` |
+| **Eventos** | Replay histórico | Tecla `R` | Botón visible `[ Replay desde seq 0 (R) ]` | `R` |
+
+---
+
+### 7. Tabla «Desviaciones de UI respecto a Herdr»
+
+| Comportamiento Cambiado | Por Qué es Necesario | Alternativa Descartada | Coste de Fusión |
+|---|---|---|---|
+| **Formularios y confirmaciones en línea en vez de popups flotantes** | Cumplir estrictamente el requisito del dueño: *"todas las opciones como pestañas o paneles sin ventanas emergentes"*. En Herdr los diálogos son popups flotantes (`popup(buffer.area, w, h)`). | Seguir el patrón de popups de Herdr (descartada por infringir la regla de "sin pop-ups"). | **0 líneas en Herdr**: El código de renderizado de los componentes vive 100% aislado dentro de `src/shepherd/ui/`. No altera los popups existentes de Herdr (Worktree, Settings, etc.). |
+| **Sustitución in-place de `pane_surface` (si se adopta la Opción D)** | Permitir que la sección Shepherd se visualice dentro de la ventana junto a la sidebar sin superponer un modal emergente y sin crear pestañas no-PTY en el servidor. | Crear pestañas no-PTY en el servidor de Herdr (Opción A, descartada por alto riesgo y >350 líneas de deuda en el core). | **~40 líneas** repartidas en `composition.rs`, `state.rs`, `input.rs` y `mouse.rs`. Mínimo y puramente aditivo. |
+
+*(Si el dueño elige la Opción C —overlay a pantalla completa sin cuadro modal flotante—, la segunda fila no aplica y la tabla contiene únicamente la primera fila con 0 líneas en Herdr).*
+
+---
+
+### 8. Plan ajustado de F10b–F10d y F8c/F8d
+
+#### Componentes Reutilizables a Crear (`src/shepherd/ui/components/`)
+1. `ListView`: Lista seleccionable con scroll métrico, badges de estado y atajos visibles.
+2. `DetailView`: Panel contenedor con encabezado, metadatos y área de contenido/previsualización Markdown.
+3. `InlineForm`: Contenedor de campos de texto (`TextEditorState`), etiquetas, mensajes de validación en vivo y botones `[ Guardar ]` / `[ Cancelar ]`.
+4. `ConfirmStripe`: Franja horizontal embebible al pie del panel para acciones destructivas (`[ Confirmar ]` / `[ Cancelar ]`), garantizando que ninguna operación sensible se ejecute sin confirmación.
+5. `EmptyState`: Widget informativo para colecciones vacías con explicación y botón de llamada a la acción primario.
+6. `StatusBar`: Barra inferior con resumen de estado, avisos ("NEEDS YOU") y ayuda contextual con atajos secundarios.
+
+#### Secuencia de Fases Actualizada
+1. **F10a (Completada)**: Investigación, contrato de UI de Herdr, mapa de pantallas, inventario de acciones y diseño arquitectónico.
+2. **F10b — Armazón y migración de Tareas y Runs**:
+   - Construcción de los componentes reutilizables en `src/shepherd/ui/`.
+   - Implementación del nuevo armazón de pestañas con ratón y teclado.
+   - Migración de Tareas (formulario de creación en línea, importación GH y confirmación de archivado en franja).
+   - Migración de Runs (opciones de lanzamiento en línea y franja de aprobación de gates Push/PR).
+   - Eliminación del modal flotante anterior de Tareas y Runs.
+3. **F10c — Migración de Skills, Git y Agentes**:
+   - Migración de Skills (modo catálogo/agente con botones visibles, confirmación de borrado/restauración en franja).
+   - Migración de Git (creación de worktrees y ramas en línea).
+   - Integración de Agentes con formulario de lanzamiento en línea y franjas para matar/limpiar.
+   - Actualización de entradas en el menú global.
+4. **F8c — Pestaña Patrones**:
+   - Se construye directamente sobre los componentes del armazón de F10 (sin ningún modal emergente).
+5. **F8d — Pestaña Eventos**:
+   - Se integra sobre el armazón de F10 (visualizador en tiempo real del bus JSONL con controles clicables de pausa y replay).
+6. **F10d — Pulido de Usabilidad y Verificación Completa**:
+   - Verificación en terminales pequeños (80x24 y responsive).
+   - Validación integral con `./scripts/shepherd-iso.sh` y capturas con tmux (`tmux capture-pane`).
+   - Prueba con agentes reales en entorno aislado.
+
+#### Metodología de Pruebas de UI al Estilo de Herdr
+- **Tests unitarios de render puro**: Funciones que reciben `Buffer` vacío, inyectan el estado puro y verifican mediante aserciones de celdas que el texto, botones, franjas y bordes se dibujan en las coordenadas exactas.
+- **Tests de hit-testing y ratón**: Simulación de coordenadas de clic sobre el `Buffer` verificando que `ShellHitMap` resuelve el botón o fila correspondiente.
+- **Tests de máquinas de estado**: Verificación de transiciones de foco, tabulación entre campos y escape sin efectos secundarios.
+- **Verificación en servidor aislado (`./scripts/shepherd-iso.sh`)**:
+  - `shepherd-iso.sh start` -> arranca la sesión aislada en tmux.
+  - `shepherd-iso.sh keys "C-b" "a"` -> abre la vista de Shepherd.
+  - `shepherd-iso.sh screen` -> captura la pantalla real con `tmux capture-pane -p -t t` para comprobar la ausencia de popups flotantes y la fidelidad del layout.
+  - `shepherd-iso.sh stop && shepherd-iso.sh reset` -> parada y limpieza estricta.
+
+---
+
+## Estado F10a (2026-11-05)
+
+### Qué se investigó
+1. **Mecanismos de Herdr para alojar contenido propio**: Se comprobó exhaustivamente en el código fuente que Herdr no tiene pestañas ni paneles que no sean terminales PTY. Todos los paneles propios (Ajustes, Navegador, Ayuda, Worktrees) son overlays flotantes. Los plugins abren PTYs externos.
+2. **Catálogo de componentes y comportamientos de Herdr**: Se documentó la tabla normativa con referencias exactas a archivos y líneas (`src/client/shell/*` y `src/ui/*`) que rige como contrato de interfaz para F10b–F10d.
+3. **Superficie actual de Shepherd**: Se revisaron `overlay.rs`, `panel.rs`, `tasks.rs`, `runs.rs`, `skills.rs`, `git.rs` y `shepherd.rs`, catalogando qué modelos y validaciones se conservan íntegros y qué modales se eliminan.
+4. **Opciones de integración y evaluación de impacto**: Se evaluaron las cuatro opciones (a, b, c, d) cuantificando el coste de fusión, riesgo de regresión y esfuerzo.
+5. **Maquetas ASCII completas**: Se diseñaron las 7 pantallas (Agentes, Tareas, Runs, Patrones, Skills, Git, Eventos) con listas a la izquierda, detalles/formularios en línea a la derecha, franjas de confirmación destructiva y adaptación para 80x24.
+6. **Inventario de acciones**: Tabla bidireccional asignando a cada acción un botón/control visual clicable con el atajo como elemento secundario.
+7. **Metodología de pruebas y verificación**: Se definió el protocolo de pruebas de UI pura y validación aislada con `shepherd-iso.sh` y `tmux capture-pane`.
+
+### Qué queda abierto
+- Selección definitiva por parte del dueño entre la **Opción D** (takeover de `pane_surface` manteniendo la sidebar visible) y la **Opción C** (overlay a pantalla completa con pestañas y sin diálogos flotantes).
+- Implementación del armazón base y migración de las primeras pantallas en **F10b**.
+
+### Decisiones que necesita el dueño
+
+1. **Elección de la arquitectura de alojamiento de la UI**:
+   - **Opción D (Recomendada)**: *Sustitución in-place de `pane_surface`*. La barra lateral de Herdr permanece visible; el área central sustituye la cuadrícula de terminales por la sección Shepherd con navegación superior por pestañas. Coste de fusión mínimo (~40 líneas en el cliente de Herdr).
+   - **Opción C**: *Overlay a pantalla completa tipo pestaña (`ClientShellOverlay::Shepherd`)*. Cubre toda la ventana sin recuadros flotantes ni oscurecimiento exterior; cero líneas nuevas en Herdr (aislamiento 100%).
+   - **Opción A**: *Pestaña no-PTY en la barra de pestañas de Herdr*. Rechazada técnicamente por requerir >350 líneas en el núcleo del servidor de Herdr y romper invariantes de terminales.
+   *(Recomendación: **Opción D** si se desea que la sidebar de Herdr siga visible mientras se usa Shepherd; u **Opción C** si se prioriza el aislamiento absoluto con 0 líneas en Herdr).*
+
+2. **Aprobación del Plan de Trabajo Ajustado**:
+   - Confirmar el orden de ejecución: **F10b** (Armazón + Tareas + Runs) → **F10c** (Skills + Git + Agentes) → **F8c** (Patrones sobre el nuevo armazón) → **F8d** (Eventos sobre el nuevo armazón) → **F10d** (Pulido y accesibilidad con agentes reales).
