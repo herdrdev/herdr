@@ -4429,6 +4429,172 @@
           },
           "type": "object"
         },
+        "ShepherdSnapshotCaptureParams": {
+          "properties": {
+            "agent": {
+              "type": "string"
+            },
+            "reason": {
+              "default": "manual",
+              "type": "string"
+            },
+            "root": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "agent"
+          ],
+          "type": "object"
+        },
+        "ShepherdSnapshotDeleteParams": {
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "root": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "type": "object"
+        },
+        "ShepherdSnapshotDiffParams": {
+          "properties": {
+            "from": {
+              "type": "string"
+            },
+            "full": {
+              "default": false,
+              "type": "boolean"
+            },
+            "root": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "to": {
+              "description": "Second snapshot; omitted = compare with the current worktree.",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "from"
+          ],
+          "type": "object"
+        },
+        "ShepherdSnapshotListParams": {
+          "properties": {
+            "agent": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "all": {
+              "default": false,
+              "type": "boolean"
+            },
+            "root": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "type": "object"
+        },
+        "ShepherdSnapshotPruneParams": {
+          "properties": {
+            "agent": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "keep": {
+              "format": "uint",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "root": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "type": "object"
+        },
+        "ShepherdSnapshotRestoreParams": {
+          "properties": {
+            "confirm": {
+              "default": false,
+              "type": "boolean"
+            },
+            "delete_extra": {
+              "default": false,
+              "description": "Full restore only: also delete files that are not in the snapshot.",
+              "type": "boolean"
+            },
+            "id": {
+              "type": "string"
+            },
+            "paths": {
+              "description": "Files or directories to restore; empty = the whole worktree (needs `confirm`).",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "root": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "type": "object"
+        },
+        "ShepherdSnapshotShowParams": {
+          "properties": {
+            "full": {
+              "default": false,
+              "type": "boolean"
+            },
+            "id": {
+              "type": "string"
+            },
+            "root": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "type": "object"
+        },
         "ShepherdTaskArchiveParams": {
           "properties": {
             "id": {
@@ -7597,6 +7763,118 @@
         {
           "properties": {
             "method": {
+              "const": "shepherd.snapshot.capture",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/ShepherdSnapshotCaptureParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "shepherd.snapshot.list",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/ShepherdSnapshotListParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "shepherd.snapshot.show",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/ShepherdSnapshotShowParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "shepherd.snapshot.diff",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/ShepherdSnapshotDiffParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "shepherd.snapshot.restore",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/ShepherdSnapshotRestoreParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "shepherd.snapshot.delete",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/ShepherdSnapshotDeleteParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "shepherd.snapshot.prune",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/ShepherdSnapshotPruneParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
               "const": "shepherd.call",
               "type": "string"
             },
@@ -8218,6 +8496,29 @@
           ],
           "type": "string"
         },
+        "CaptureResult": {
+          "description": "Result of a capture. `created == false` means the state was identical to the agent's\nlatest snapshot, which is returned instead.",
+          "properties": {
+            "created": {
+              "type": "boolean"
+            },
+            "pruned": {
+              "description": "Snapshots removed by the per-agent limit.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "snapshot": {
+              "$ref": "#/schemas/success_response/$defs/SnapshotInfo"
+            }
+          },
+          "required": [
+            "created",
+            "snapshot"
+          ],
+          "type": "object"
+        },
         "ClientWindowTitleReason": {
           "enum": [
             "set",
@@ -8298,6 +8599,92 @@
           "required": [
             "status",
             "directory"
+          ],
+          "type": "object"
+        },
+        "DeleteResult": {
+          "properties": {
+            "deleted": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "deleted"
+          ],
+          "type": "object"
+        },
+        "DiffFile": {
+          "properties": {
+            "added": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "binary": {
+              "type": "boolean"
+            },
+            "path": {
+              "type": "string"
+            },
+            "removed": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "status": {
+              "description": "`added`, `modified`, `deleted` or `type-changed`.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "path",
+            "status",
+            "added",
+            "removed",
+            "binary"
+          ],
+          "type": "object"
+        },
+        "DiffResult": {
+          "properties": {
+            "added": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "files": {
+              "items": {
+                "$ref": "#/schemas/success_response/$defs/DiffFile"
+              },
+              "type": "array"
+            },
+            "from": {
+              "description": "Snapshot id, or `-` for \"nothing\" (the empty tree).",
+              "type": "string"
+            },
+            "patch": {
+              "description": "Full unified diff; only when requested.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "removed": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "to": {
+              "description": "Snapshot id, or `current` for the live worktree.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "from",
+            "to",
+            "files",
+            "added",
+            "removed"
           ],
           "type": "object"
         },
@@ -9493,6 +9880,28 @@
             "busy"
           ],
           "type": "string"
+        },
+        "OmittedFile": {
+          "description": "A file left out of a capture.",
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            },
+            "size": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "path",
+            "reason",
+            "size"
+          ],
+          "type": "object"
         },
         "PaneDirection": {
           "enum": [
@@ -11232,6 +11641,26 @@
           ],
           "type": "object"
         },
+        "PruneResult": {
+          "properties": {
+            "kept": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "pruned": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "pruned",
+            "kept"
+          ],
+          "type": "object"
+        },
         "ReadFormat": {
           "enum": [
             "text",
@@ -12814,6 +13243,121 @@
             },
             {
               "properties": {
+                "result": {
+                  "$ref": "#/schemas/success_response/$defs/CaptureResult"
+                },
+                "type": {
+                  "const": "shepherd_snapshot_captured",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "result"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "snapshots": {
+                  "items": {
+                    "$ref": "#/schemas/success_response/$defs/SnapshotInfo"
+                  },
+                  "type": "array"
+                },
+                "type": {
+                  "const": "shepherd_snapshot_list",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "snapshots"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "result": {
+                  "$ref": "#/schemas/success_response/$defs/ShowResult"
+                },
+                "type": {
+                  "const": "shepherd_snapshot_shown",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "result"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "diff": {
+                  "$ref": "#/schemas/success_response/$defs/DiffResult"
+                },
+                "type": {
+                  "const": "shepherd_snapshot_diffed",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "diff"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "result": {
+                  "$ref": "#/schemas/success_response/$defs/RestoreResult"
+                },
+                "type": {
+                  "const": "shepherd_snapshot_restored",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "result"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "result": {
+                  "$ref": "#/schemas/success_response/$defs/DeleteResult"
+                },
+                "type": {
+                  "const": "shepherd_snapshot_deleted",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "result"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "result": {
+                  "$ref": "#/schemas/success_response/$defs/PruneResult"
+                },
+                "type": {
+                  "const": "shepherd_snapshot_pruned",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "result"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
                 "patterns": {
                   "items": {
                     "$ref": "#/schemas/success_response/$defs/PatternSummary"
@@ -13130,6 +13674,50 @@
             }
           ]
         },
+        "RestoreResult": {
+          "properties": {
+            "deleted_files": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "extra_files": {
+              "description": "Files present now but absent from the snapshot (full restore only). Kept unless\n`delete_extra` was set, in which case they are in `deleted_files`.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "pre_restore": {
+              "$ref": "#/schemas/success_response/$defs/SnapshotInfo",
+              "description": "The `pre-restore` snapshot of the state before restoring."
+            },
+            "pre_restore_created": {
+              "description": "False when the previous state was already identical to the agent's latest snapshot.",
+              "type": "boolean"
+            },
+            "restored": {
+              "$ref": "#/schemas/success_response/$defs/SnapshotInfo",
+              "description": "The snapshot that was restored."
+            },
+            "restored_files": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "restored",
+            "pre_restore",
+            "pre_restore_created",
+            "restored_files",
+            "extra_files",
+            "deleted_files"
+          ],
+          "type": "object"
+        },
         "RunSubtaskSummary": {
           "properties": {
             "branch": {
@@ -13353,6 +13941,22 @@
           ],
           "type": "string"
         },
+        "ShowResult": {
+          "properties": {
+            "diff": {
+              "$ref": "#/schemas/success_response/$defs/DiffResult",
+              "description": "Changes the snapshot introduced over the agent's previous one."
+            },
+            "snapshot": {
+              "$ref": "#/schemas/success_response/$defs/SnapshotInfo"
+            }
+          },
+          "required": [
+            "snapshot",
+            "diff"
+          ],
+          "type": "object"
+        },
         "Skill": {
           "description": "A discovered skill in the catalog (`Repo > User > Default`).",
           "properties": {
@@ -13403,6 +14007,94 @@
             }
           },
           "type": "object"
+        },
+        "SnapshotInfo": {
+          "description": "One snapshot (metadata is stored in the commit message).",
+          "properties": {
+            "added": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "agent": {
+              "type": "string"
+            },
+            "commit": {
+              "type": "string"
+            },
+            "created": {
+              "description": "Unix seconds.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "files": {
+              "description": "Files changed, and lines added/removed, relative to `prev` (automatic, local summary).",
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "id": {
+              "description": "`<agent>/<n>`.",
+              "type": "string"
+            },
+            "n": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "omitted": {
+              "description": "Files left out (too large). Capped at 100 entries.",
+              "items": {
+                "$ref": "#/schemas/success_response/$defs/OmittedFile"
+              },
+              "type": "array"
+            },
+            "prev": {
+              "description": "Id of the previous snapshot of the same agent, if any.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "reason": {
+              "$ref": "#/schemas/success_response/$defs/SnapshotReason"
+            },
+            "removed": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "worktree": {
+              "description": "Worktree the snapshot was taken in.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "agent",
+            "n",
+            "commit",
+            "reason",
+            "created",
+            "worktree",
+            "files",
+            "added",
+            "removed"
+          ],
+          "type": "object"
+        },
+        "SnapshotReason": {
+          "description": "Why a snapshot was taken.",
+          "enum": [
+            "manual",
+            "idle",
+            "done",
+            "pre-restore",
+            "pre-clean",
+            "pre-kill"
+          ],
+          "type": "string"
         },
         "SplitDirection": {
           "enum": [

@@ -1574,6 +1574,24 @@
           "type": "integer",
           "default": "30",
           "description": "Seconds a pattern run must stay quiescent (all agents idle or done, nothing published on the run topics) before it becomes done. 0 disables."
+        },
+        {
+          "key": "shepherd.snapshots.max_per_agent",
+          "type": "integer",
+          "default": "50",
+          "description": "Snapshots kept per agent; the oldest are pruned after each capture."
+        },
+        {
+          "key": "shepherd.snapshots.max_file_bytes",
+          "type": "integer",
+          "default": "2097152",
+          "description": "Files larger than this many bytes are left out of a snapshot and listed as omitted."
+        },
+        {
+          "key": "shepherd.snapshots.max_capture_bytes",
+          "type": "integer",
+          "default": "67108864",
+          "description": "A snapshot whose included files add up to more than this many bytes fails instead of being stored."
         }
       ]
     }

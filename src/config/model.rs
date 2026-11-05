@@ -332,12 +332,34 @@ impl Default for ShepherdLimitsConfig {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(default)]
+pub struct ShepherdSnapshotsConfig {
+    /// Snapshots kept per agent; the oldest are pruned. Default: 50.
+    pub max_per_agent: usize,
+    /// Files larger than this many bytes are left out of a snapshot. Default: 2097152.
+    pub max_file_bytes: u64,
+    /// A snapshot whose included files exceed this many bytes fails. Default: 67108864.
+    pub max_capture_bytes: u64,
+}
+
+impl Default for ShepherdSnapshotsConfig {
+    fn default() -> Self {
+        Self {
+            max_per_agent: 50,
+            max_file_bytes: 2 * 1024 * 1024,
+            max_capture_bytes: 64 * 1024 * 1024,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(default)]
 pub struct ShepherdConfig {
     /// Start the in-process Shepherd orchestration service on server startup. Default: false.
     pub enabled: bool,
     pub limits: ShepherdLimitsConfig,
+    pub snapshots: ShepherdSnapshotsConfig,
 }
 
 #[derive(Debug, Default, Deserialize)]

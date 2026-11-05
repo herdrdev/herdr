@@ -1,0 +1,1 @@
+restoring the whole worktree overwrites local changes; pass --confirm (the current state is saved first as a pre-restore snapshot)

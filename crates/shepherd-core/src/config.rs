@@ -22,6 +22,8 @@ pub struct Config {
     pub limits: Limits,
     #[serde(default = "General::default")]
     pub general: General,
+    #[serde(default)]
+    pub snapshots: SnapshotsConfig,
 }
 
 fn empty_vendors() -> HashMap<String, Vendor> {
@@ -125,6 +127,25 @@ impl Default for Limits {
             non_mcp_done_quiet_secs: 60,
             notice_after_secs: 3,
             run_quiescence_secs: 30,
+        }
+    }
+}
+
+/// `[shepherd.snapshots]`: limits for local per-agent snapshots (F11a).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SnapshotsConfig {
+    pub max_per_agent: usize,
+    pub max_file_bytes: u64,
+    pub max_capture_bytes: u64,
+}
+
+impl Default for SnapshotsConfig {
+    fn default() -> Self {
+        Self {
+            max_per_agent: 50,
+            max_file_bytes: 2 * 1024 * 1024,
+            max_capture_bytes: 64 * 1024 * 1024,
         }
     }
 }
@@ -284,6 +305,7 @@ impl Default for Config {
             workflow: WorkflowConfig::default(),
             limits: Limits::default(),
             general: General::default(),
+            snapshots: SnapshotsConfig::default(),
         }
     }
 }
@@ -302,6 +324,15 @@ struct TomlFileConfig {
 struct TomlShepherdSection {
     #[serde(default)]
     limits: Option<TomlLimitsSection>,
+    #[serde(default)]
+    snapshots: Option<TomlSnapshotsSection>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct TomlSnapshotsSection {
+    max_per_agent: Option<usize>,
+    max_file_bytes: Option<u64>,
+    max_capture_bytes: Option<u64>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -416,6 +447,17 @@ pub fn load_config_with_diagnostics(
                 }
                 if let Some(quiet) = lim.run_quiescence_secs {
                     config.limits.run_quiescence_secs = quiet;
+                }
+            }
+            if let Some(snap) = shep.snapshots {
+                if let Some(v) = snap.max_per_agent {
+                    config.snapshots.max_per_agent = v;
+                }
+                if let Some(v) = snap.max_file_bytes {
+                    config.snapshots.max_file_bytes = v;
+                }
+                if let Some(v) = snap.max_capture_bytes {
+                    config.snapshots.max_capture_bytes = v;
                 }
             }
         }
@@ -685,6 +727,7 @@ pub fn validate(config: &Config) -> Vec<String> {
     if config.limits.max_concurrent_agents == 0 {
         issues.push("limits.max_concurrent_agents must be at least 1".into());
     }
+    issues.extend(crate::snapshot::limits::validate(&config.snapshots));
     for (name, role) in &config.roles {
         if !config.vendors.contains_key(&role.vendor) {
             issues.push(format!(
@@ -836,6 +879,55 @@ mod tests {
         assert_eq!(config.limits.max_spawn_depth, 5);
         assert_eq!(config.limits.max_concurrent_agents, 10);
         assert_eq!(config.limits.notice_after_secs, 15);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_snapshots_defaults_toml_and_invalid_values() {
+        let d = SnapshotsConfig::default();
+        assert_eq!(
+            (d.max_per_agent, d.max_file_bytes, d.max_capture_bytes),
+            (50, 2 * 1024 * 1024, 64 * 1024 * 1024)
+        );
+        assert!(validate(&Config::default()).is_empty());
+
+        let root = std::env::temp_dir().join(format!("shep-test-snapcfg-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let toml_file = root.join("config.toml");
+        std::fs::write(
+            &toml_file,
+            "[shepherd.snapshots]\nmax_per_agent = 7\nmax_file_bytes = 1000\nmax_capture_bytes = 5000\n",
+        )
+        .unwrap();
+        let guard = EnvGuard::set("SHEPHERD_CONFIG_PATH", &toml_file);
+        let config = load_config(&root).unwrap();
+        assert_eq!(config.snapshots.max_per_agent, 7);
+        assert_eq!(config.snapshots.max_file_bytes, 1000);
+        assert_eq!(config.snapshots.max_capture_bytes, 5000);
+        assert!(validate(&config).is_empty());
+
+        // Semantically invalid values are reported by `validate`.
+        std::fs::write(
+            &toml_file,
+            "[shepherd.snapshots]\nmax_per_agent = 0\nmax_file_bytes = 100\nmax_capture_bytes = 10\n",
+        )
+        .unwrap();
+        let issues = validate(&load_config(&root).unwrap());
+        assert!(
+            issues.iter().any(|i| i.contains("max_per_agent")),
+            "{issues:?}"
+        );
+        assert!(
+            issues.iter().any(|i| i.contains("max_capture_bytes")),
+            "{issues:?}"
+        );
+
+        // Wrongly typed values are a load error that names the file.
+        std::fs::write(&toml_file, "[shepherd.snapshots]\nmax_per_agent = -3\n").unwrap();
+        let err = load_config(&root).unwrap_err().to_string();
+        assert!(err.contains("config.toml"), "{err}");
+        drop(guard);
         let _ = std::fs::remove_dir_all(&root);
     }
 

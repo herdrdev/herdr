@@ -1,0 +1,15 @@
+{
+  "created": 0,
+  "snapshot": {
+    "added": 2,
+    "agent": "coder-1",
+    "commit": "<COMMIT>",
+    "created": 0,
+    "files": 1,
+    "id": "coder-1/1",
+    "n": 1,
+    "reason": "manual",
+    "removed": 0,
+    "worktree": "<ROOT>"
+  }
+}

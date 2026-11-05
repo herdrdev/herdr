@@ -337,6 +337,27 @@ pub enum ResponseResult {
     ShepherdGitStatus {
         status: shepherd_core::git::GitRepoStatus,
     },
+    ShepherdSnapshotCaptured {
+        result: shepherd_core::snapshot::CaptureResult,
+    },
+    ShepherdSnapshotList {
+        snapshots: Vec<shepherd_core::snapshot::SnapshotInfo>,
+    },
+    ShepherdSnapshotShown {
+        result: shepherd_core::snapshot::ShowResult,
+    },
+    ShepherdSnapshotDiffed {
+        diff: shepherd_core::snapshot::DiffResult,
+    },
+    ShepherdSnapshotRestored {
+        result: shepherd_core::snapshot::RestoreResult,
+    },
+    ShepherdSnapshotDeleted {
+        result: shepherd_core::snapshot::DeleteResult,
+    },
+    ShepherdSnapshotPruned {
+        result: shepherd_core::snapshot::PruneResult,
+    },
     ShepherdPatternList {
         patterns: Vec<shepherd_core::patterns::PatternSummary>,
     },

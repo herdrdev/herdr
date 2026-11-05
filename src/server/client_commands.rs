@@ -392,6 +392,35 @@ mod tests {
         );
 
         assert_eq!(
+            actual.remove("shepherd.snapshot.capture").as_deref(),
+            Some("1f40a4f62fc4a37841ba83b13983b4d23c85753b6d1a07177a9585242064cdf3")
+        );
+        assert_eq!(
+            actual.remove("shepherd.snapshot.delete").as_deref(),
+            Some("0414bff22fbdad3aac550eaa8cec517af98a21690fe048d291f8d68e411c0148")
+        );
+        assert_eq!(
+            actual.remove("shepherd.snapshot.diff").as_deref(),
+            Some("776574e4224af601d41a489d99740ecb660efae3b8556ddcfd6cfb7928d88677")
+        );
+        assert_eq!(
+            actual.remove("shepherd.snapshot.list").as_deref(),
+            Some("e1c3cec4ddf9f9f2ac2e0f0e95b29123b9f1c15e6a0074eda0295cd9432e2a24")
+        );
+        assert_eq!(
+            actual.remove("shepherd.snapshot.prune").as_deref(),
+            Some("f37cda40687336219ec236625ba5e03e27621620aa3b15cfebd5d3e2a3c7b7b1")
+        );
+        assert_eq!(
+            actual.remove("shepherd.snapshot.restore").as_deref(),
+            Some("21076d9d1e6c6463f6bf21cc03e1fe03b2052de4ea12d9450257dfd5c399c34a")
+        );
+        assert_eq!(
+            actual.remove("shepherd.snapshot.show").as_deref(),
+            Some("e6a8e63113aa5db03dcd40acb557f4f05e3c9f77f8f172d716c4d11003b18de9")
+        );
+
+        assert_eq!(
             actual, expected,
             "an existing endpoint method changed shape; add load-bearing behavior as a new advertised method or explicitly gate new fields"
         );

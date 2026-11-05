@@ -180,6 +180,13 @@ operations::define_operations! {
     ShepherdTopicTail(ShepherdTopicTailParams) => "shepherd.topic.tail", false, true;
     ShepherdTopicReplay(ShepherdTopicReplayParams) => "shepherd.topic.replay", false, true;
     ShepherdTopicGroups(ShepherdTopicGroupsParams) => "shepherd.topic.groups", false, true;
+    ShepherdSnapshotCapture(ShepherdSnapshotCaptureParams) => "shepherd.snapshot.capture", false, true;
+    ShepherdSnapshotList(ShepherdSnapshotListParams) => "shepherd.snapshot.list", false, true;
+    ShepherdSnapshotShow(ShepherdSnapshotShowParams) => "shepherd.snapshot.show", false, true;
+    ShepherdSnapshotDiff(ShepherdSnapshotDiffParams) => "shepherd.snapshot.diff", false, true;
+    ShepherdSnapshotRestore(ShepherdSnapshotRestoreParams) => "shepherd.snapshot.restore", false, true;
+    ShepherdSnapshotDelete(ShepherdSnapshotDeleteParams) => "shepherd.snapshot.delete", false, true;
+    ShepherdSnapshotPrune(ShepherdSnapshotPruneParams) => "shepherd.snapshot.prune", false, true;
     ShepherdCall(ShepherdCallParams) => "shepherd.call", false, true;
 }
 

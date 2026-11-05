@@ -13,6 +13,7 @@ pub mod plan;
 pub mod service;
 pub mod shepherd;
 pub mod skills;
+pub mod snapshot;
 pub mod spawn;
 pub mod tasks;
 pub mod terminals;

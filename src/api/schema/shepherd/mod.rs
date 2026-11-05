@@ -5,6 +5,7 @@ pub mod git;
 pub mod patterns;
 pub mod runs;
 pub mod skills;
+pub mod snapshots;
 pub mod tasks;
 pub mod topics;
 
@@ -13,6 +14,7 @@ pub use git::*;
 pub use patterns::*;
 pub use runs::*;
 pub use skills::*;
+pub use snapshots::*;
 pub use tasks::*;
 pub use topics::*;
 

@@ -67,6 +67,17 @@ fn spawn_params_to_request(
     }
 }
 
+/// Worktree root and effective `[shepherd.snapshots]` limits for a snapshot request.
+fn snapshot_context(root: Option<String>) -> (PathBuf, shepherd_core::snapshot::SnapshotLimits) {
+    let root = root
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."));
+    let limits = shep_config::load_config(&root)
+        .map(|c| c.snapshots.into())
+        .unwrap_or_default();
+    (root, limits)
+}
+
 pub fn execute_shepherd_method(
     core: &OrchestrationService,
     request_id: &str,
@@ -348,6 +359,56 @@ pub fn execute_shepherd_method(
         Method::ShepherdTopicGroups(params) => core
             .consumer_groups(params.topic.as_deref())
             .map(|groups| ResponseResult::ShepherdConsumerGroups { groups }),
+        Method::ShepherdSnapshotCapture(params) => {
+            let (root, limits) = snapshot_context(params.root);
+            shepherd_core::snapshot::SnapshotReason::parse(&params.reason).and_then(|reason| {
+                shepherd_core::snapshot::capture(&root, &params.agent, reason, &limits)
+                    .map(|result| ResponseResult::ShepherdSnapshotCaptured { result })
+            })
+        }
+        Method::ShepherdSnapshotList(params) => {
+            let (root, _) = snapshot_context(params.root);
+            shepherd_core::snapshot::list(&root, params.agent.as_deref(), params.all)
+                .map(|snapshots| ResponseResult::ShepherdSnapshotList { snapshots })
+        }
+        Method::ShepherdSnapshotShow(params) => {
+            let (root, _) = snapshot_context(params.root);
+            shepherd_core::snapshot::show(&root, &params.id, params.full)
+                .map(|result| ResponseResult::ShepherdSnapshotShown { result })
+        }
+        Method::ShepherdSnapshotDiff(params) => {
+            let (root, limits) = snapshot_context(params.root);
+            shepherd_core::snapshot::diff(
+                &root,
+                &params.from,
+                params.to.as_deref(),
+                params.full,
+                &limits,
+            )
+            .map(|diff| ResponseResult::ShepherdSnapshotDiffed { diff })
+        }
+        Method::ShepherdSnapshotRestore(params) => {
+            let (root, limits) = snapshot_context(params.root);
+            shepherd_core::snapshot::restore(
+                &root,
+                &params.id,
+                &params.paths,
+                params.confirm,
+                params.delete_extra,
+                &limits,
+            )
+            .map(|result| ResponseResult::ShepherdSnapshotRestored { result })
+        }
+        Method::ShepherdSnapshotDelete(params) => {
+            let (root, _) = snapshot_context(params.root);
+            shepherd_core::snapshot::delete(&root, &params.id)
+                .map(|result| ResponseResult::ShepherdSnapshotDeleted { result })
+        }
+        Method::ShepherdSnapshotPrune(params) => {
+            let (root, limits) = snapshot_context(params.root);
+            shepherd_core::snapshot::prune(&root, params.agent.as_deref(), params.keep, &limits)
+                .map(|result| ResponseResult::ShepherdSnapshotPruned { result })
+        }
         _ => Err(format!("unsupported shepherd method: {:?}", method)),
     };
 
@@ -652,6 +713,137 @@ impl Drop for ShepherdRuntimeService {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Snapshot methods end to end through the typed dispatcher, on a temp repo.
+    #[test]
+    fn snapshot_methods_round_trip_through_execute_shepherd_method() {
+        use crate::api::schema::{
+            Method, ShepherdSnapshotCaptureParams, ShepherdSnapshotDeleteParams,
+            ShepherdSnapshotDiffParams, ShepherdSnapshotListParams, ShepherdSnapshotPruneParams,
+            ShepherdSnapshotRestoreParams, ShepherdSnapshotShowParams,
+        };
+        let dir = std::env::temp_dir().join(format!("shep-svc-snap-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let git = |args: &[&str]| {
+            let ok = std::process::Command::new("git")
+                .current_dir(&dir)
+                .args(["-c", "user.name=t", "-c", "user.email=t@example.invalid"])
+                .args(args)
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .status()
+                .unwrap()
+                .success();
+            assert!(ok, "git {args:?}");
+        };
+        git(&["init", "-q", "-b", "main"]);
+        std::fs::write(dir.join("f.txt"), "v1\n").unwrap();
+        git(&["add", "f.txt"]);
+        git(&["commit", "-q", "-m", "init"]);
+
+        let core = OrchestrationService::new(
+            ServiceConfig::for_state_dir(dir.join("state")),
+            shepherd_core::config::Config::default(),
+            Arc::new(shepherd_core::terminals::InMemoryTerminals::new()),
+            Arc::new(SystemClock::new()),
+        );
+        let root = Some(dir.display().to_string());
+        let call = |m: Method| -> Value {
+            serde_json::from_str(&execute_shepherd_method(&core, "t", m)).unwrap()
+        };
+
+        let r = call(Method::ShepherdSnapshotCapture(
+            ShepherdSnapshotCaptureParams {
+                root: root.clone(),
+                agent: "coder-1".into(),
+                reason: "manual".into(),
+            },
+        ));
+        assert_eq!(r["result"]["type"], "shepherd_snapshot_captured", "{r}");
+        assert_eq!(r["result"]["result"]["snapshot"]["id"], "coder-1/1");
+
+        let r = call(Method::ShepherdSnapshotCapture(
+            ShepherdSnapshotCaptureParams {
+                root: root.clone(),
+                agent: "coder-1".into(),
+                reason: "bogus".into(),
+            },
+        ));
+        assert_eq!(r["error"]["code"], "shepherd_error");
+        assert!(r["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("unknown snapshot reason"));
+
+        std::fs::write(dir.join("f.txt"), "v2\n").unwrap();
+        let r = call(Method::ShepherdSnapshotDiff(ShepherdSnapshotDiffParams {
+            root: root.clone(),
+            from: "coder-1/1".into(),
+            to: None,
+            full: false,
+        }));
+        assert_eq!(r["result"]["diff"]["to"], "current");
+        assert_eq!(r["result"]["diff"]["files"][0]["path"], "f.txt");
+
+        let r = call(Method::ShepherdSnapshotRestore(
+            ShepherdSnapshotRestoreParams {
+                root: root.clone(),
+                id: "coder-1/1".into(),
+                ..Default::default()
+            },
+        ));
+        assert!(
+            r["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("--confirm"),
+            "{r}"
+        );
+        let r = call(Method::ShepherdSnapshotRestore(
+            ShepherdSnapshotRestoreParams {
+                root: root.clone(),
+                id: "coder-1/1".into(),
+                paths: vec!["f.txt".into()],
+                ..Default::default()
+            },
+        ));
+        assert_eq!(
+            r["result"]["result"]["pre_restore"]["reason"],
+            "pre-restore"
+        );
+        assert_eq!(std::fs::read_to_string(dir.join("f.txt")).unwrap(), "v1\n");
+
+        let r = call(Method::ShepherdSnapshotList(ShepherdSnapshotListParams {
+            root: root.clone(),
+            agent: Some("coder-1".into()),
+            all: false,
+        }));
+        assert_eq!(r["result"]["snapshots"].as_array().unwrap().len(), 2);
+        let r = call(Method::ShepherdSnapshotShow(ShepherdSnapshotShowParams {
+            root: root.clone(),
+            id: "coder-1/2".into(),
+            full: true,
+        }));
+        assert!(r["result"]["result"]["diff"]["patch"]
+            .as_str()
+            .unwrap()
+            .contains("+v2"));
+        let r = call(Method::ShepherdSnapshotPrune(ShepherdSnapshotPruneParams {
+            root: root.clone(),
+            agent: None,
+            keep: Some(1),
+        }));
+        assert_eq!(r["result"]["result"]["pruned"][0], "coder-1/1");
+        let r = call(Method::ShepherdSnapshotDelete(
+            ShepherdSnapshotDeleteParams {
+                root,
+                id: "coder-1/2".into(),
+            },
+        ));
+        assert_eq!(r["result"]["result"]["deleted"], "coder-1/2");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     use serde_json::json;
     use shepherd_core::{
         service::ManualClock,

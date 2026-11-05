@@ -400,6 +400,50 @@ pub(crate) fn reject_command() -> Command {
         .args(ShepherdGateRejectProjection::arguments())
 }
 
+pub(crate) const SNAPSHOT_USAGE: &str =
+    "usage: shepherd snapshot capture <agent> [--reason manual|idle|done|pre-restore|pre-clean|pre-kill] [--json] | snapshot list [--agent <agent>] [--all] [--json] | snapshot show <id> [--full] [--json] | snapshot diff <id> [<id>] [--full] [--json] | snapshot restore <id> [--path <file>]... [--confirm] [--delete-extra] [--json] | snapshot delete <id> [--json] | snapshot prune [--agent <agent>] [--keep <n>] [--json]  (ids look like <agent>/<n>; add --no-server to run without a server)";
+
+pub(crate) fn snapshot_command() -> Command {
+    Command::new("snapshot")
+        .about("Local per-agent snapshots of a worktree")
+        .subcommand_required(true)
+        .subcommand(
+            Command::new("capture")
+                .about("Capture the current worktree state")
+                .args(ShepherdSnapshotCaptureProjection::arguments()),
+        )
+        .subcommand(
+            Command::new("list")
+                .about("List snapshots")
+                .args(ShepherdSnapshotListProjection::arguments()),
+        )
+        .subcommand(
+            Command::new("show")
+                .about("Show a snapshot and what it changed")
+                .args(ShepherdSnapshotShowProjection::arguments()),
+        )
+        .subcommand(
+            Command::new("diff")
+                .about("Diff two snapshots, or a snapshot and the current worktree")
+                .args(ShepherdSnapshotDiffProjection::arguments()),
+        )
+        .subcommand(
+            Command::new("restore")
+                .about("Restore files or the whole worktree from a snapshot")
+                .args(ShepherdSnapshotRestoreProjection::arguments()),
+        )
+        .subcommand(
+            Command::new("delete")
+                .about("Delete a snapshot")
+                .args(ShepherdSnapshotDeleteProjection::arguments()),
+        )
+        .subcommand(
+            Command::new("prune")
+                .about("Delete the oldest snapshots")
+                .args(ShepherdSnapshotPruneProjection::arguments()),
+        )
+}
+
 pub(crate) fn git_command() -> Command {
     Command::new("git")
         .about("Git repository and worktree status")
@@ -607,6 +651,7 @@ pub(crate) fn command() -> Command {
         .subcommand(reject_command())
         .subcommand(skills_command())
         .subcommand(git_command())
+        .subcommand(snapshot_command())
         .subcommand(pattern_command())
         .subcommand(patterns_command())
         .subcommand(topic_command())
@@ -624,7 +669,12 @@ pub(crate) fn command() -> Command {
 
 pub(crate) fn parse_operation(args: &[String]) -> Result<ShepherdOperation, ParseError> {
     if args.is_empty() || args.iter().any(|a| a == "--help" || a == "-h") {
-        return Err(ParseError::Usage(USAGE_STRING.to_string()));
+        let usage = if args.first().map(String::as_str) == Some("snapshot") {
+            SNAPSHOT_USAGE
+        } else {
+            USAGE_STRING
+        };
+        return Err(ParseError::Usage(usage.to_string()));
     }
 
     let cmd_name = args[0].as_str();
@@ -865,6 +915,7 @@ pub(crate) fn parse_operation(args: &[String]) -> Result<ShepherdOperation, Pars
                 method: Method::ShepherdGitStatus(params),
             }))
         }
+        "snapshot" => parse_snapshot(rest),
         "patterns" => {
             let matches = parse_matches(patterns_command(), rest)?;
             let params = ShepherdPatternListProjection::from_matches(&matches)?;
@@ -1214,6 +1265,76 @@ pub(crate) fn parse_operation(args: &[String]) -> Result<ShepherdOperation, Pars
     }
 }
 
+fn parse_snapshot(rest: &[String]) -> Result<ShepherdOperation, ParseError> {
+    let usage = || ParseError::Usage(SNAPSHOT_USAGE.to_string());
+    let Some(sub) = rest.first().map(String::as_str) else {
+        return Err(usage());
+    };
+    let args = &rest[1..];
+    // Report snapshot-specific usage instead of the global usage line.
+    let matches = parse_matches(
+        snapshot_command()
+            .find_subcommand(sub)
+            .cloned()
+            .ok_or_else(usage)?,
+        args,
+    )
+    .map_err(|e| match e {
+        ParseError::Usage(m) if m == USAGE_STRING => usage(),
+        other => other,
+    })?;
+    let (id, method) = match sub {
+        "capture" => {
+            let p = ShepherdSnapshotCaptureProjection::from_matches(&matches)?;
+            if p.agent.is_empty() {
+                return Err(usage());
+            }
+            ("capture", Method::ShepherdSnapshotCapture(p))
+        }
+        "list" => (
+            "list",
+            Method::ShepherdSnapshotList(ShepherdSnapshotListProjection::from_matches(&matches)?),
+        ),
+        "show" => {
+            let p = ShepherdSnapshotShowProjection::from_matches(&matches)?;
+            if p.id.is_empty() {
+                return Err(usage());
+            }
+            ("show", Method::ShepherdSnapshotShow(p))
+        }
+        "diff" => {
+            let p = ShepherdSnapshotDiffProjection::from_matches(&matches)?;
+            if p.from.is_empty() {
+                return Err(usage());
+            }
+            ("diff", Method::ShepherdSnapshotDiff(p))
+        }
+        "restore" => {
+            let p = ShepherdSnapshotRestoreProjection::from_matches(&matches)?;
+            if p.id.is_empty() {
+                return Err(usage());
+            }
+            ("restore", Method::ShepherdSnapshotRestore(p))
+        }
+        "delete" => {
+            let p = ShepherdSnapshotDeleteProjection::from_matches(&matches)?;
+            if p.id.is_empty() {
+                return Err(usage());
+            }
+            ("delete", Method::ShepherdSnapshotDelete(p))
+        }
+        "prune" => (
+            "prune",
+            Method::ShepherdSnapshotPrune(ShepherdSnapshotPruneProjection::from_matches(&matches)?),
+        ),
+        _ => return Err(usage()),
+    };
+    Ok(ShepherdOperation::Api(Request {
+        id: format!("cli:shepherd:snapshot:{id}"),
+        method,
+    }))
+}
+
 fn parse_matches(command: Command, args: &[String]) -> Result<ArgMatches, ParseError> {
     let clean_args: Vec<String> = args
         .iter()
@@ -1406,6 +1527,104 @@ mod tests {
         } else {
             panic!("expected pattern run stop");
         }
+    }
+
+    #[test]
+    fn parses_snapshot_commands() {
+        let api = |a: &[&str]| match parse_operation(&args(a)).unwrap() {
+            ShepherdOperation::Api(r) => r,
+            _ => panic!("expected api operation"),
+        };
+        let Method::ShepherdSnapshotCapture(p) =
+            api(&["snapshot", "capture", "coder-1", "--reason", "idle"]).method
+        else {
+            panic!("capture")
+        };
+        assert_eq!((p.agent.as_str(), p.reason.as_str()), ("coder-1", "idle"));
+        let Method::ShepherdSnapshotCapture(p) = api(&["snapshot", "capture", "coder-1"]).method
+        else {
+            panic!("capture")
+        };
+        assert_eq!(p.reason, "manual");
+
+        let Method::ShepherdSnapshotList(p) =
+            api(&["snapshot", "list", "--agent", "a", "--all", "--json"]).method
+        else {
+            panic!("list")
+        };
+        assert_eq!((p.agent.as_deref(), p.all), (Some("a"), true));
+
+        let Method::ShepherdSnapshotDiff(p) =
+            api(&["snapshot", "diff", "a/1", "a/2", "--full"]).method
+        else {
+            panic!("diff")
+        };
+        assert_eq!(
+            (p.from.as_str(), p.to.as_deref(), p.full),
+            ("a/1", Some("a/2"), true)
+        );
+        let Method::ShepherdSnapshotDiff(p) = api(&["snapshot", "diff", "a/1"]).method else {
+            panic!("diff")
+        };
+        assert_eq!(p.to, None);
+
+        let Method::ShepherdSnapshotRestore(p) = api(&[
+            "snapshot",
+            "restore",
+            "a/1",
+            "--path",
+            "x y.txt",
+            "--path",
+            "d/z",
+            "--confirm",
+            "--delete-extra",
+        ])
+        .method
+        else {
+            panic!("restore")
+        };
+        assert_eq!(p.paths, ["x y.txt", "d/z"]);
+        assert!(p.confirm && p.delete_extra);
+
+        let Method::ShepherdSnapshotPrune(p) =
+            api(&["snapshot", "prune", "--agent", "a", "--keep", "3"]).method
+        else {
+            panic!("prune")
+        };
+        assert_eq!((p.agent.as_deref(), p.keep), (Some("a"), Some(3)));
+        assert!(matches!(
+            api(&["snapshot", "show", "a/1", "--full"]).method,
+            Method::ShepherdSnapshotShow(p) if p.full && p.id == "a/1"
+        ));
+        assert!(matches!(
+            api(&["snapshot", "delete", "a/1"]).method,
+            Method::ShepherdSnapshotDelete(_)
+        ));
+    }
+
+    #[test]
+    fn snapshot_usage_errors_use_the_snapshot_usage() {
+        for a in [
+            &["snapshot"][..],
+            &["snapshot", "capture"],
+            &["snapshot", "show"],
+            &["snapshot", "restore"],
+            &["snapshot", "nope"],
+            &["snapshot", "--help"],
+        ] {
+            match parse_operation(&args(a)) {
+                Err(ParseError::Usage(msg)) => assert!(
+                    msg.starts_with("usage: shepherd snapshot capture"),
+                    "{a:?}: {msg}"
+                ),
+                Err(ParseError::Clap(_)) => {}
+                other => panic!("{a:?}: {:?}", other.map(|_| ())),
+            }
+        }
+        assert!(matches!(
+            parse_operation(&args(&["snapshot", "capture", "a", "--bogus"])),
+            Err(ParseError::Usage(_) | ParseError::Clap(_))
+        ));
     }
 
     #[test]

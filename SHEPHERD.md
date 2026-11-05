@@ -5322,3 +5322,81 @@ Goldens existentes intactos (`tests/fixtures` sin cambios). `grep testRepo/araqu
 - Eventos sigue sondeando 50 mensajes (`tail`, no streaming push); el render del flujo de 500 mensajes de 300 caracteres a 200x50 es O(filas visibles) más un filtrado O(n) por fotograma (test acotado a <250 ms/fotograma, muy por encima de lo medido).
 - Comprobación visual final con los 4 tamaños hecha solo en las pestañas vacías/seed de la sesión aislada; los datos extremos (150 elementos, CJK, multilínea) se cubren con tests de render, no con agentes reales.
 - Los ganchos `shepherd_agents_panel` de `AppState` (`app/{mod,state,actions,agents}.rs`, `server/headless.rs`) siguen en uso para el aviso «needs you»; no se tocan por ser archivos de herdr.
+
+## Estado F11a — núcleo de snapshots locales por agente (2026-11-05)
+
+Fase F11a completada según `SHEPHERD-F11A-BRIEF.md`: captura, refs ocultas, límites, restauración segura, API tipada `shepherd.snapshot.*` y CLI `shepherd snapshot …`. Todo local sobre la CLI de git, sin dependencias nuevas, sin red. Sin commits (según el encargo); sin agentes reales.
+
+### 1. Diseño final
+
+- **Módulo** `crates/shepherd-core/src/snapshot/` (`mod`, `capture`, `diff`, `restore`, `limits`, `render`, `tests`; todos <500 líneas).
+- **Captura**: copia el índice real a un índice temporal dentro del git dir (`shepherd-snapshot-<pid>-<n>.index`, se borra al terminar), `git add -A` sobre él, `write-tree` y `commit-tree` (autor fijo `shepherd <shepherd@localhost>`, sin firmas ni hooks). No se toca el índice, la rama, el stash ni el reflog del usuario. Partir de una copia del índice (y no de uno vacío) conserva los archivos versionados que `.gitignore` también cubre; `.gitignore`, `info/exclude` y ficheros globales se respetan.
+- **Ref** `refs/shepherd/snapshots/<agente>/<n>`, `n` incremental por agente, creada con `update-ref` «solo si no existe» (reintenta si dos capturas compiten). Agente: `[A-Za-z0-9._-]`, sin `..`, sin empezar por `.`/`-`, sin `.lock`.
+- **Desviación del encargo (con evidencia)**: el commit **no** tiene como padre git al snapshot anterior; el anterior va como `prev: <agente>/<n>` en el mensaje. Con cadena de padres, podar/borrar un snapshot no libera nada (el más nuevo sigue alcanzando a todos sus ancestros). Test `pruned_snapshots_release_their_objects`: tras `delete` + `gc --prune=now` el commit viejo deja de existir y los demás siguen intactos.
+- **Metadatos** en el mensaje del commit (`agent`, `n`, `reason`, `created`, `worktree` (JSON), `prev`, `files`, `added`, `removed`, `omitted` (JSON, máx. 100)). Resumen automático = nº de archivos y líneas +/- frente al snapshot anterior (`git diff --numstat`); sin IA ni red. Motivos: `manual|idle|done|pre-restore|pre-clean|pre-kill`.
+- **Idempotencia**: si el árbol coincide con el del último snapshot del agente no se crea nada (`created:false` y devuelve el último). También vale para `pre-restore`.
+- **Tamaño**: archivos > `max_file_bytes` se excluyen *antes* de hashearlos (pathspec `:(exclude,literal)`) y se anotan en `omitted`; el diff contra el estado actual usa la misma exclusión, así que no los marca como cambiados. Binarios: **incluidos** (hasta el umbral); no hay filtro aparte porque un binario pequeño suele ser parte del trabajo. Si la suma incluida supera `max_capture_bytes` la captura falla con un error que nombra la clave.
+- **Restauración** (`restore <id> [--path <f>]… [--confirm] [--delete-extra]`): comprueba todo antes de escribir (id, rutas relativas sin `..`, ruta presente en el snapshot, `--confirm` si es el worktree entero), **siempre** guarda antes el estado actual como `pre-restore` y escribe los archivos con un índice temporal + `checkout-index -f` (el índice del usuario no se toca). Rutas con `GIT_LITERAL_PATHSPECS=1` (`:colon.txt`, `[glob]*.txt` son nombres, no patrones). Los archivos que existen ahora y no están en el snapshot **se conservan** y se listan (`extra_files`); `--delete-extra` los borra (y los directorios que queden vacíos) y se listan en `deleted_files`, recuperables desde el `pre-restore`. Archivos ignorados nunca se borran.
+- **Seguridad**: error claro si no es un worktree git, si hay merge/rebase/cherry-pick/revert en curso (captura, restore y diff contra el estado actual; `list/show/delete/prune` siguen funcionando), o ante nombres inválidos. Se limpian `GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE/…` heredados del entorno.
+- **Refs y `git push`**: viven en el `refs/` compartido (los worktrees enlazados las ven), `git gc` no las recoge (están referenciadas) y un `git push` normal **no** las publica; solo irían con `git push origin 'refs/shepherd/*'` o `--mirror`. Los clones tampoco las traen por defecto.
+- **API tipada** (7 métodos, `src/api/schema/shepherd/snapshots.rs`): `shepherd.snapshot.capture|list|show|diff|restore|delete|prune`, registrados en `Method`, en `ResponseResult` (`shepherd_snapshot_captured|list|shown|diffed|restored|deleted|pruned`), enrutados en `headless.rs`/`app/api.rs` y ejecutados en `src/shepherd/service.rs`. Digests congelados en `client_commands.rs` (el fixture v1 no se toca); esquema regenerado.
+- **CLI** `shepherd snapshot capture <agente> [--reason R] | list [--agent A] [--all] | show <id> [--full] | diff <id> [<id>] [--full] | restore <id> [--path F]… [--confirm] [--delete-extra] | delete <id> | prune [--agent A] [--keep N]`, todo con `--json` (errores `{"error":…}`) y `--no-server`. La CLI rellena `root` con el cwd (si no, el servidor usaría el suyo). `USAGE_STRING` global **sin cambios** (su golden sigue intacto); los errores de `snapshot` usan `SNAPSHOT_USAGE`. `list` sin `--agent` muestra los de este worktree (`--all`: todo el repo). `show` = metadatos + cambios sobre el snapshot anterior; `diff <a>` sin `<b>` compara contra el estado actual.
+
+### 2. Límites (`[shepherd.snapshots]` en el `config.toml` de herdr)
+
+| Clave | Default | Efecto |
+|---|---|---|
+| `max_per_agent` | 50 | poda los más viejos tras cada captura; `prune --keep` lo sobrescribe |
+| `max_file_bytes` | 2097152 | archivos mayores se omiten y se anotan |
+| `max_capture_bytes` | 67108864 | captura que lo supera falla |
+
+Declaradas en `src/config/model.rs` (`ShepherdSnapshotsConfig`, para que `config check` no avise de «unknown keys») y en `config-reference.json`; el núcleo las lee en `config.rs` (`SnapshotsConfig`, TOML prevalece sobre YAML). `validate` rechaza `0` y `max_capture_bytes < max_file_bytes`; un tipo erróneo (`-3`) es error de carga que nombra el archivo.
+
+### 3. Archivos de herdr tocados (líneas añadidas / eliminadas)
+
+| Archivo | + | − | Motivo |
+|---|---|---|---|
+| `src/config/model.rs` | 22 | 0 | `ShepherdSnapshotsConfig` + campo `snapshots` |
+| `docs/next/website/src/data/config-reference.json` | 18 | 0 | 3 claves nuevas |
+| `src/api/schema.rs` | 7 | 0 | 7 variantes de `Method` |
+| `src/api/schema/response.rs` | 21 | 0 | 7 variantes de `ResponseResult` |
+| `src/api/schema/shepherd/mod.rs` | 2 | 0 | módulo `snapshots` |
+| `src/app/api.rs` | 7 | 0 | enrutado de los métodos |
+| `src/server/headless.rs` | 7 | 0 | enrutado de los métodos |
+| `src/server/client_commands.rs` | 29 | 0 | digests congelados |
+| `src/cli.rs` | 1 | 1 | `"snapshot"` en comandos directos |
+| `docs/next/api/shepherd-api.schema.json` | 705 | 13 | artefacto generado (las 13 líneas son reordenaciones de `$defs`) |
+
+Archivos propios de Shepherd tocados: `crates/shepherd-core/src/{config,lib}.rs`, `src/shepherd/service.rs`, `src/cli/shepherd.rs`, `src/cli/shepherd_bindings.rs`. Nuevos: `crates/shepherd-core/src/snapshot/*`, `crates/shepherd-core/tests/snapshot_golden.rs`, `src/api/schema/shepherd/snapshots.rs`, 20 golden nuevos (`snapshot_*.json`, `cli_human_snapshot_*.txt`, `snapshot_error_restore_needs_confirm.txt`). Golden existentes: 0 modificados. Formato: `rustfmt --edition 2021` solo sobre archivos propios; nunca `cargo fmt --all`; `git status` no muestra archivos de herdr modificados salvo los de la tabla.
+
+### 4. Resultados reales de la batería de tests
+
+| Área | Comando | Pasados | Fallados | Ignorados |
+|---|---|---|---|---|
+| `shepherd-core` | `./cargo-fork.sh test -p shepherd-core` | **321** = 165 unit (+20: 19 `snapshot::tests` y 1 de config) + 155 caracterización (intactos) + 1 `snapshot_golden` | 0 | 0 |
+| `shepherd::` | `./cargo-fork.sh test shepherd::` | **94** (bin; +1 `snapshot_methods_round_trip_through_execute_shepherd_method`) | 0 | 0 |
+| `client::shell` | `./cargo-fork.sh test client::shell` | **403** | 0 | 2 |
+| `protocol::` | `./cargo-fork.sh test protocol::` | **159** = 156 unit + 3 `tests/cli.rs` | 0 | 0 |
+| `api::` | `./cargo-fork.sh test api:: -- --test-threads=1` | **319** | 0 | 1 |
+| `server::` | `./cargo-fork.sh test server::` | **318** | 0 | 5 |
+| contratos v1 | `… --bin shepherd client_commands` | **5** (+7 digests nuevos congelados) | 0 | 0 |
+| bindings CLI | `… --bin shepherd shepherd_bindings` | **9** (+2 `snapshot`) | 0 | 0 |
+| config-reference | `python3 -m unittest scripts.test_config_reference_check` | **14** | 0 | 0 |
+| renombre | `./scripts/rename-from-herdr.sh --check` | `[OK] No unexcluded occurrences` | – | – |
+
+`grep -c testRepo|araquesebastian` en lo nuevo = 0. Los tests usan tempdirs propios y `GIT_CONFIG_GLOBAL=/dev/null`. Cobertura de los tests del núcleo: captura sin tocar índice/rama/status/stash; idempotencia; resumen +/-; `.gitignore` y umbral; total excedido; límite por agente y `prune`; liberación de objetos con `gc`; diff entre snapshots / contra el actual / `--full`; restore de un archivo, de directorio y completo (`--confirm`, extras conservados o borrados, `pre-restore`); rutas inválidas; repo sin commits; worktree vacío; no-repo, merge/rebase en curso; espacios, Unicode, `-`, `:`, `[glob]*`; worktrees enlazados; borrado; formato UTC.
+
+### 5. Prueba aislada (`./scripts/shepherd-iso.sh`, sin agentes reales)
+
+Servidor `iso` arrancado en `/tmp/shfiso` (repo temporal `/tmp/shfiso/repo`), CLI con `HOME/XDG_*` aislados:
+- **Con servidor**: `capture coder-1` → `coder-1/1 (manual, 2 file(s), +3 -0)`; repetir → `no changes since coder-1/1; nothing captured`; tras editar `capture --reason done` → `coder-1/2 … +3 -1`; `list`, `list --json`, `diff 1 2`, `diff 2` (= `no differences`), `show 2`; `restore coder-1/1` sin `--confirm` → error (exit 1, también en `--json`: `{"error":{"code":"shepherd_error",…}}`); `restore --path a.txt` restaura solo ese archivo («previous state was already saved as coder-1/2»); `restore --confirm --delete-extra` guardó `coder-1/3 (pre-restore)` y borró `new.txt` listándolo.
+- **Sin servidor (`--no-server`)**: `capture coder-2`, `list --all`, `diff --full`, `restore --path`, `prune --keep 1` (`pruned 2 snapshot(s): coder-1/1, coder-1/2`), `delete --json`.
+- **Errores**: agente `bad/name`, id `nope`, fuera de un repo (`not a git worktree: /tmp`), `snapshot` sin subcomando (usa `SNAPSHOT_USAGE`).
+- `git status`, `git branch`, `git stash list` y `HEAD` del repo del usuario idénticos antes y después; `git for-each-ref refs/shepherd` solo muestra los refs esperados. Servidor detenido con `shepherd-iso.sh stop`.
+
+### 6. Qué NO queda (F11b / F11c)
+
+- **F11b**: disparo automático (eventos `idle`/`done`, pausa de actividad configurable, `pre-kill`/`pre-clean` desde `kill`/`clean`), recuperación tras reinicio y limpieza programada. Los motivos `idle|done|pre-clean|pre-kill` existen y son válidos, pero nadie los emite aún; `max_per_agent` solo se aplica al capturar.
+- **F11c**: panel de línea de tiempo en la UI y verificación con agentes reales.
+- Sin límite de disco global (solo por agente y por captura), sin timeouts en las llamadas a git, y `shepherd-core snapshot …` (la CLI antigua de la crate) no lo expone: solo `shepherd snapshot …`. Los datos de `show --full`/`diff --full` no tienen tope de tamaño.
+- Los helpers legados `shepherd.call` no mapean operaciones `snapshot_*` (los métodos nuevos solo existen tipados).

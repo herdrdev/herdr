@@ -109,7 +109,7 @@ pub fn maybe_run(args: &[String]) -> std::io::Result<CommandOutcome> {
     const SHEPHERD_DIRECT_COMMANDS: &[&str] = &[
         "agents", "spawn", "kill", "clean", "focus", "task", "tasks", "skills", "runs", "roles",
         "vendors", "run", "approve", "git", "mcp", "msg", "messages", "attach", "pattern",
-        "patterns", "topic", "topics",
+        "patterns", "topic", "topics", "snapshot",
     ];
     if SHEPHERD_DIRECT_COMMANDS.contains(&command) {
         return shepherd::run_shepherd_command(&args[1..]).map(CommandOutcome::Handled);

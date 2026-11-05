@@ -1,0 +1,27 @@
+[
+  {
+    "added": 2,
+    "agent": "coder-1",
+    "commit": "<COMMIT>",
+    "created": 0,
+    "files": 1,
+    "id": "coder-1/1",
+    "n": 1,
+    "reason": "manual",
+    "removed": 0,
+    "worktree": "<ROOT>"
+  },
+  {
+    "added": 3,
+    "agent": "coder-1",
+    "commit": "<COMMIT>",
+    "created": 0,
+    "files": 2,
+    "id": "coder-1/2",
+    "n": 2,
+    "prev": "coder-1/1",
+    "reason": "done",
+    "removed": 1,
+    "worktree": "<ROOT>"
+  }
+]

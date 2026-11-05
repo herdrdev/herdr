@@ -1,0 +1,11 @@
+coder-1/2 -> current
+D new.txt +0 -1
+1 file(s), +0 -1
+
+diff --git a/new.txt b/new.txt
+deleted file mode 100644
+index 3e75765..0000000
+--- a/new.txt
++++ /dev/null
+@@ -1 +0,0 @@
+-new

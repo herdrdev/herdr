@@ -42,6 +42,13 @@ pub(crate) fn run_shepherd_command(args: &[String]) -> std::io::Result<i32> {
     };
 
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let operation = match operation {
+        ShepherdOperation::Api(mut request) => {
+            fill_snapshot_root(&mut request.method, &cwd);
+            ShepherdOperation::Api(request)
+        }
+        local => local,
+    };
     let root = shepherd_core::cli::project_root(cwd);
     let config = shepherd_core::config::load_config(&root).unwrap_or_default();
 
@@ -133,11 +140,57 @@ pub(crate) fn run_shepherd_command(args: &[String]) -> std::io::Result<i32> {
     }
 }
 
+/// Snapshot methods act on the worktree the CLI runs in, not on the server's cwd.
+fn fill_snapshot_root(method: &mut Method, cwd: &std::path::Path) {
+    let root = match method {
+        Method::ShepherdSnapshotCapture(p) => &mut p.root,
+        Method::ShepherdSnapshotList(p) => &mut p.root,
+        Method::ShepherdSnapshotShow(p) => &mut p.root,
+        Method::ShepherdSnapshotDiff(p) => &mut p.root,
+        Method::ShepherdSnapshotRestore(p) => &mut p.root,
+        Method::ShepherdSnapshotDelete(p) => &mut p.root,
+        Method::ShepherdSnapshotPrune(p) => &mut p.root,
+        _ => return,
+    };
+    if root.is_none() {
+        *root = Some(cwd.display().to_string());
+    }
+}
+
+fn print_snapshot_response(
+    writer: &mut dyn std::io::Write,
+    method: &Method,
+    result: &Value,
+) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
+    use shepherd_core::snapshot::render;
+    fn field<T: serde::de::DeserializeOwned>(
+        result: &Value,
+        name: &str,
+    ) -> Result<T, Box<dyn std::error::Error + Send + Sync>> {
+        Ok(serde_json::from_value(result[name].clone())?)
+    }
+    let text = match method {
+        Method::ShepherdSnapshotCapture(_) => render::capture(&field(result, "result")?),
+        Method::ShepherdSnapshotList(_) => render::list(&field::<Vec<_>>(result, "snapshots")?),
+        Method::ShepherdSnapshotShow(_) => render::show(&field(result, "result")?),
+        Method::ShepherdSnapshotDiff(_) => render::diff(&field(result, "diff")?),
+        Method::ShepherdSnapshotRestore(_) => render::restore(&field(result, "result")?),
+        Method::ShepherdSnapshotDelete(_) => render::delete(&field(result, "result")?),
+        Method::ShepherdSnapshotPrune(_) => render::prune(&field(result, "result")?),
+        _ => return Ok(false),
+    };
+    write!(writer, "{text}")?;
+    Ok(true)
+}
+
 fn print_human_api_response(
     writer: &mut dyn std::io::Write,
     method: &Method,
     result: &Value,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    if print_snapshot_response(writer, method, result)? {
+        return Ok(());
+    }
     match method {
         Method::ShepherdAgentList(_) => {
             let agents = result.get("agents").and_then(Value::as_array);
