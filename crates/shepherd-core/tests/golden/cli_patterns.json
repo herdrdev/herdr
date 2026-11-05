@@ -1,0 +1,38 @@
+[
+  {
+    "agents_count": 3,
+    "description": "Shared knowledge base where specialist agents read hypotheses and post discoveries.",
+    "kind": "blackboard",
+    "name": "blackboard",
+    "shadowed": false,
+    "source": "builtin",
+    "topics_count": 1
+  },
+  {
+    "agents_count": 7,
+    "description": "Multi-tier command hierarchy where managers supervise specialized worker teams.",
+    "kind": "hierarchical",
+    "name": "hierarchical",
+    "shadowed": false,
+    "source": "builtin",
+    "topics_count": 4
+  },
+  {
+    "agents_count": 6,
+    "description": "Competitive market where solvers bid on asks coordinated by a market-maker.",
+    "kind": "market",
+    "name": "market",
+    "shadowed": false,
+    "source": "builtin",
+    "topics_count": 3
+  },
+  {
+    "agents_count": 4,
+    "description": "Central orchestrator dispatches partitioned tasks to a worker pool and aggregates results.",
+    "kind": "orchestrator-worker",
+    "name": "orchestrator-worker",
+    "shadowed": false,
+    "source": "builtin",
+    "topics_count": 2
+  }
+]

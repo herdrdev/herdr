@@ -2378,3 +2378,583 @@ Diseño inicial (a refinar en F11a):
 | F11c | Panel de línea de tiempo en la UI (sobre el armazón de F10) y verificación con agentes reales |
 
 Orden de trabajo actualizado: F9a–F9e → F10a–F10c → F8c → F8d → F10d → **F11a → F11b → F11c**.
+
+
+## Inventario F9a — Superficie de Shepherd (2026-11-05)
+
+Inventario exhaustivo de la superficie actual de Shepherd en `crates/shepherd-core` y sus puntos de contacto con Herdr para fundamentar la alineación arquitectónica de F9b–F9e.
+
+### 1.1 Operaciones de `handle_call` (`crates/shepherd-core/src/service.rs`)
+
+`handle_call(&self, op: &str, args: Value) -> Result<Value, String>` es el despachador monolítico de `shepherd.call`. Implementa 26 operaciones (incluyendo 4 alias):
+
+| Op | Parámetros (`args`) | Forma del resultado (`Value`) | Quién la llama |
+|---|---|---|---|
+| `agents` | `{}` | `Vec<AgentPublic>` (id, rol, vendor, modelo, state, pane, notice, etc.) | CLI (`shepherd agents`), TUI (`ShepherdAgentsPanel`), Tests |
+| `spawn` | `ServiceSpawnRequest`: `{ root, role, task, task_id?, vendor?, model?, mcp_url? }` | `AgentPublic` del nuevo agente | CLI (`shepherd spawn`), TUI (`SpawnForm`), Tests |
+| `kill` | `{ "id": string }` | `AgentPublic` en estado `killed` | CLI (`shepherd kill`), TUI (`ConfirmKill`), Tests |
+| `clean` | `{ "ids"?: string[], "workspace"?: string }` | `{ "cleaned": string[] }` | CLI (`shepherd clean`), TUI (`ConfirmClean`), Tests |
+| `focus` | `{ "id": string }` | `AgentPublic` enfocado | CLI (`shepherd focus`), TUI (`focus_shepherd_agent_pane`), Tests |
+| `run` | `{ "root"?: string, "task": string, "mcp_url"?: string, "auto_push"?: bool }` | `{ "accepted": true, "job": "run-<task>", "task": string }` | CLI (`shepherd run`), TUI (`ShepherdRunsPanel`), Tests |
+| `approve` | `{ "root"?: string, "task": string, "target": string }` | `{ "ok": true, "task": string, "approved": string }` | CLI (`shepherd approve`), TUI (`ConfirmApprove`), Tests |
+| `reject` / `reject_gate` | `{ "root"?: string, "task": string, "target": string, "reason"?: string }` | `{ "ok": true, "task": string, "rejected": string }` | CLI (`shepherd reject`), TUI (`ConfirmReject`), Tests |
+| `reconcile` | `{}` | `Vec<AgentPublic>` con estados sincronizados | Worker de reconciliación en segundo plano, Tests |
+| `resume` | `{}` | `Vec<AgentPublic>` tras reconciliar al arrancar | Ciclo de vida de inicio (`start_for_app`), Tests |
+| `tasks` | `{ "root"?: string, "archived"?: bool }` | `Vec<CreatedTask>` (id, title, slug, directory, status, spec, acceptance) | CLI (`shepherd task list`, `tasks`), TUI (`ShepherdTasksPanel`), Tests |
+| `task_create` / `create_task` | `{ "root"?: string, "title": string, "description"?: string, "criteria"?: string[], "attachments"?: string[] }` | `CreatedTask` creado en `.shepherd/tasks/` | CLI (`shepherd task new`), TUI (`CreateTaskForm`), Tests |
+| `task_archive` / `archive_task` | `{ "root"?: string, "id": string \| u64 }` | `{ "archived": true, "path": string }` | CLI (`shepherd task archive`), TUI (`ConfirmArchiveTask`), Tests |
+| `skills` | `{ "root"?: string }` | `Vec<CatalogSkillItem>` (nombre, descripción, nivel, scope, shadowed) | CLI (`shepherd skills list`), TUI (`ShepherdSkillsPanel`), Tests |
+| `patterns` | `{ "root"?: string }` | `Vec<PatternSummary>` (nombre, kind, description, source, agents_count, topics_count) | CLI (`shepherd pattern list`, `patterns`), TUI (F8c), Tests |
+| `pattern_get` | `{ "name": string, "root"?: string }` | `PatternDetail`: `{ pattern, source, path, problems }` | CLI (`shepherd pattern show`), TUI (F8c), Tests |
+| `pattern_save` | `{ "pattern": Pattern, "global"?: bool, "root"?: string }` | `{ "ok": true, "name": string, "path": string, "source": string, "problems": [] }` | CLI (`shepherd pattern new`), TUI (F8c), Tests |
+| `pattern_delete` | `{ "name": string, "root"?: string }` | `{ "ok": true, "name": string, "deleted_source": string }` | CLI (`shepherd pattern delete`), TUI (F8c), Tests |
+| `pattern_validate` | `{ "pattern"?: Pattern, "name"?: string, "root"?: string }` | `{ "valid": bool, "problems": Problem[] }` | CLI (`shepherd pattern validate`), TUI (F8c), Tests |
+| `runs` | `{ "root"?: string }` | `Vec<RunSummary>`: `{ task_id, task_title, status, subtasks_progress: [done, total], subtasks: [...] }` | CLI (`shepherd runs list`), TUI (`ShepherdRunsPanel`), Tests |
+| `git_status` | `{ "root"?: string }` | `GitRepoStatus`: `{ root, worktrees: [...], gh_available, gh_note, error }` | CLI (`shepherd git`), TUI (`ShepherdGitPanel`), Tests |
+| `topics` | `{}` | `Vec<Topic>` con nombres y particiones | CLI (`shepherd topic list`, `topics`), Tests |
+| `topic_create` | `{ "name": string, "partitions"?: u32 }` | `Topic`: `{ name, partitions }` | CLI (`shepherd topic create`), Tests |
+| `publish` | `{ "topic": string, "content": string, "key"?: string, "partition"?: u32, "from"?: string }` | `Message`: `{ id, ts, from, topic, key, partition, offset, content }` | CLI (`shepherd topic publish`), MCP (`publish`), Tests |
+| `topic_tail` / `topic_replay` | `{ "topic": string, "partition"?: u32, "from_offset"?: u64, "limit"?: usize }` | `Vec<Message>` históricos reproducidos | CLI (`shepherd topic tail/replay`), MCP (`replay`), Tests |
+| `consumer_groups` | `{ "topic"?: string }` | `HashMap<String, HashMap<String, u64>>` (offsets por grupo/partición) | CLI (`shepherd topic groups`), Tests |
+| *(error)* | cualquier otro `op` | `Err("unknown shepherd operation ...")` + registro en `service.log` | Cualquier llamada inválida |
+
+---
+
+### 1.2 Subcomandos de `cli.rs` y sus flags
+
+`crates/shepherd-core/src/cli.rs` implementa el parser de línea de comandos para invocaciones como `shepherd <subcommand>` o `shepherd shepherd <subcommand>`. Todos los comandos soportan `--json` para emisión en stdout sin formato TTY:
+
+1. `agents [--json]`: Lista los agentes públicos registrados en el runtime o archivo local.
+2. `spawn <role> <task...> [--json] [--task-id ID] [--vendor V] [--model M]`: Lanza un nuevo agente en un nuevo panel/worktree.
+3. `kill <agent_id> [--json]`: Termina un agente activo marcándolo como `killed`.
+4. `clean [agent_ids...] [--json]`: Limpia paneles residuales de agentes terminados (`exited`, `killed`, `failed`).
+5. `focus <agent_id> [--json]`: Selecciona y enfoca el pane/tab nativo de Herdr asignado al agente.
+6. `git [status] [--json]`: Muestra el estado del árbol de trabajo, commits ahead/behind, worktrees y PR de GitHub.
+7. `task new <title...> [--json] [--desc D] [--criteria C1,C2...]`: Crea una nueva tarea en `.shepherd/tasks/<n>-<slug>/`.
+8. `task list [--json] [--archived]` (alias `tasks [--json]`): Lista las tareas activas o archivadas.
+9. `task show <id> [--json]`: Muestra el detalle de una tarea (`status.json`, `issue.md`, `acceptance.md`, `spec.md`).
+10. `task plan <id> [--json]`: Parsea y valida el plan desglosado en `plan.md` y actualiza `status.json`.
+11. `task edit <id>`: Abre el directorio de la tarea o `issue.md` en `$EDITOR`.
+12. `task path <id> [--json]`: Imprime la ruta canónica en disco del directorio de la tarea.
+13. `task archive <id> [--json]`: Mueve la tarea al directorio de archivadas `.shepherd/tasks/.archive/`.
+14. `skills list [--json]`: Lista el catálogo de skills disponibles en tres niveles (default, usuario, proyecto).
+15. `runs list [--json]`: Lista los workflows de tareas y el progreso de sus subtareas y gates.
+16. `roles list [--json]`: Muestra la matriz de roles disponibles, modelos configurados y capacidades de spawn.
+17. `vendors list [--json]`: Lista los proveedores de LLM configurados y su estado de disponibilidad en el host.
+18. `run <task_id> [--json] [--auto-push]`: Inicia la ejecución automática del workflow de una tarea en segundo plano.
+19. `approve <task_id> <target> [--json]`: Aprueba un gate humano pendiente (p. ej. `plan` o `push_pr`).
+20. `reject <task_id> <target> [--reason R] [--json]`: Rechaza un gate humano pendiente solicitando revisión al agente.
+21. `mcp serve [port]`: Inicia el servidor MCP autónomo sobre loopback HTTP.
+22. `config path [--json]`: Imprime las rutas de configuración (`global`, `project`, `state`).
+23. `config validate [--json]`: Valida sintáctica y semánticamente la configuración de `.shepherd/config.yaml`.
+24. `pattern list [--json]` (alias `patterns [--json]`): Lista plantillas embebidas, patrones de proyecto y globales.
+25. `pattern show <name> [--json]`: Muestra la estructura YAML y problemas de validación de un patrón.
+26. `pattern new <name> [--template T] [--json]`: Inicializa un nuevo patrón a partir de una plantilla embebida.
+27. `pattern validate <name> [--json]`: Valida las restricciones topológicas y agentes de un patrón.
+28. `pattern delete <name> [--json]`: Borra un patrón local o global (protegiendo plantillas embebidas).
+29. `pattern edit <name>`: Abre el fichero YAML del patrón en `$EDITOR`.
+30. `topic list [--json]` (alias `topics [--json]`): Lista los tópicos del bus y sus particiones.
+31. `topic create <topic> [--partitions N] [--json]`: Crea un nuevo tópico con N particiones.
+32. `topic publish <topic> <content> [--key K] [--from S] [--partition P] [--json]`: Publica un mensaje en un tópico.
+33. `topic tail <topic> [--partition P] [--max N] [--json]`: Muestra los últimos N mensajes de un tópico.
+34. `topic replay <topic> [--partition P] [--from O] [--since T] [--json]`: Reproduce eventos históricos sin alterar offsets.
+35. `topic groups [topic] [--json]`: Muestra los grupos de consumidores, miembros activos y offsets confirmados.
+36. `attach <session> <agent>`: Conecta la sesión interactiva al pane de Herdr donde ejecuta el agente.
+
+---
+
+### 1.3 Herramientas MCP (`crates/shepherd-core/src/mcp.rs`)
+
+El servidor MCP expone 19 herramientas JSON-RPC autenticadas mediante `Authorization: Bearer <token>` vinculado al ID del agente llamante:
+
+1. `spawn_agent`: `{ role, task, vendor?, model?, task_id?, use_worktree?, add_skills?, remove_skills? }`. Lanza un agente hijo validando profundidad y concurrencia.
+2. `submit_result`: `{ summary }`. Registra el resumen final del agente, lo pasa a estado terminal `done` y notifica al padre vía bus.
+3. `get_result`: `{ agent_id }`. Consulta el estado, resultado, error y worktree de un agente hijo.
+4. `list_agents`: `{}`. Devuelve la lista pública de agentes en el runtime.
+5. `wait_for`: `{ agent_ids, timeout_seconds? }`. Espera activamente a que una lista de agentes alcance un estado terminal o tenga resultado.
+6. `read_output`: `{ agent_id, lines? }`. Lee las últimas N líneas del buffer de pantalla del terminal del agente.
+7. `ask_docs`: `{ question, timeout_seconds? }`. Realiza una consulta síncrona al agente de documentación (`role = "docs"`), lanzándolo si no existe.
+8. `get_task_context`: `{ section? }`. Lee el contexto de la tarea asignada al agente (`spec`, `acceptance`, `plan` o resumen).
+9. `read_messages`: `{}`. Lee los mensajes dirigidos no leídos en el buzón personal del agente en el bus.
+10. `send_message`: `{ to, content }`. Envía un mensaje dirigido a otro agente o al usuario (`to = "user"`).
+11. `get_diff`: `{ agent_id }`. Obtiene el git diff y ficheros no rastreados del worktree del coder contra la rama base configurada.
+12. `update_task_context`: `{ section, content, append? }`. Actualiza secciones de la tarea. **Restricción de seguridad**: solo permitida a roles `brain` y `docs`; coders y reviewers son rechazados con error.
+13. `get_workspace_instructions`: `{}`. Devuelve las instrucciones de proyecto, catálogo de skills efectivas, checks y lenguajes detectados.
+14. `publish`: `{ topic, content, key? }`. Publica un evento en un tópico del bus asignando partición por hash determinista FNV-1a.
+15. `subscribe`: `{ topic, group? }`. Suscribe al agente llamante a un tópico dentro de un grupo de consumidores.
+16. `poll`: `{ topic, max? }`. Recupera mensajes no confirmados asignados al agente dentro de su grupo con rebalanceo automático.
+17. `ack`: `{ topic, partition?, offset? }`. Confirma el procesamiento de eventos avanzando el cursor de offset del grupo.
+18. `replay`: `{ topic, from_offset?, partition?, limit? }`. Reproduce eventos históricos de un tópico sin desplazar los offsets del grupo.
+19. `list_topics`: `{}`. Lista todos los tópicos registrados, particiones y volumen de eventos.
+
+---
+
+### 1.4 Ficheros leídos y escritos por Shepherd
+
+| Fichero | Formato | Ubicación | Modo | Propósito |
+|---|---|---|---|---|
+| `agents.json` | JSON | `$XDG_STATE_HOME/shepherd/agents.json` | R/W (atómico, 0600) | Registro duradero de agentes, secuencias monótonas y tokens privados. |
+| `messages.jsonl` | JSONL | `$XDG_STATE_HOME/shepherd/` o `.shepherd/messages.jsonl` | Append / R | Registro de eventos y mensajes dirigidos del bus. |
+| `messages.jsonl.topics` | JSON | Sidecar junto a `messages.jsonl` | R/W (0600) | Metadatos de tópicos y recuento de particiones. |
+| `messages.jsonl.subscriptions` | JSON | Sidecar junto a `messages.jsonl` | R/W (0600) | Mapeo de agentes suscritos a tópicos y consumer groups. |
+| `messages.jsonl.offsets` | JSON | Sidecar junto a `messages.jsonl` | R/W (0600) | Offsets confirmados por tópico, grupo y partición. |
+| `service.log` | Texto | `$XDG_STATE_HOME/shepherd/service.log` | Append (0600) | Registro de peticiones y operaciones fallidas (Req 8). |
+| `shepherd.log` | Texto | `$XDG_STATE_HOME/shepherd/shepherd.log` | Append | Log de diagnóstico general de la sesión CLI / cliente. |
+| `config.yaml` | YAML | `.shepherd/config.yaml` (proyecto) y `~/.config/shepherd/config.yaml` (global) | Read | Configuración de workflows, roles, modelos, límites y checks. |
+| `status.json` | JSON | `.shepherd/tasks/<id>-<slug>/status.json` | R/W (atómico) | Estado persistente de la tarea, subtareas y gates (Go-compatible). |
+| `issue.md` | Markdown | `.shepherd/tasks/<id>-<slug>/issue.md` | R/W | Título y descripción original de la tarea. |
+| `spec.md` | Markdown | `.shepherd/tasks/<id>-<slug>/spec.md` | R/W | Especificación técnica redactada por el planificador. |
+| `acceptance.md` | Markdown | `.shepherd/tasks/<id>-<slug>/acceptance.md` | R/W | Criterios de aceptación verificables (`- [ ]`). |
+| `plan.md` | Markdown | `.shepherd/tasks/<id>-<slug>/plan.md` | R/W | Plan desglosado en subtareas con verificaciones y dependencias. |
+| `<name>.yaml` | YAML | `.shepherd/patterns/<name>.yaml` y `~/.config/shepherd/patterns/<name>.yaml` | R/W | Definiciones de patrones de topología multi-agente. |
+| `plugin.json` | JSON | `.claude-plugin/plugin.json` | Write | Manifiesto de integración generado dinámicamente para Claude. |
+
+---
+
+### 1.5 Tamaño y responsabilidades de los módulos grandes de Shepherd
+
+Medición actual de líneas de código:
+
+```text
+  4116 crates/shepherd-core/src/service.rs
+  2164 crates/shepherd-core/src/terminals.rs
+  1941 crates/shepherd-core/src/mcp.rs
+  3984 crates/shepherd-core/src/cli.rs
+  1361 crates/shepherd-core/src/workflow.rs
+  1896 crates/shepherd-core/src/lib.rs
+ 15462 total
+```
+
+Propuesta de partición por responsabilidad para F9d («no god objects»):
+
+1. **`service.rs` (4.116 líneas) -> submódulo `src/service/`**:
+   - `service/mod.rs` (~400 líneas): struct `OrchestrationService`, constructor, delegación de ciclo de vida.
+   - `service/registry.rs` (~600 líneas): persistencia atómica de `agents.json`, secuencias monótonas, tokens, operaciones `agents`, `kill`, `clean`.
+   - `service/spawn.rs` (~700 líneas): validación de límites, reconciliación de nombres, prompt inicial con reintentos y guardas de diálogo humano.
+   - `service/reconcile.rs` (~500 líneas): bucle reactivo por eventos, quiet screen detector para no-MCP, reanudación al arrancar (`resume_on_startup`).
+   - `service/delivery.rs` (~600 líneas): formateo de mensajes, cursor de entrega y despacho a agentes no-MCP vía `agent.prompt`.
+   - `service/gates.rs` (~400 líneas): aprobación y rechazo de gates (`plan`, `push_pr`), notificaciones nativas de intervención humana.
+   - `service/legacy.rs` (~300 líneas): despachador de compatibilidad `handle_call`.
+
+2. **`terminals.rs` (2.164 líneas) -> submódulo `src/terminals/`**:
+   - `terminals/mod.rs` (~250 líneas): definición de `trait Terminals`, tipos `OpenAgentRequest`, `WorktreeSpec`, `TerminalError`.
+   - `terminals/in_process.rs` (~600 líneas): adaptador `ShepherdInProcess` conectado a la API interna de Herdr en memoria.
+   - `terminals/socket.rs` (~400 líneas): cliente para conexión Unix socket/NDJSON contra servidor Herdr externo.
+   - `terminals/fakes.rs` (~500 líneas): `InMemoryTerminals` y helpers de prueba.
+   - `terminals/cli_hc.rs` (~400 líneas): adaptador legacy `HcCli` mediante subprocesos.
+
+3. **`mcp.rs` (1.941 líneas) -> submódulo `src/mcp/`**:
+   - `mcp/server.rs` (~500 líneas): `RunningMcpServer`, socket HTTP, handshake `initialize` y autenticación Bearer por token.
+   - `mcp/tools.rs` (~800 líneas): catálogo `tools/list` y despachador `tools/call` con verificación de roles y permisos.
+   - `mcp/events.rs` (~400 líneas): herramientas MCP vinculadas al bus (`publish`, `subscribe`, `poll`, `ack`, `replay`).
+
+4. **`cli.rs` (3.984 líneas) -> reducción drástica en F9c**:
+   - Sustituir los 36 comandos y parsers manuales por bindings declarativos con `cli_params!`/`projection` en `src/cli/shepherd_bindings.rs`.
+   - `crates/shepherd-core/src/cli.rs` se reduce a una capa fina de ~250 líneas que mapea los subcomandos directamente a los métodos tipados del runtime.
+
+5. **`workflow.rs` (1.361 líneas) -> submódulo `src/workflow/`**:
+   - `workflow/runner.rs` (~500 líneas): bucle de ejecución de tareas, asignación de coders y reviewers.
+   - `workflow/verification.rs` (~450 líneas): ejecución de checks configurados y validación de commits limpios en worktrees.
+   - `workflow/pr.rs` (~400 líneas): apertura de pull requests y guardas de aprobación humana.
+
+---
+
+### 1.6 Archivos de Herdr modificados y líneas de cada punto de enganche
+
+Lista exhaustiva de todos los archivos del árbol principal de Herdr que contienen enganches de Shepherd:
+
+| Archivo de Herdr | Línea(s) aprox. | Punto de enganche y motivo arquitectónico |
+|---|---|---|
+| `Cargo.toml` | L29 | Inclusión del crate propio `shepherd-core = { path = "crates/shepherd-core" }` en el workspace. |
+| `src/main.rs` | L55 | Declaración de `mod shepherd;` en la raíz del binario. |
+| `src/cli.rs` | L103-L115 | Delegación de `shepherd <subcommand>` y subcomandos directos (`agents`, `spawn`, `task`, `topic`, etc.) a `crate::shepherd::run_cli`. |
+| `src/config/model.rs` | L27, L333, L380 | Estructura `ShepherdConfig { pub enabled: bool }` y campo `shepherd` en `KeybindsConfig`. |
+| `src/config/io.rs` | L31, L178 | Deserialización y serialización de la sección `[shepherd]` en el `config.toml` de Herdr. |
+| `src/config.rs` | L27 | Re-exportación pública de `ShepherdConfig`. |
+| `src/config/keybinds.rs` | L48 | Mapeo por defecto de la acción `shepherd = "prefix+a"`. |
+| `src/input/keybindings.rs` | L95 | Variante `KeybindAction::Shepherd` en las acciones de teclado. |
+| `src/app/state.rs` | L809, L1053 | Inclusión de los estados puros `shepherd_agents_panel`, `shepherd_tasks_panel`, `shepherd_runs_panel`, `shepherd_skills_panel` en `AppState` y `AppState::test_new()`. |
+| `src/app/mod.rs` | L171, L521, L695, L704-L755 | Ciclo de vida del servicio: `start_shepherd_service_if_enabled`, `stop_shepherd_service`, `sync_shepherd_panels`. |
+| `src/app/actions.rs` | L256-L265 | Mutaciones de estado puro `toggle_shepherd_agents_panel` y `focus_shepherd_agent_pane`. |
+| `src/app/agents.rs` | L145-L152 | Inyección de metadatos de Shepherd (`AgentShepherdInfo`) en `App::agent_info` vía `shepherd_agent_info_for_pane`. |
+| `src/app/api.rs` | L1261-L1279 | Despacho síncrono del método de API `Method::ShepherdCall` hacia `ShepherdRuntimeService::call_sync`. |
+| `src/app/api/worktrees/deferred.rs` | L64-L70 | Endurecimiento defensivo: cuando `base` es `""` en `worktree.create`, asigna `HEAD` evitando error de referencia git vacía. |
+| `src/api/schema.rs` | L14, L29, L150 | Declaración del método `ShepherdCall(ShepherdCallParams) => "shepherd.call", false, true;` en `define_operations!`. |
+| `src/api/schema/agents.rs` | L45, L88 | Definición de `AgentShepherdInfo` y campo opcional retrocompatible `shepherd: Option<AgentShepherdInfo>` en `AgentInfo`. |
+| `src/api/schema/response.rs` | L280 | Variante de respuesta `ResponseResult::ShepherdCall { data: serde_json::Value }`. |
+| `src/server/headless.rs` | L327, L496, L2965-L2995 | Arranque del runtime en `HeadlessServer::new`, tick periódico de sincronización y enrutado a workers. |
+| `src/server/headless/lifecycle.rs` | L317, L339 | Apagado limpio del servicio y del servidor MCP en el shutdown del servidor. |
+| `src/server/client_commands.rs` | L258-L260 | Huella de contrato SHA-256 para `shepherd.call` en las pruebas de verificación de codecs de endpoints. |
+| `src/server/client_shell.rs` | L420 | Propagación de `agent.shepherd` hacia `ClientShellAgent` en snapshots TUI. |
+| `src/protocol/wire.rs` | L185 | Campo `shepherd: Option<AgentShepherdInfo>` en `ClientShellAgent` con `#[serde(default, skip_serializing_if = "Option::is_none")]`. |
+| `src/client/shell.rs` | L42 | Declaración del submódulo `shepherd`. |
+| `src/client/shell/config.rs` | L35 | Campo `shepherd_enabled: bool` en la configuración de la shell TUI. |
+| `src/client/shell/state.rs` | L210, L540 | Variantes de overlay `Shepherd`, `ShepherdAgentModal` y acciones de menú contextual. |
+| `src/client/shell/agent_sidebar.rs` | L310-L450 | Renderizado puro de badges `[estado]`, `[NEEDS YOU]` y sublínea dedicada `↳ <aviso>`. |
+| `src/client/shell/context_menu.rs` | L180 | Opciones contextuales "Launch Shepherd agent...", "Kill Shepherd agent", etc. |
+| `src/client/shell/global_menu.rs` | L140 | Entradas "shepherd" y "launch agent" en el menú global. |
+| `src/client/shell/overlays.rs` | L215 | Despacho de dibujo hacia `crate::shepherd::overlay::render_shepherd_overlay`. |
+| `src/client/shell/actions.rs` | L340 | Manejo de respuesta de `ShepherdCall` para refrescar paneles reactivamente. |
+| `docs/next/api/shepherd-api.schema.json` | L6330 | Definición formal en el esquema JSON de `shepherd.call` y `ShepherdCallParams`. |
+
+---
+
+## Cómo declara herdr un método — Receta paso a paso (2026-11-05)
+
+Herdr implementa una arquitectura rigurosa, tipada y declarativa para cada operación de su API, CLI y protocolo de endpoints. A continuación se detalla la receta paso a paso para añadir o migrar métodos siguiendo las convenciones exactas del proyecto.
+
+### 1. Parámetros fuertemente tipados y Proyección CLI (`src/api/schema/<dominio>.rs`)
+
+En lugar de diccionarios JSON opacos, cada método define una estructura con la macro `cli_params!`, derivando esquemas y mapeando flags de línea de comandos de forma declarativa.
+
+*Ejemplo de `worktree.create` (`src/api/schema/worktrees.rs`):*
+
+```rust
+use serde::{Deserialize, Serialize};
+use crate::cli::projection::{cli_params, Field, Input};
+use crate::cli::workspace_bindings as bindings;
+
+cli_params! {
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema, Default)]
+    pub struct WorktreeCreateParams => WorktreeCreateProjection {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub workspace_id: Option<String> => Field::new(None).input(workspace().order(0)),
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub cwd: Option<String> => Field::new(None).input(crate::cli::worktree::bindings::path("cwd").order(1)),
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub branch: Option<String> => Field::new(None).input(bindings::optional_text("branch", "NAME").order(2)),
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub base: Option<String> => Field::new(None).input(bindings::optional_text("base", "REF").order(3)),
+        #[serde(default)]
+        pub focus: bool => Field::new(false)
+            .input(bindings::boolean("focus", true).order(4))
+            .input(bindings::boolean("no-focus", false).order(5)),
+    }
+}
+```
+
+*Reglas clave:*
+- Todo campo opcional lleva `#[serde(default, skip_serializing_if = "Option::is_none")]`.
+- Los tipos deben derivar `Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema`.
+- La proyección (`WorktreeCreateProjection`) genera automáticamente los argumentos de `clap` y la función `from_matches`.
+
+### 2. Registro en el Enum `Method` (`src/api/schema.rs`)
+
+Todos los métodos se declaran centralizadamente dentro de la macro `operations::define_operations!`:
+
+```rust
+operations::define_operations! {
+    // Variant(ParamsType) => "wire.name", presentation_impact: bool, client_shell: bool;
+    WorktreeList(WorktreeListParams) => "worktree.list", false, true;
+    WorktreeCreate(WorktreeCreateParams) => "worktree.create", true, true;
+    AgentStart(AgentStartParams) => "agent.start", true, false;
+    PluginActionInvoke(PluginActionInvokeParams) => "plugin.action.invoke", true, false;
+}
+```
+
+*Los dos booleanos significan:*
+1. `presentation_impact`: si `true`, la ejecución de este método puede invalidar la vista o geometría de pantalla y exige redibujado.
+2. `client_shell`: si `true`, un cliente TUI ligero conectado por socket tiene autorización para invocar este método directamente.
+
+### 3. Tipado del resultado (`src/api/schema/response.rs`)
+
+Cada método que devuelva datos añade una variante fuertemente tipada en el enum `ResponseResult`:
+
+```rust
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ResponseResult {
+    WorktreeCreated {
+        workspace: WorkspaceInfo,
+        tab: TabInfo,
+        root_pane: PaneInfo,
+        worktree: WorktreeInfo,
+    },
+    AgentStarted {
+        agent: AgentInfo,
+    },
+    // ...
+}
+```
+
+Las respuestas exitosas se envuelven en `SuccessResponse { id: request.id, result: ResponseResult::... }`.
+
+### 4. CLI declarativa y Bindings (`src/cli/<dominio>_bindings.rs`)
+
+En lugar de parsear argumentos `Vec<String>` a mano en un gran `match`, Herdr construye un árbol `clap::Command` a partir de una matriz de hojas `Leaf`:
+
+```rust
+use crate::api::schema::worktrees::WorktreeCreateProjection;
+use crate::api::schema::{Method, Request};
+use super::super::projection::{self, Leaf, ParseError};
+
+const LEAVES: [Leaf; 2] = [
+    Leaf {
+        name: "list",
+        about: "List worktree workspaces",
+        id: "cli:worktree:list",
+        arguments: WorktreeListProjection::arguments,
+        method: |matches| WorktreeListProjection::from_matches(matches).map(Method::WorktreeList),
+    },
+    Leaf {
+        name: "create",
+        about: "Create and open a Git worktree",
+        id: "cli:worktree:create",
+        arguments: WorktreeCreateProjection::arguments,
+        method: |matches| WorktreeCreateProjection::from_matches(matches).map(Method::WorktreeCreate),
+    },
+];
+
+pub(crate) fn command() -> clap::Command {
+    clap::Command::new("worktree")
+        .about("Manage Git worktree-backed workspaces")
+        .subcommand_required(true)
+        .subcommands(LEAVES.iter().map(Leaf::command))
+}
+
+pub(crate) fn request(args: &[String]) -> Result<Request, ParseError> {
+    projection::group_request(command(), &LEAVES, args)
+}
+```
+
+El despachador en `src/cli/worktree.rs` se reduce a una línea:
+
+```rust
+pub(super) fn run_worktree_command(args: &[String]) -> std::io::Result<i32> {
+    super::run_json_request(bindings::request(args))
+}
+```
+
+`run_json_request` envía la petición `Request` al socket del servidor, recibe la respuesta tipada y la formatea (como JSON si lleva `--json`, o legible para humanos).
+
+### 5. Manejo en el Servidor (`src/app/api.rs`)
+
+En `src/app/api.rs`, la función `handle_api_request_after_internal_events_drained` recibe el `Request` y lo atiende:
+
+```rust
+match request.method {
+    Method::WorktreeCreate(params) => {
+        // Si la operación es asíncrona/diferida (ej. I/O o procesos externos):
+        return self.handle_deferred_worktree_create(request.id, params);
+    }
+    Method::AgentList(_) => {
+        // Si la operación es síncrona sobre AppState:
+        let agents = self.list_agents();
+        SuccessResponse {
+            id: request.id,
+            result: ResponseResult::AgentList { agents },
+        }
+    }
+}
+```
+
+### 6. Contrato de Protocolo y Esquema JSON
+
+1. **Esquema JSON (`docs/next/api/shepherd-api.schema.json`)**:
+   Se sincroniza ejecutando `SHEPHERD_UPDATE_API_SCHEMA=1 ./cargo-fork.sh test -p shepherd --test api_ping` (o el test de contrato `generated_protocol_schema_artifact_is_current`).
+2. **Digest de métodos de endpoints (`src/server/client_commands.rs`)**:
+   Los métodos expuestos a la shell del cliente registran su digest SHA-256 en la comprobación estática de `client_commands.rs` para garantizar que ningún commit rompa de forma inadvertida la compatibilidad binaria del protocolo Generación 1.
+
+---
+
+## Pruebas de caracterización F9a (2026-11-05)
+
+Para garantizar la regla inquebrantable de **cero cambios de comportamiento** durante la transición hacia la API tipada y CLI declarativa en F9b–F9e, se ha construido una batería completa de pruebas de caracterización con **golden files versionados**:
+
+1. **Ubicación**:
+   - Tests: `crates/shepherd-core/tests/characterization.rs`
+   - Golden files: `crates/shepherd-core/tests/golden/*.json`
+   - *Justificación*: Se ubican estrictamente dentro de `crates/shepherd-core/` en cumplimiento estricto de la regla 2 de aislamiento («código propio solo en crates/shepherd-core/ y src/shepherd/»), sin contaminar el directorio `tests/fixtures/` del upstream de Herdr.
+
+2. **Volumen de cobertura**:
+   - **90 golden files** versionados en formato JSON canónico (`serde_json::to_string_pretty`).
+   - **90 pruebas de caracterización** ejecutadas en ~1,4 segundos con `./cargo-fork.sh test -p shepherd-core --test characterization`.
+   - Cobertura 100% de:
+     - Las 26 operaciones y alias de `handle_call`.
+     - Los 36 subcomandos y alias de `cli.rs` con salida `--json`.
+     - Las 19 herramientas MCP de `mcp.rs`.
+     - Respuestas de error representativas (operación desconocida, parámetros inválidos, falta de IDs, errores de validación de topología, rechazos de permisos de rol en MCP y tokens no autorizados).
+
+3. **Normalización determinista**:
+   Los golden files no pueden contener valores volátiles o dependientes de la máquina. La función `normalize_json` normaliza recursivamente:
+   - Marcas de tiempo ISO-8601 (`YYYY-MM-DDTHH:MM:SSZ`) -> `"<TIMESTAMP>"`.
+   - Rutas temporales y del entorno de test -> `"<ROOT>"`, `"<STATE_DIR>"`, `"<TEST_DIR>"`, `"<TEMP_DIR>"`.
+   - Tokens criptográficos aleatorios de 64 caracteres -> `"<AGENT_TOKEN>"`.
+   - Direcciones y puertos de sockets loopback efímeros de MCP -> `"http://127.0.0.1:<PORT>/mcp"`.
+   - Cadenas JSON anidadas (como los payloads estructurados de MCP) se deserializan, normalizan en profundidad y reserializan.
+   - Normalización de disponibilidad de `gh` a constante para que el resultado sea idéntico con y sin la CLI de GitHub instalada.
+
+4. **Regeneración explícita y detección de deriva**:
+   - Si un golden file no existe o difiere del comportamiento actual, la prueba falla mostrando el diff unificado e indicando cómo regenerarlo.
+   - Para regenerar los golden files de forma explícita y deliberada:
+     ```bash
+     SHEPHERD_UPDATE_GOLDEN=1 ./cargo-fork.sh test -p shepherd-core --test characterization
+     ```
+
+5. **Aislamiento absoluto de datos del usuario**:
+   - Cada test utiliza un `TestEnv` con repositorio git temporal exclusivo (`git init -b master`), configuración git local (`user.name`, `user.email`), `InMemoryTerminals` y `ManualClock`.
+   - Control de concurrencia mediante `TEST_ENV_MUTEX`, aislando temporalmente las variables de entorno `XDG_STATE_HOME`, `XDG_CONFIG_HOME` y `HOME`.
+   - `grep -c testRepo` de la salida de ejecución = **0**. Cero lectura o interferencia con el estado real del usuario.
+
+---
+
+## Diseño F9b–F9e — Alinear Shepherd con las convenciones de herdr (2026-11-05)
+
+### 4.1 Métodos tipados propuestos (F9b)
+
+En F9b, el despachador monolítico `shepherd.call` se sustituirá por métodos tipados organizados por dominio en `src/api/schema/shepherd/*.rs` y registrados en `Method`:
+
+| Dominio | Método tipado propuesto | Mapeo desde op actual de `shepherd.call` | Parámetros tipados (`cli_params!`) | Resultado tipado (`ResponseResult`) |
+|---|---|---|---|---|
+| **Agentes** | `shepherd.agent.list` | `"agents"` | `ShepherdAgentListParams {}` | `ShepherdAgentList { agents: Vec<AgentPublic> }` |
+| | `shepherd.agent.spawn` | `"spawn"` | `ShepherdAgentSpawnParams { root, role, task, vendor?, model?, task_id? }` | `ShepherdAgentSpawned { agent: AgentPublic }` |
+| | `shepherd.agent.kill` | `"kill"` | `ShepherdAgentTargetParams { id: String }` | `ShepherdAgentKilled { agent: AgentPublic }` |
+| | `shepherd.agent.clean` | `"clean"` | `ShepherdAgentCleanParams { ids?: Vec<String>, workspace?: String }` | `ShepherdAgentCleaned { cleaned: Vec<String> }` |
+| | `shepherd.agent.focus` | `"focus"` | `ShepherdAgentTargetParams { id: String }` | `ShepherdAgentFocused { agent: AgentPublic }` |
+| | `shepherd.agent.reconcile` | `"reconcile"` | `ShepherdEmptyParams {}` | `ShepherdAgentReconciled { agents: Vec<AgentPublic> }` |
+| | `shepherd.agent.resume` | `"resume"` | `ShepherdEmptyParams {}` | `ShepherdAgentResumed { agents: Vec<AgentPublic> }` |
+| **Tareas** | `shepherd.task.list` | `"tasks"` | `ShepherdTaskListParams { root?: String, archived: bool }` | `ShepherdTaskList { tasks: Vec<CreatedTask> }` |
+| | `shepherd.task.create` | `"task_create"`, `"create_task"` | `ShepherdTaskCreateParams { root?: String, title, description?, criteria?, links? }` | `ShepherdTaskCreated { task: CreatedTask }` |
+| | `shepherd.task.archive` | `"task_archive"`, `"archive_task"` | `ShepherdTaskArchiveParams { root?: String, id: String }` | `ShepherdTaskArchived { archived: bool, path: String }` |
+| **Runs** | `shepherd.run.list` | `"runs"` | `ShepherdRunListParams { root?: String }` | `ShepherdRunList { runs: Vec<RunSummary> }` |
+| | `shepherd.run.start` | `"run"` | `ShepherdRunStartParams { root?: String, task: String, auto_push: bool }` | `ShepherdRunStarted { accepted: bool, job: String, task: String }` |
+| | `shepherd.run.approve` | `"approve"` | `ShepherdGateActionParams { root?: String, task: String, target: String }` | `ShepherdGateApproved { ok: bool, task: String, approved: String }` |
+| | `shepherd.run.reject` | `"reject"`, `"reject_gate"` | `ShepherdGateRejectParams { root?: String, task: String, target: String, reason?: String }` | `ShepherdGateRejected { ok: bool, task: String, rejected: String }` |
+| **Skills** | `shepherd.skill.list` | `"skills"` | `ShepherdSkillListParams { root?: String }` | `ShepherdSkillList { skills: Vec<CatalogSkillItem> }` |
+| **Patrones** | `shepherd.pattern.list` | `"patterns"` | `ShepherdPatternListParams { root?: String }` | `ShepherdPatternList { patterns: Vec<PatternSummary> }` |
+| | `shepherd.pattern.get` | `"pattern_get"` | `ShepherdPatternGetParams { root?: String, name: String }` | `ShepherdPatternDetail { pattern: PatternDetail }` |
+| | `shepherd.pattern.save` | `"pattern_save"` | `ShepherdPatternSaveParams { root?: String, pattern: Pattern, global: bool }` | `ShepherdPatternSaved { ok: bool, name: String, path: String, source: String }` |
+| | `shepherd.pattern.delete` | `"pattern_delete"` | `ShepherdPatternDeleteParams { root?: String, name: String }` | `ShepherdPatternDeleted { ok: bool, name: String, deleted_source: String }` |
+| | `shepherd.pattern.validate` | `"pattern_validate"` | `ShepherdPatternValidateParams { root?: String, name?: String, pattern?: Pattern }` | `ShepherdPatternValidated { valid: bool, problems: Vec<Problem> }` |
+| **Git** | `shepherd.git.status` | `"git_status"` | `ShepherdGitStatusParams { root?: String }` | `ShepherdGitStatus { status: GitRepoStatus }` |
+| **Tópicos/Bus** | `shepherd.topic.list` | `"topics"` | `ShepherdEmptyParams {}` | `ShepherdTopicList { topics: Vec<Topic> }` |
+| | `shepherd.topic.create` | `"topic_create"` | `ShepherdTopicCreateParams { name: String, partitions: u32 }` | `ShepherdTopicCreated { topic: Topic }` |
+| | `shepherd.topic.publish` | `"publish"` | `ShepherdTopicPublishParams { topic: String, content: String, key?: String, partition?: u32, from?: String }` | `ShepherdMessagePublished { message: Message }` |
+| | `shepherd.topic.tail` | `"topic_tail"` | `ShepherdTopicTailParams { topic: String, partition?: u32, limit?: usize }` | `ShepherdTopicMessages { messages: Vec<Message> }` |
+| | `shepherd.topic.replay` | `"topic_replay"` | `ShepherdTopicReplayParams { topic: String, from_offset: u64, partition?: u32, limit?: usize }` | `ShepherdTopicMessages { messages: Vec<Message> }` |
+| | `shepherd.topic.groups` | `"consumer_groups"` | `ShepherdTopicGroupsParams { topic?: String }` | `ShepherdConsumerGroups { groups: Value }` |
+
+### 4.2 Decisión de compatibilidad: `shepherd.call` conservado como alias deprecado
+
+- **Decisión**: El método de API `shepherd.call` se conserva como **alias deprecado** en `Method::ShepherdCall(ShepherdCallParams)`.
+- **Implementación**: `ShepherdCall` deserializará internamente `op` y `args` y despachará hacia el método tipado correspondiente, devolviendo el resultado envuelto en `ResponseResult::ShepherdCall { data }`.
+- **Garantía**: Los 90 golden files de caracterización cubren la salida exacta de `shepherd.call`. Mientras el alias esté activo, los golden files seguirán pasando en verde.
+- **Retirada**: Se mantendrá deprecado hasta que el dueño decida explícitamente retirarlo en una fase posterior una vez que todos los clientes externos y scripts de automatización utilicen los métodos tipados.
+
+### 4.3 Declaración de la CLI con `cli_params!` y bindings (F9c)
+
+En F9c, los 36 comandos y parsers manuales de `crates/shepherd-core/src/cli.rs` (~3.984 líneas) serán reemplazados por bindings declarativos siguiendo el patrón de `src/cli/*_bindings.rs`:
+- Definición de hojas `Leaf` en `src/cli/shepherd_bindings.rs` enlazando las proyecciones `cli_params!` con variantes de `Method`.
+- Ensamblado mediante `projection::group_request` y despacho con `run_json_request`.
+- `crates/shepherd-core/src/cli.rs` se reduce a una capa fina de despacho de ~250 líneas.
+- Desaparece el parseo manual de argumentos por posición, banderas duplicadas y manejo ad-hoc de errores en stdout.
+
+### 4.4 Partición final de módulos y orden de movimiento (F9d)
+
+Para garantizar commits atómicos con los tests siempre en verde:
+1. **Paso 1 (F9d-1)**: Extraer `terminals/` (`in_process.rs`, `socket.rs`, `fakes.rs`, `mod.rs`). Correr `./cargo-fork.sh test -p shepherd-core`.
+2. **Paso 2 (F9d-2)**: Extraer `mcp/` (`server.rs`, `tools.rs`, `events.rs`, `mod.rs`). Correr tests.
+3. **Paso 3 (F9d-3)**: Partir `service/` (`registry.rs`, `spawn.rs`, `reconcile.rs`, `delivery.rs`, `gates.rs`, `mod.rs`). Correr tests y golden files.
+4. **Paso 4 (F9d-4)**: Extraer `workflow/` (`runner.rs`, `verification.rs`, `pr.rs`). Correr tests.
+5. **Paso 5 (F9d-5)**: Limpiar `lib.rs` dejando únicamente re-exportaciones limpias y modelos de datos.
+
+### 4.5 Configuración y persistencia: qué migrar y qué mantener propio
+
+Evaluación basada en **evidencia**, no en preferencia:
+
+1. **Migrar a Herdr (`config.toml` y sesión nativa)**:
+   - Configuración global de Shepherd: `enabled: bool` ya está en `config.toml`. Migrar también `limits` (`max_depth`, `max_concurrent`, `notice_after_secs`) a `[shepherd.limits]` en `config.toml`.
+   - Keybinds: ya usan el sistema nativo de Herdr (`prefix+a`).
+   - *Justificación*: Centraliza la administración del usuario en un único archivo de configuración estándar de Herdr.
+
+2. **Mantener propio en Shepherd**:
+   - `status.json` y directorio `.shepherd/tasks/<id>-<slug>/`: **Mantener propio**. Es el contrato de interoperabilidad de tareas con las herramientas CLI de Shepherd y Go. Herdr no tiene concepto de subtareas, dependencias DAG de agentes ni checklists de aceptación.
+   - `messages.jsonl` y sidecars (`.topics`, `.subscriptions`, `.offsets`): **Mantener propio**. Es un log de eventos estructurado en disco de alto rendimiento para streaming entre agentes independientes. La base de datos SQLite de Herdr está optimizada para eventos TUI de panes y sesiones, no para colas particionadas de mensajería inter-agente.
+   - Patrones YAML (`.shepherd/patterns/*.yaml`): **Mantener propio**. Son plantillas declarativas de topología multi-agente que los usuarios editan en texto plano o comparten en sus repositorios git.
+
+### 4.6 Riesgos y métrica de coste de fusión de F9b
+
+- **Riesgo principal**: Modificación del enum `Method` y adición de esquemas en `docs/next/api/shepherd-api.schema.json`.
+- **Mitigación**:
+  - `shepherd.call` permanece activo como alias deprecado.
+  - Los métodos tipados se añaden bajo el prefijo aislado `shepherd.*` (ej. `shepherd.agent.list`).
+  - No se modifica ningún método nativo de Herdr (`worktree.*`, `agent.*`, `pane.*`, `workspace.*`).
+- **Archivos de Herdr a tocar en F9b**:
+  - `src/api/schema.rs` (añadir variantes de `shepherd.*` en `define_operations!`).
+  - `src/api/schema/response.rs` (añadir variantes tipadas en `ResponseResult`).
+  - `src/app/api.rs` (despacho de los nuevos métodos tipados al runtime).
+  - `docs/next/api/shepherd-api.schema.json` (regenerado con `SHEPHERD_UPDATE_API_SCHEMA=1`).
+  - `src/server/client_commands.rs` (registro de digests SHA-256).
+  - *Estimación de coste de fusión*: Muy bajo (< 150 líneas añadidas en archivos de Herdr, en puntos de enganche ya conocidos y completamente aditivos).
+
+---
+
+## Estado F9a — Inventario, caracterización con golden files y diseño de destino (2026-11-05)
+
+Fase F9a completada estrictamente según el brief y las reglas del proyecto. Cero cambios de código de producción.
+
+### 1. Qué se ha implementado
+
+1. **Inventario exhaustivo de la superficie de Shepherd**:
+   - 26 operaciones y alias de `handle_call` documentadas con parámetros, forma de resultado y llamantes.
+   - 36 subcomandos y alias de `cli.rs` inventariados con todos sus flags.
+   - 19 herramientas MCP documentadas con permisos y esquemas.
+   - 15 ficheros y formatos de persistencia catalogados.
+   - Tamaño de módulos medido (15.462 líneas totales en módulos grandes) y propuesta de partición modular.
+   - 31 archivos de Herdr modificados históricamente mapeados con líneas y motivos de enganche.
+
+2. **Estudio de convenciones de Herdr**:
+   - Estudio de punta a punta de `worktree.create`, `agent.start`, `plugin.action.invoke`.
+   - Receta documentada paso a paso (`cli_params!`, `define_operations!`, `ResponseResult`, `Leaf`/bindings, manejo en `App`, contrato de esquema JSON y digest SHA-256).
+
+3. **Pruebas de caracterización con Golden Files**:
+   - Creado arnés de pruebas `crates/shepherd-core/tests/characterization.rs`.
+   - **90 pruebas de caracterización** automatizadas.
+   - **90 golden files versionados** en `crates/shepherd-core/tests/golden/*.json`.
+   - Normalización determinista de timestamps, rutas de test/tempdir, tokens criptográficos, URLs locales y emulación de disponibilidad de `gh`.
+   - Aislamiento riguroso con `TEST_ENV_MUTEX`, `XDG_STATE_HOME`, `XDG_CONFIG_HOME`, `HOME` y git repos limpios. Cero filtrado de datos del usuario (`grep -c testRepo == 0`).
+   - Mecanismo de regeneración explícita con `SHEPHERD_UPDATE_GOLDEN=1`.
+
+4. **Diseño de destino (F9b–F9e)**:
+   - Lista completa de métodos tipados propuestos bajo `shepherd.*`.
+   - Decisión de retrocompatibilidad con `shepherd.call` como alias deprecado.
+   - Plan de sustitución de `cli.rs` por bindings declarativos `cli_params!`.
+   - Plan de partición modular en 5 pasos atómicos.
+   - Análisis de configuración y persistencia basado en evidencia.
+   - Análisis de riesgos y métricas estimadas de coste de fusión.
+
+### 2. Batería de verificación
+
+- `./cargo-fork.sh build`: Compilación limpia en verde.
+- `./cargo-fork.sh test -p shepherd-core`: **207 tests pasados** (117 unitarios + 90 de caracterización), 0 fallados en 1,7s.
+- `grep -c testRepo` en salida de `shepherd-core`: **0**.
+- Tests por áreas:
+  - `client::shell`: **391 passed**, 0 failed (2 ignored).
+  - `shepherd::`: **52 passed**, 0 failed.
+  - `protocol::`: **156 passed**, 0 failed.
+  - `api::`: **318 passed**, 0 failed (intermitente conocido `manifest_action_invoke_injects_plugin_paths` pasa en solitario).
+  - `server::`: **318 passed**, 0 failed (5 ignored).
+- `./scripts/rename-from-herdr.sh --check`: **[OK] Limpio**, 0 ocurrencias no excluidas de herdr.
+- Formato: Solo archivos propios (`crates/shepherd-core/**`). Los 67 archivos de Herdr tocados por `fmt` fueron revertidos.
+- Verificación con `./scripts/shepherd-iso.sh`:
+  - Sesión iniciada con `start`, verificado `ping` (protocolo 22), verificado `shepherd.call` (`op: "agents"`), captura de pantalla con `screen`, y detenida con `stop` sin agentes reales.
+- Coste de fusión en seco (`./scripts/upstream-sync.sh --dry-run --allow-branch master`): Ejecución exitosa de simulación sin conflictos ni llamadas de red.
+
+### 3. Archivos tocados en esta fase
+
+Confirmación estricta de **cero cambios de código de producción**:
+- `crates/shepherd-core/tests/characterization.rs` (archivo de test nuevo).
+- `crates/shepherd-core/tests/golden/*.json` (90 golden files nuevos).
+- `SHEPHERD.md` (documentación de inventario, receta, diseño y estado F9a).
+- `git diff --stat` contra HEAD previo confirma 0 líneas modificadas en código de producción (`src/` o `crates/*/src/`).
+
+### 4. Qué NO queda (explícito)
+
+1. **Código de producción migrado a métodos tipados**:
+   - Como se especificó en el brief, F9a no mueve código ni altera el contrato en producción. La implementación de los métodos tipados corresponde a F9b.
+2. **Reemplazo de CLI artesanal**:
+   - `cli.rs` sigue en su estado actual de 3.984 líneas; su reducción con `cli_params!` corresponde a F9c.
+3. **Partición de módulos grandes**:
+   - `service.rs`, `terminals.rs`, `mcp.rs` se conservan sin partir hasta F9d para mantener diffs limpios y verificar contra los golden files en cada paso.
+4. **Pruebas con agentes LLM reales**:
+   - Prohibidas expresamente en esta fase; toda la validación se realizó sobre fakes aislados en memoria y sesión aislada con `./scripts/shepherd-iso.sh`.

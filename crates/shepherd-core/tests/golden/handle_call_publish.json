@@ -1,0 +1,11 @@
+{
+  "content": "Characterization message payload",
+  "from": "tester",
+  "id": 1,
+  "key": "user-42",
+  "kind": "msg",
+  "offset": 0,
+  "partition": 1,
+  "topic": "pub-topic",
+  "ts": "<TIMESTAMP>"
+}

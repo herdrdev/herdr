@@ -1,0 +1,13 @@
+{
+  "id": 7,
+  "jsonrpc": "2.0",
+  "result": {
+    "content": [
+      {
+        "text": "not_found: no screen recorded for \"pane-coder-1\"",
+        "type": "text"
+      }
+    ],
+    "isError": true
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "directory": "<ROOT>/.shepherd/tasks/1-created-via-create-task-alias",
+  "status": {
+    "created": "<TIMESTAMP>",
+    "id": 1,
+    "slug": "created-via-create-task-alias",
+    "state": "<STATE_DIR_PATH>",
+    "title": "Created via create_task alias",
+    "updated": "<TIMESTAMP>"
+  }
+}

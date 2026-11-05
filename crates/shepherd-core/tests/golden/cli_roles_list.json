@@ -1,0 +1,81 @@
+[
+  {
+    "available": true,
+    "can_spawn": true,
+    "configured_model": "opus",
+    "configured_vendor": "claude",
+    "fallback": false,
+    "model": "opus",
+    "role": "brain",
+    "skills": [
+      "shepherd-comms",
+      "plan-tasks",
+      "pr-workflow",
+      "docs-lookup"
+    ],
+    "vendor": "claude",
+    "worktree": false
+  },
+  {
+    "available": true,
+    "can_spawn": false,
+    "configured_vendor": "codex",
+    "fallback": false,
+    "model": "",
+    "role": "coder",
+    "skills": [
+      "shepherd-comms",
+      "implement-task",
+      "write-tests",
+      "conventional-commits",
+      "lang-go"
+    ],
+    "vendor": "codex",
+    "worktree": true
+  },
+  {
+    "available": true,
+    "can_spawn": false,
+    "configured_vendor": "gemini",
+    "fallback": false,
+    "model": "",
+    "role": "docs",
+    "skills": [
+      "shepherd-comms",
+      "docs-lookup"
+    ],
+    "vendor": "gemini",
+    "worktree": false
+  },
+  {
+    "available": true,
+    "can_spawn": false,
+    "configured_vendor": "gemini",
+    "fallback": false,
+    "model": "",
+    "role": "reviewer",
+    "skills": [
+      "shepherd-comms",
+      "code-review",
+      "security-review"
+    ],
+    "vendor": "gemini",
+    "worktree": false
+  },
+  {
+    "available": true,
+    "can_spawn": false,
+    "configured_model": "sonnet",
+    "configured_vendor": "claude",
+    "fallback": false,
+    "model": "sonnet",
+    "role": "tester",
+    "skills": [
+      "shepherd-comms",
+      "write-tests",
+      "debug"
+    ],
+    "vendor": "claude",
+    "worktree": false
+  }
+]

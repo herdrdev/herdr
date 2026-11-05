@@ -1,0 +1,16 @@
+[
+  {
+    "active_agents": [],
+    "current_stage": "new",
+    "has_saved_plan": false,
+    "pending_gate": null,
+    "status": "new",
+    "subtasks": [],
+    "subtasks_progress": [
+      0,
+      0
+    ],
+    "task_id": 1,
+    "task_title": "Runs List Task"
+  }
+]

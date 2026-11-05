@@ -1,0 +1,345 @@
+{
+  "id": 2,
+  "jsonrpc": "2.0",
+  "result": {
+    "tools": [
+      {
+        "description": "Start a sub-agent in its own terminal (requires a role with can_spawn: true).",
+        "inputSchema": {
+          "properties": {
+            "add_skills": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "model": {
+              "type": "string"
+            },
+            "remove_skills": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "role": {
+              "type": "string"
+            },
+            "task": {
+              "type": "string"
+            },
+            "task_id": {
+              "type": "string"
+            },
+            "use_worktree": {
+              "type": "string"
+            },
+            "vendor": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "role",
+            "task"
+          ],
+          "type": "object"
+        },
+        "name": "spawn_agent"
+      },
+      {
+        "description": "Send a message to another agent by ID or role.",
+        "inputSchema": {
+          "properties": {
+            "content": {
+              "type": "string"
+            },
+            "to": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "to",
+            "content"
+          ],
+          "type": "object"
+        },
+        "name": "send_message"
+      },
+      {
+        "description": "Read and clear your pending agent messages.",
+        "inputSchema": {
+          "properties": {},
+          "type": "object"
+        },
+        "name": "read_messages"
+      },
+      {
+        "description": "Block until every listed agent has submitted a result or exited.",
+        "inputSchema": {
+          "properties": {
+            "agent_ids": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "timeout_seconds": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "agent_ids"
+          ],
+          "type": "object"
+        },
+        "name": "wait_for"
+      },
+      {
+        "description": "Deliver your final result to Shepherd.",
+        "inputSchema": {
+          "properties": {
+            "summary": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "summary"
+          ],
+          "type": "object"
+        },
+        "name": "submit_result"
+      },
+      {
+        "description": "Return an agent's current state and submitted result without blocking.",
+        "inputSchema": {
+          "properties": {
+            "agent_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "agent_id"
+          ],
+          "type": "object"
+        },
+        "name": "get_result"
+      },
+      {
+        "description": "List all agents in this session with their role, vendor, state, and worktree.",
+        "inputSchema": {
+          "properties": {},
+          "type": "object"
+        },
+        "name": "list_agents"
+      },
+      {
+        "description": "Read a coder's complete worktree diff against the configured base branch.",
+        "inputSchema": {
+          "properties": {
+            "agent_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "agent_id"
+          ],
+          "type": "object"
+        },
+        "name": "get_diff"
+      },
+      {
+        "description": "Read the last N lines of an agent's terminal pane.",
+        "inputSchema": {
+          "properties": {
+            "agent_id": {
+              "type": "string"
+            },
+            "lines": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "agent_id"
+          ],
+          "type": "object"
+        },
+        "name": "read_output"
+      },
+      {
+        "description": "Send a question to the docs agent (spawning one if needed) and wait for its answer.",
+        "inputSchema": {
+          "properties": {
+            "question": {
+              "type": "string"
+            },
+            "timeout_seconds": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "question"
+          ],
+          "type": "object"
+        },
+        "name": "ask_docs"
+      },
+      {
+        "description": "Read this task's issue, specification, acceptance criteria, links, or plan.",
+        "inputSchema": {
+          "properties": {
+            "section": {
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "name": "get_task_context"
+      },
+      {
+        "description": "Update a task context section (brain and docs agents only).",
+        "inputSchema": {
+          "properties": {
+            "append": {
+              "type": "boolean"
+            },
+            "content": {
+              "type": "string"
+            },
+            "section": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "section",
+            "content"
+          ],
+          "type": "object"
+        },
+        "name": "update_task_context"
+      },
+      {
+        "description": "Return workspace instructions, repo instruction files, effective skills, and detected checks.",
+        "inputSchema": {
+          "properties": {},
+          "type": "object"
+        },
+        "name": "get_workspace_instructions"
+      },
+      {
+        "description": "Publish a message to a topic. Key hashes to a partition; without key, messages are distributed across partitions.",
+        "inputSchema": {
+          "properties": {
+            "content": {
+              "type": "string"
+            },
+            "key": {
+              "type": "string"
+            },
+            "topic": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "topic",
+            "content"
+          ],
+          "type": "object"
+        },
+        "name": "publish"
+      },
+      {
+        "description": "Subscribe to a topic, optionally joining a consumer group (defaults to your own agent ID for pub/sub delivery).",
+        "inputSchema": {
+          "properties": {
+            "group": {
+              "type": "string"
+            },
+            "topic": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "topic"
+          ],
+          "type": "object"
+        },
+        "name": "subscribe"
+      },
+      {
+        "description": "Poll unacknowledged topic messages assigned to this agent in its consumer group.",
+        "inputSchema": {
+          "properties": {
+            "max": {
+              "type": "integer"
+            },
+            "topic": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "topic"
+          ],
+          "type": "object"
+        },
+        "name": "poll"
+      },
+      {
+        "description": "Acknowledge (commit) processed messages for a topic and partition up through an offset.",
+        "inputSchema": {
+          "properties": {
+            "offset": {
+              "type": "integer"
+            },
+            "partition": {
+              "type": "integer"
+            },
+            "through": {
+              "type": "integer"
+            },
+            "topic": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "topic"
+          ],
+          "type": "object"
+        },
+        "name": "ack"
+      },
+      {
+        "description": "Read historical messages from a topic without advancing consumer group offsets.",
+        "inputSchema": {
+          "properties": {
+            "from_offset": {
+              "type": "integer"
+            },
+            "limit": {
+              "type": "integer"
+            },
+            "partition": {
+              "type": "integer"
+            },
+            "topic": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "topic",
+            "from_offset"
+          ],
+          "type": "object"
+        },
+        "name": "replay"
+      },
+      {
+        "description": "List available topics, partition counts, and message volumes.",
+        "inputSchema": {
+          "properties": {},
+          "type": "object"
+        },
+        "name": "list_topics"
+      }
+    ]
+  }
+}

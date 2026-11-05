@@ -1,0 +1,24 @@
+[
+  {
+    "directory": "<ROOT>/.shepherd/tasks/1-first-task",
+    "status": {
+      "created": "<TIMESTAMP>",
+      "id": 1,
+      "slug": "first-task",
+      "state": "<STATE_DIR_PATH>",
+      "title": "First Task",
+      "updated": "<TIMESTAMP>"
+    }
+  },
+  {
+    "directory": "<ROOT>/.shepherd/tasks/2-second-task",
+    "status": {
+      "created": "<TIMESTAMP>",
+      "id": 2,
+      "slug": "second-task",
+      "state": "<STATE_DIR_PATH>",
+      "title": "Second Task",
+      "updated": "<TIMESTAMP>"
+    }
+  }
+]

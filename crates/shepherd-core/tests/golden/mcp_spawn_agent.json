@@ -1,0 +1,13 @@
+{
+  "id": 3,
+  "jsonrpc": "2.0",
+  "result": {
+    "content": [
+      {
+        "text": "no task \"1\"",
+        "type": "text"
+      }
+    ],
+    "isError": true
+  }
+}

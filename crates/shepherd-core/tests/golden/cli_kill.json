@@ -1,0 +1,18 @@
+{
+  "delivery_cursor": 0,
+  "depth": 0,
+  "has_result": false,
+  "id": "coder-1",
+  "mcp": false,
+  "pane": "pane-coder-1",
+  "role": "coder",
+  "root": "<ROOT>",
+  "seq": 1,
+  "skills": {},
+  "started": "<TIMESTAMP>",
+  "state": "<STATE_DIR_PATH>",
+  "task_id": "1",
+  "task_text": "Task for coder-1",
+  "updated": "<TIMESTAMP>",
+  "vendor": ""
+}

@@ -1,0 +1,18 @@
+{
+  "id": 1,
+  "ready": [
+    1
+  ],
+  "saved": false,
+  "subtasks": [
+    {
+      "body": "Verify: cargo check\nDepends:",
+      "n": 1,
+      "state": "<STATE_DIR_PATH>",
+      "title": "Subtask 1",
+      "verify": [
+        "cargo check"
+      ]
+    }
+  ]
+}

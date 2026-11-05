@@ -1,0 +1,16 @@
+{
+  "id": 4,
+  "jsonrpc": "2.0",
+  "result": {
+    "content": [
+      {
+        "text": "result recorded",
+        "type": "text"
+      }
+    ],
+    "isError": false,
+    "structuredContent": {
+      "text": "result recorded"
+    }
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "id": 20,
+  "jsonrpc": "2.0",
+  "result": {
+    "content": [
+      {
+        "text": "{\"topics\":[{\"messages_count\":1,\"name\":\"listed-topic\",\"partitions\":1}]}",
+        "type": "text"
+      }
+    ],
+    "isError": false,
+    "structuredContent": {
+      "text": "{\"topics\":[{\"messages_count\":1,\"name\":\"listed-topic\",\"partitions\":1}]}"
+    }
+  }
+}

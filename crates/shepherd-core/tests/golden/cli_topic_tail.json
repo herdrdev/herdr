@@ -1,0 +1,12 @@
+[
+  {
+    "content": "tail msg",
+    "from": "user",
+    "id": 1,
+    "kind": "msg",
+    "offset": 0,
+    "partition": 0,
+    "topic": "clitopictail",
+    "ts": "<TIMESTAMP>"
+  }
+]

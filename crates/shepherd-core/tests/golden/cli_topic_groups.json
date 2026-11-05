@@ -1,0 +1,10 @@
+[
+  {
+    "committed_offsets": {},
+    "group": "my-group",
+    "members": [
+      "agent-cli"
+    ],
+    "topic": "clitopicgroups"
+  }
+]

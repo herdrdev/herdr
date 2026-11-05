@@ -1,0 +1,12 @@
+[
+  {
+    "content": "tail msg 1",
+    "from": "user",
+    "id": 1,
+    "kind": "msg",
+    "offset": 0,
+    "partition": 0,
+    "topic": "tail-topic",
+    "ts": "<TIMESTAMP>"
+  }
+]

@@ -1,0 +1,16 @@
+{
+  "id": 8,
+  "jsonrpc": "2.0",
+  "result": {
+    "content": [
+      {
+        "text": "# Task 1-task-for-context\n\n# Task For Context\n\nSample test task description\n\n# Spec\n\nDesign decisions, constraints, interfaces. Agents read this before coding.\n\n# Acceptance criteria\n\n- [ ] Criterion 1\n- [ ] Criterion 2\n\n# Links\n\n",
+        "type": "text"
+      }
+    ],
+    "isError": false,
+    "structuredContent": {
+      "text": "# Task 1-task-for-context\n\n# Task For Context\n\nSample test task description\n\n# Spec\n\nDesign decisions, constraints, interfaces. Agents read this before coding.\n\n# Acceptance criteria\n\n- [ ] Criterion 1\n- [ ] Criterion 2\n\n# Links\n\n"
+    }
+  }
+}

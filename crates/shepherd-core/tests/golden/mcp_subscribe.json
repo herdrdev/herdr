@@ -1,0 +1,16 @@
+{
+  "id": 13,
+  "jsonrpc": "2.0",
+  "result": {
+    "content": [
+      {
+        "text": "{\"agent\":\"coder-1\",\"group\":\"mcp-workers\",\"status\":\"subscribed\",\"topic\":\"mcp-events\"}",
+        "type": "text"
+      }
+    ],
+    "isError": false,
+    "structuredContent": {
+      "text": "{\"agent\":\"coder-1\",\"group\":\"mcp-workers\",\"status\":\"subscribed\",\"topic\":\"mcp-events\"}"
+    }
+  }
+}
