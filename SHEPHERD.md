@@ -5208,3 +5208,17 @@ Patrón `duo` (brain claude/haiku + worker codex), tarea sin commit (sin diálog
 - No cubierto: pestaña Eventos con tráfico real (capturas), patrones jerárquico/blackboard/market con agentes reales.
 
 Limpieza: sesión aislada parada y reseteada, worktrees eliminados.
+
+## Estado F8g — reabrir runs `done` con tráfico y grupo fantasma (2026-11-05)
+
+Sin commits. Tests nuevos en `crates/shepherd-core/src/service/tests_f8g.rs` (4); los de reapertura y fantasma fallaban antes de la corrección (reapertura: `Done` ≠ `Running`; fantasma: 2 grupos ≠ 1).
+
+**1. Reabrir `done`.** Causa raíz: la reapertura solo ocurría en `reconcile` (muestreo: mensaje sin reconocer o agente `working`). Si el agente procesa, hace `ack` y vuelve a `idle` antes del siguiente ciclo, no queda rastro y el run seguía `done`. Además la publicación de agentes por MCP (`mcp/events.rs`) escribe en el bus directamente, sin pasar por `OrchestrationService::publish_topic`. Arreglo: función `patterns_run::reopen_quiesced_runs(state_dir, registry, topic, now)`, llamada desde `publish_topic` (CLI/API) **y** desde el `publish` MCP. Un run `done` con `quiesced` cuyo `topics` contiene el tópico pasa a `running` (`quiesced=false`, `finished_at=None`) en el acto, publique quien publique (incluido un agente del propio run). No toca `stopped`/`failed`/`degraded`, ni `paused` (no es `done`), ni `done` no quiescente, ni tópicos ajenos al run. El temporizador de quietud ya estaba limpio al pasar a `done`, así que vuelve a `done` tras `run_quiescence_secs` de calma (test incluido).
+
+**2. Grupo fantasma `results brain`.** Causa raíz: `start_pattern_run` suscribe al agente con grupo = rol (`brain`); luego el agente MCP hace `subscribe` con su id (`brain-1`) y `MessageBus::subscribe` lo *mueve* de grupo, dejando `brain` con 0 miembros, sin offsets y con lag creciente. Regla elegida (en el origen, no en el formateador): al mover un consumidor, se elimina el grupo que queda **sin miembros y sin offsets confirmados** (`bus.rs::subscribe`). Un grupo vacío con offsets confirmados es estado real y se conserva; `topic groups` sigue mostrando los grupos reales. La quiescencia y el aviso de despertar solo miran miembros, así que nunca contaron estos grupos (verificado en el código; sin cambios ahí). Los fantasmas ya persistidos en sidecars antiguos no se limpian retroactivamente.
+
+**Archivos de herdr tocados: 0.** Modificados: `bus.rs`, `mcp/events.rs`, `service/mod.rs`, `service/patterns_run.rs`, nuevo `service/tests_f8g.rs` (todos de shepherd-core). Golden de `topic groups` intactos. rustfmt solo sobre archivos propios; `git status` lo confirma.
+
+**Números reales**: shepherd-core 143 + 155 ok; `shepherd::` 90; `client::shell` 403 (2 ignored); `protocol::` 156; `api::` 318 ok + 1 intermitente de plugins (`plugin_pane_open_injects…`, pasa solo: 1/1); `server::` 318 (5 ignored); `workflow::…explicit_approval…` ok solo (en shepherd-core). `rename-from-herdr.sh --check` OK; `testRepo|araquesebastian` = 0 en el test nuevo.
+
+**No hecho:** la prueba aislada con `shepherd-iso.sh` (run done → publicar → running → done) no se ejecutó en esta fase; el flujo queda cubierto por los tests de servicio (incl. la ruta MCP). Pendiente la repetición real con claude y codex.

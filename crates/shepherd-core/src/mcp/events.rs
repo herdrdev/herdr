@@ -27,6 +27,18 @@ pub(crate) fn handle_event_tool(
             let msg = bus
                 .publish(topic, content, key, None, &agent.id)
                 .map_err(|e| e.to_string())?;
+            // F8g: any publish (agent or human) on a run topic reopens a quiesced `done` run.
+            if let (Some(dir), Ok(reg)) = (
+                state.registry.parent(),
+                load_agent_registry(&state.registry),
+            ) {
+                let _ = crate::service::patterns_run::reopen_quiesced_runs(
+                    dir,
+                    &reg,
+                    topic,
+                    &crate::tasks::now_rfc3339(),
+                );
+            }
             serde_json::to_string(&msg).map_err(|e| e.to_string())?
         }
         "subscribe" => {

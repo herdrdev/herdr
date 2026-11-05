@@ -98,6 +98,48 @@ pub struct PatternRunSummary {
     pub updated_at: String,
 }
 
+/// F8g: a publish on a topic of a quiesced `done` run reopens it (event-driven, so a fast agent
+/// that is idle and acked again before the next reconcile cannot miss it). The quiet timer is
+/// already cleared at `done`, so the run returns to `done` only once it calms down again.
+/// Free function: MCP agent publishes reach the bus without an `OrchestrationService`.
+pub(crate) fn reopen_quiesced_runs(
+    state_dir: &Path,
+    registry: &crate::AgentRegistryFile,
+    topic: &str,
+    now: &str,
+) -> Result<(), String> {
+    let mut paths = vec![pattern_runs_path(state_dir, state_dir)];
+    for ag in &registry.agents {
+        if !ag.root.is_empty() {
+            paths.push(pattern_runs_path(Path::new(&ag.root), state_dir));
+        }
+    }
+    paths.sort();
+    paths.dedup();
+    for path in paths {
+        let Ok(mut runs) = load_pattern_runs(&path) else {
+            continue;
+        };
+        let mut dirty = false;
+        for run in &mut runs {
+            if run.state == PatternRunState::Done
+                && run.quiesced
+                && run.topics.iter().any(|t| t == topic)
+            {
+                run.state = PatternRunState::Running;
+                run.quiesced = false;
+                run.finished_at = None;
+                run.updated_at = now.to_string();
+                dirty = true;
+            }
+        }
+        if dirty {
+            save_pattern_runs(&path, &runs)?;
+        }
+    }
+    Ok(())
+}
+
 /// Determine location for pattern runs storage.
 pub fn pattern_runs_path(root: &Path, state_dir: &Path) -> PathBuf {
     let proj = root.join(".shepherd");

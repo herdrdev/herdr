@@ -506,12 +506,24 @@ impl MessageBus {
             _ => consumer.to_owned(),
         };
 
+        let committed = state
+            .committed_offsets
+            .get(topic)
+            .cloned()
+            .unwrap_or_default();
         let groups_for_topic = state.subscriptions.entry(topic.to_owned()).or_default();
         for (g_name, members) in groups_for_topic.iter_mut() {
             if g_name != &grp {
                 members.retain(|m| m != consumer);
             }
         }
+        // F8g: a group emptied by the move that never committed anything (e.g. the topology's
+        // per-role group when the agent re-subscribes under its own id) is a phantom: drop it.
+        groups_for_topic.retain(|g_name, members| {
+            g_name == &grp
+                || !members.is_empty()
+                || committed.get(g_name).is_some_and(|c| !c.is_empty())
+        });
         let members = groups_for_topic.entry(grp.clone()).or_default();
         if !members.contains(&consumer.to_owned()) {
             members.push(consumer.to_owned());

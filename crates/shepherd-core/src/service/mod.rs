@@ -622,6 +622,14 @@ impl OrchestrationService {
             .publish(topic, content, key, partition, from)
             .map_err(|e| e.to_string())?;
         if let Ok(mut reg) = self.load_registry() {
+            if let Err(e) = patterns_run::reopen_quiesced_runs(
+                &self.service_config.state_dir,
+                &reg,
+                topic,
+                &self.clock.now_rfc3339(),
+            ) {
+                self.record_failure("reopen_quiesced_runs", &e);
+            }
             self.wake_dormant_topic_subscribers(&mut reg, Some(topic));
         }
         Ok(msg)
@@ -1171,3 +1179,5 @@ pub use registry::{
 mod tests;
 #[cfg(test)]
 mod tests_f8f;
+#[cfg(test)]
+mod tests_f8g;
