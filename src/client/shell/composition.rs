@@ -338,22 +338,36 @@ impl ClientShellState {
             self.hits.tab_scroll_left = Rect::default();
             self.hits.tab_scroll_right = Rect::default();
         }
+        if let Some(ref mut section) = self.shepherd_section {
+            self.hits.panes.clear();
+            let s_hits = crate::shepherd::ui::render_shepherd_section(
+                &mut buffer,
+                layout.pane_surface,
+                section,
+                &self.config.palette,
+            );
+            self.hits.shepherd_section_hits = Some(s_hits);
+        }
         let mut frame = FrameData::from_ratatui_buffer_with_hyperlinks(&buffer, None, &[]);
         let mode_bar_cells = mode_bar.map(|bar| {
             let start = usize::from(bar.y) * usize::from(frame.width) + usize::from(bar.x);
             frame.cells[start..start + usize::from(bar.width)].to_vec()
         });
-        blit_pane_surface(&mut frame, &surface.frame, layout.pane_surface);
+        if self.shepherd_section.is_none() {
+            blit_pane_surface(&mut frame, &surface.frame, layout.pane_surface);
+        }
         restore_mode_bar(&mut frame, mode_bar, mode_bar_cells.as_deref());
         let mut occlusion = crate::kitty_graphics::surface::Occlusion::default();
-        let has_selection = self
-            .selection
-            .as_ref()
-            .is_some_and(|selection| selection.is_visible());
-        let has_search = self
-            .copy_mode
-            .as_ref()
-            .is_some_and(|copy_mode| !copy_mode.search_matches.is_empty());
+        let has_selection = self.shepherd_section.is_none()
+            && self
+                .selection
+                .as_ref()
+                .is_some_and(|selection| selection.is_visible());
+        let has_search = self.shepherd_section.is_none()
+            && self
+                .copy_mode
+                .as_ref()
+                .is_some_and(|copy_mode| !copy_mode.search_matches.is_empty());
         if has_selection || has_search {
             let cursor = frame.cursor.clone();
             let mut composed = frame.to_ratatui_buffer()?;
@@ -559,7 +573,8 @@ impl ClientShellState {
             frame.replace_from_ratatui_buffer_preserving_effects(&composed, cursor);
         }
         self.hits.popup = None;
-        if let Some(popup) = surface.popup.as_deref() {
+        if self.shepherd_section.is_none() {
+            if let Some(popup) = surface.popup.as_deref() {
             let width = popup.width.map(client_popup_size);
             let height = popup.height.map(client_popup_size);
             if let Some(geometry) =
@@ -593,6 +608,7 @@ impl ClientShellState {
                     pixel_height: popup.pixel_height,
                 });
             }
+        }
         }
         if !layout.mobile_header.is_empty()
             && self.mode == ClientShellMode::Navigate

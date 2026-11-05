@@ -140,6 +140,7 @@ pub(super) struct ShellHitMap {
     pub(super) release_notes_scroll_metrics: Option<crate::pane::ScrollMetrics>,
     pub(super) release_notes_max_scroll: usize,
     pub(super) shepherd_hits: Option<crate::shepherd::ShepherdOverlayHits>,
+    pub(super) shepherd_section_hits: Option<crate::shepherd::ui::ShepherdSectionHits>,
 }
 
 #[derive(Clone)]
@@ -919,6 +920,7 @@ pub(crate) struct ClientShellState {
     pub(super) pending_workspace_highlight: Option<PendingWorkspaceHighlight>,
     pub(super) reveal_navigation_workspace: bool,
     pub(super) overlay: Option<ClientShellOverlay>,
+    pub(super) shepherd_section: Option<crate::shepherd::ui::ShepherdSectionState>,
     pub(super) previous_pane_id: Option<String>,
     pub(super) pane_mouse_gesture: Option<ClientPaneMouseGesture>,
     pub(super) link_hover: Option<super::link_hover::LinkHover>,
@@ -1093,6 +1095,7 @@ impl ClientShellState {
             pending_workspace_highlight: None,
             reveal_navigation_workspace: false,
             overlay,
+            shepherd_section: None,
             previous_pane_id: None,
             pane_mouse_gesture: None,
             link_hover: None,

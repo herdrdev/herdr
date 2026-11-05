@@ -64,7 +64,7 @@ impl ClientShellState {
                 }
                 if action == crate::input::KeybindAction::Shepherd {
                     if self.config.shepherd_enabled {
-                        self.open_shepherd_overlay(outcome);
+                        self.toggle_shepherd_section(outcome);
                         outcome.repaint = true;
                     }
                     return;

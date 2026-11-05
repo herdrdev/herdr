@@ -18,6 +18,13 @@ pub mod runs;
 pub mod service;
 pub mod skills;
 pub mod tasks;
+pub mod ui;
+
+#[allow(unused_imports)]
+pub use ui::{
+    handle_shepherd_section_mouse, render_shepherd_section, ShepherdSectionAction,
+    ShepherdSectionHits, ShepherdSectionOutcome, ShepherdSectionState, ShepherdSectionTab,
+};
 
 #[allow(unused_imports)]
 pub use git::{

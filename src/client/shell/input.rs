@@ -639,6 +639,10 @@ impl ClientShellState {
             self.route_overlay_key(key, outcome);
             return None;
         }
+        if self.shepherd_section.is_some() {
+            self.route_shepherd_section_key(key, outcome);
+            return None;
+        }
         if matches!(key.code, KeyCode::Modifier(_)) {
             return None;
         }

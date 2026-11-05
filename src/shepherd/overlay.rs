@@ -30,44 +30,31 @@ use std::path::{Path, PathBuf};
 use super::{
     git::{render_shepherd_git_panel, ShepherdGitAction, ShepherdGitRender, ShepherdGitState},
     panel::{contains_point, AgentsSubModal, ShepherdAgentsAction},
-    runs::{
-        render_shepherd_runs_panel, GateKind, RunsSubModal, ShepherdRunsAction, ShepherdRunsRender,
-        ShepherdRunsState,
-    },
     skills::{
         render_shepherd_skills_panel, ShepherdSkillsAction, ShepherdSkillsRender,
         ShepherdSkillsState, SkillsSubModal,
-    },
-    tasks::{
-        render_shepherd_tasks_panel, ShepherdTasksAction, ShepherdTasksRender, ShepherdTasksState,
-        TasksSubModal,
     },
 };
 use crate::app::state::Palette;
 
 pub const SHEPHERD_OVERLAY_MODAL_SIZE: (u16, u16) = (96, 28);
 
-/// Tabs available in the Shepherd overlay (Tareas / Runs / Skills / Git).
+/// Tabs available in the temporary Shepherd overlay (Skills / Git).
+/// Note (F10b): Tareas and Runs have been migrated to the in-place Shepherd section (Option D).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ShepherdTab {
-    Tasks,
-    Runs,
     Skills,
     Git,
 }
 
 impl ShepherdTab {
-    pub const ALL: [ShepherdTab; 4] = [
-        ShepherdTab::Tasks,
-        ShepherdTab::Runs,
+    pub const ALL: [ShepherdTab; 2] = [
         ShepherdTab::Skills,
         ShepherdTab::Git,
     ];
 
     pub fn label(&self) -> &'static str {
         match self {
-            ShepherdTab::Tasks => "Tareas",
-            ShepherdTab::Runs => "Runs",
             ShepherdTab::Skills => "Skills",
             ShepherdTab::Git => "Git",
         }
@@ -75,29 +62,23 @@ impl ShepherdTab {
 
     pub fn index(&self) -> usize {
         match self {
-            ShepherdTab::Tasks => 0,
-            ShepherdTab::Runs => 1,
-            ShepherdTab::Skills => 2,
-            ShepherdTab::Git => 3,
+            ShepherdTab::Skills => 0,
+            ShepherdTab::Git => 1,
         }
     }
 
     pub fn from_index(index: usize) -> Self {
-        match index % 4 {
-            0 => ShepherdTab::Tasks,
-            1 => ShepherdTab::Runs,
-            2 => ShepherdTab::Skills,
+        match index % 2 {
+            0 => ShepherdTab::Skills,
             _ => ShepherdTab::Git,
         }
     }
 }
 
-/// Pure presentation state of the Shepherd overlay (Tareas / Runs / Skills / Git).
+/// Pure presentation state of the temporary Shepherd overlay (Skills / Git).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ClientShepherdOverlay {
     pub active_tab: ShepherdTab,
-    pub tasks: ShepherdTasksState,
-    pub runs: ShepherdRunsState,
     pub skills: ShepherdSkillsState,
     pub git: ShepherdGitState,
     pub status_message: Option<String>,
@@ -108,13 +89,11 @@ pub struct ClientShepherdOverlay {
 impl Default for ClientShepherdOverlay {
     fn default() -> Self {
         Self {
-            active_tab: ShepherdTab::Tasks,
-            tasks: ShepherdTasksState {
+            active_tab: ShepherdTab::Skills,
+            skills: ShepherdSkillsState {
                 open: true,
-                ..ShepherdTasksState::default()
+                ..ShepherdSkillsState::default()
             },
-            runs: ShepherdRunsState::default(),
-            skills: ShepherdSkillsState::default(),
             git: ShepherdGitState::default(),
             status_message: None,
             loading: false,
@@ -130,26 +109,22 @@ impl ClientShepherdOverlay {
 
     pub fn select_tab(&mut self, tab: ShepherdTab) {
         self.active_tab = tab;
-        self.tasks.open = tab == ShepherdTab::Tasks;
-        self.runs.open = tab == ShepherdTab::Runs;
         self.skills.open = tab == ShepherdTab::Skills;
         self.git.open = tab == ShepherdTab::Git;
     }
 
     pub fn next_tab(&mut self) {
-        let next = (self.active_tab.index() + 1) % 4;
+        let next = (self.active_tab.index() + 1) % 2;
         self.select_tab(ShepherdTab::from_index(next));
     }
 
     pub fn prev_tab(&mut self) {
-        let prev = (self.active_tab.index() + 3) % 4;
+        let prev = (self.active_tab.index() + 1) % 2;
         self.select_tab(ShepherdTab::from_index(prev));
     }
 
     pub fn has_active_submodal(&self) -> bool {
         match self.active_tab {
-            ShepherdTab::Tasks => self.tasks.sub_modal != TasksSubModal::None,
-            ShepherdTab::Runs => self.runs.sub_modal != RunsSubModal::None,
             ShepherdTab::Skills => self.skills.sub_modal != SkillsSubModal::None,
             ShepherdTab::Git => false,
         }
@@ -157,22 +132,6 @@ impl ClientShepherdOverlay {
 
     pub fn cancel_active_submodal(&mut self) -> bool {
         match self.active_tab {
-            ShepherdTab::Tasks => {
-                if self.tasks.sub_modal != TasksSubModal::None {
-                    self.tasks.sub_modal = TasksSubModal::None;
-                    true
-                } else {
-                    false
-                }
-            }
-            ShepherdTab::Runs => {
-                if self.runs.sub_modal != RunsSubModal::None {
-                    self.runs.sub_modal = RunsSubModal::None;
-                    true
-                } else {
-                    false
-                }
-            }
             ShepherdTab::Skills => {
                 if self.skills.sub_modal != SkillsSubModal::None {
                     self.skills.sub_modal = SkillsSubModal::None;
@@ -207,8 +166,6 @@ impl ClientShepherdAgentModal {
 /// Active panel rendered geometry saved for mouse click delegation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ActivePanelRender {
-    Tasks(ShepherdTasksRender),
-    Runs(ShepherdRunsRender),
     Skills(ShepherdSkillsRender),
     Git(ShepherdGitRender),
 }
@@ -428,14 +385,6 @@ pub fn render_shepherd_overlay(
 
     // Render active tab view into content_area and store its rendered layout
     let active_render = match overlay.active_tab {
-        ShepherdTab::Tasks => {
-            render_shepherd_tasks_panel(buffer, content_area, &overlay.tasks, palette)
-                .map(ActivePanelRender::Tasks)
-        }
-        ShepherdTab::Runs => {
-            render_shepherd_runs_panel(buffer, content_area, &overlay.runs, palette)
-                .map(ActivePanelRender::Runs)
-        }
         ShepherdTab::Skills => {
             render_shepherd_skills_panel(buffer, content_area, &overlay.skills, palette)
                 .map(ActivePanelRender::Skills)
@@ -491,11 +440,6 @@ pub fn route_shepherd_key(
 
     // 2. Tab switching with Tab / Shift+Tab or Left / Right (when no submodal text editor is active)
     let is_text_input = match overlay.active_tab {
-        ShepherdTab::Tasks => matches!(
-            overlay.tasks.sub_modal,
-            TasksSubModal::Create(_) | TasksSubModal::ImportGh(_)
-        ),
-        ShepherdTab::Runs => false,
         ShepherdTab::Skills => matches!(overlay.skills.sub_modal, SkillsSubModal::Create(_)),
         ShepherdTab::Git => false,
     };
@@ -527,97 +471,6 @@ pub fn route_shepherd_key(
 
     // 3. Delegate to the active tab's view
     match overlay.active_tab {
-        ShepherdTab::Tasks => {
-            let action = overlay.tasks.handle_key(key_event);
-            if let Some(action) = action.or_else(|| overlay.tasks.last_action.take()) {
-                match action {
-                    ShepherdTasksAction::OpenEditor { task_id, file_path } => {
-                        dispatcher.open_editor(task_id, &file_path);
-                        return ShepherdKeyOutcome::OpenEditor { task_id, file_path };
-                    }
-                    ShepherdTasksAction::CreateTask {
-                        title,
-                        description,
-                        criteria,
-                        attachments,
-                    } => {
-                        overlay.last_dispatched = Some(format!("create_task:{title}"));
-                        let attach_strings: Vec<String> = attachments
-                            .into_iter()
-                            .map(|p| p.display().to_string())
-                            .collect();
-                        dispatcher.dispatch_call(
-                            "create_task",
-                            json!({
-                                "title": title,
-                                "description": description,
-                                "criteria": criteria,
-                                "attachments": attach_strings,
-                            }),
-                        );
-                    }
-                    ShepherdTasksAction::ImportGhIssue { issue_ref } => {
-                        overlay.last_dispatched = Some(format!("import_task:{issue_ref}"));
-                        dispatcher.dispatch_call("import_task", json!({ "issue_ref": issue_ref }));
-                    }
-                    ShepherdTasksAction::ArchiveTask { task_id } => {
-                        overlay.last_dispatched = Some(format!("archive_task:{task_id}"));
-                        dispatcher.dispatch_call("archive_task", json!({ "id": task_id }));
-                    }
-                }
-            }
-            ShepherdKeyOutcome::Handled
-        }
-
-        ShepherdTab::Runs => {
-            let action = overlay.runs.handle_key(key_event);
-            if let Some(action) = action.or_else(|| overlay.runs.last_action.take()) {
-                match action {
-                    ShepherdRunsAction::LaunchOrResume { task_id, options } => {
-                        overlay.last_dispatched = Some(format!("run:{task_id}"));
-                        dispatcher.dispatch_call(
-                            "run",
-                            json!({
-                                "task": task_id.to_string(),
-                                "auto_push": options.auto_push,
-                                "replan": options.replan,
-                            }),
-                        );
-                    }
-                    ShepherdRunsAction::CancelRun { task_id } => {
-                        overlay.last_dispatched = Some(format!("cancel_run:{task_id}"));
-                        dispatcher
-                            .dispatch_call("cancel_run", json!({ "task": task_id.to_string() }));
-                    }
-                    ShepherdRunsAction::ApproveGate { task_id, gate } => {
-                        let target = match gate {
-                            GateKind::PlanApproval => "plan".to_string(),
-                            GateKind::PushAndPr { subtask } => format!("{subtask}"),
-                        };
-                        overlay.last_dispatched = Some(format!("approve:{task_id}:{target}"));
-                        dispatcher.dispatch_call(
-                            "approve",
-                            json!({ "task": task_id.to_string(), "target": target }),
-                        );
-                        dispatcher.dispatch_call("runs", json!({}));
-                    }
-                    ShepherdRunsAction::RejectGate { task_id, gate } => {
-                        let target = match gate {
-                            GateKind::PlanApproval => "plan".to_string(),
-                            GateKind::PushAndPr { subtask } => format!("{subtask}"),
-                        };
-                        overlay.last_dispatched = Some(format!("reject:{task_id}:{target}"));
-                        dispatcher.dispatch_call(
-                            "reject",
-                            json!({ "task": task_id.to_string(), "target": target }),
-                        );
-                        dispatcher.dispatch_call("runs", json!({}));
-                    }
-                }
-            }
-            ShepherdKeyOutcome::Handled
-        }
-
         ShepherdTab::Skills => {
             let action = overlay.skills.handle_key(key_event);
             if let Some(action) = action.or_else(|| overlay.skills.last_action.take()) {
@@ -802,19 +655,6 @@ pub fn handle_shepherd_mouse_click(
     // Click inside content area: delegate to active view's mouse handling
     if contains_point(hits.content, point.0, point.1) {
         match (overlay.active_tab, &hits.panel) {
-            (ShepherdTab::Tasks, Some(ActivePanelRender::Tasks(rendered))) => {
-                if let Some(ShepherdTasksAction::OpenEditor { task_id, file_path }) =
-                    overlay.tasks.handle_click(point.0, point.1, rendered)
-                {
-                    dispatcher.open_editor(task_id, &file_path);
-                    return ShepherdClickOutcome::OpenEditor { task_id, file_path };
-                }
-                return ShepherdClickOutcome::Handled;
-            }
-            (ShepherdTab::Runs, Some(ActivePanelRender::Runs(rendered))) => {
-                overlay.runs.handle_click(point.0, point.1, rendered);
-                return ShepherdClickOutcome::Handled;
-            }
             (ShepherdTab::Skills, Some(ActivePanelRender::Skills(rendered))) => {
                 overlay.skills.handle_click(point.0, point.1, rendered);
                 return ShepherdClickOutcome::Handled;
@@ -843,11 +683,7 @@ pub fn handle_shepherd_mouse_click(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::shepherd::{
-        runs::{GateKind, RunStatus, ShepherdRunRow},
-        skills::{AgentSkillItem, CatalogSkillItem, SkillsViewMode},
-        tasks::ShepherdTaskRow,
-    };
+    use crate::shepherd::skills::{AgentSkillItem, CatalogSkillItem, SkillsViewMode};
     use shepherd_core::skills::{Level, Scope};
 
     fn test_palette() -> Palette {
@@ -882,9 +718,9 @@ mod tests {
         let mut overlay = ClientShepherdOverlay::default();
         let mut dispatcher = FakeShepherdDispatcher::default();
 
-        assert_eq!(overlay.active_tab, ShepherdTab::Tasks);
+        assert_eq!(overlay.active_tab, ShepherdTab::Skills);
 
-        // Tab -> Runs
+        // Tab -> Git (dispatches git_status)
         let outcome = route_shepherd_key(
             &mut overlay,
             KeyCode::Tab,
@@ -892,9 +728,10 @@ mod tests {
             &mut dispatcher,
         );
         assert_eq!(outcome, ShepherdKeyOutcome::Handled);
-        assert_eq!(overlay.active_tab, ShepherdTab::Runs);
+        assert_eq!(overlay.active_tab, ShepherdTab::Git);
+        assert!(dispatcher.calls.iter().any(|(op, _)| op == "git_status"));
 
-        // Tab -> Skills
+        // Tab wraps -> Skills
         route_shepherd_key(
             &mut overlay,
             KeyCode::Tab,
@@ -902,25 +739,6 @@ mod tests {
             &mut dispatcher,
         );
         assert_eq!(overlay.active_tab, ShepherdTab::Skills);
-
-        // Tab -> Git (dispatches git_status)
-        route_shepherd_key(
-            &mut overlay,
-            KeyCode::Tab,
-            KeyModifiers::empty(),
-            &mut dispatcher,
-        );
-        assert_eq!(overlay.active_tab, ShepherdTab::Git);
-        assert!(dispatcher.calls.iter().any(|(op, _)| op == "git_status"));
-
-        // Tab wraps -> Tareas
-        route_shepherd_key(
-            &mut overlay,
-            KeyCode::Tab,
-            KeyModifiers::empty(),
-            &mut dispatcher,
-        );
-        assert_eq!(overlay.active_tab, ShepherdTab::Tasks);
 
         // BackTab wraps -> Git
         route_shepherd_key(
@@ -931,20 +749,20 @@ mod tests {
         );
         assert_eq!(overlay.active_tab, ShepherdTab::Git);
 
-        // Mouse click on tab
+        // Mouse click on Skills tab
         let mut buf = Buffer::empty(Rect::new(0, 0, 96, 28));
         let hits = render_shepherd_overlay(&mut buf, &overlay, &test_palette()).unwrap();
-        let (runs_rect, _) = hits
+        let (skills_rect, _) = hits
             .tabs
             .iter()
-            .find(|(_, t)| *t == ShepherdTab::Runs)
+            .find(|(_, t)| *t == ShepherdTab::Skills)
             .unwrap();
-        let click_point = (runs_rect.x, runs_rect.y);
+        let click_point = (skills_rect.x, skills_rect.y);
 
         let click_outcome =
             handle_shepherd_mouse_click(&mut overlay, click_point, &hits, &mut dispatcher);
         assert_eq!(click_outcome, ShepherdClickOutcome::Handled);
-        assert_eq!(overlay.active_tab, ShepherdTab::Runs);
+        assert_eq!(overlay.active_tab, ShepherdTab::Skills);
 
         // Mouse click on Git tab
         let (git_rect, _) = hits
@@ -979,13 +797,10 @@ mod tests {
 
         // The outer overlay frame contains " Shepherd " and the tabs
         assert!(text.contains(" Shepherd "));
-        assert!(text.contains(" Tareas "));
-        assert!(text.contains(" Runs "));
         assert!(text.contains(" Skills "));
         assert!(text.contains(" Git "));
 
         // Single frame: the redundant inner title and "esc close" button must NOT be present
-        assert!(!text.contains("Shepherd Tareas"));
         assert!(!text.contains("esc close"));
     }
 
@@ -994,8 +809,12 @@ mod tests {
         let mut overlay = ClientShepherdOverlay::default();
         let mut dispatcher = FakeShepherdDispatcher::default();
 
-        // Open create task submodal
-        overlay.tasks.open_create_modal();
+        // Open skills confirm restore submodal
+        overlay.skills.sub_modal = SkillsSubModal::ConfirmRestore {
+            agent_id: "agent-1".into(),
+            skill_name: "test-skill".into(),
+            message: "Restore?".into(),
+        };
         assert!(overlay.has_active_submodal());
 
         // First Esc: cancels submodal
@@ -1016,194 +835,6 @@ mod tests {
             &mut dispatcher,
         );
         assert_eq!(res2, ShepherdKeyOutcome::CloseOverlay);
-    }
-
-    #[test]
-    fn test_destructive_guard_archive_task() {
-        let mut overlay = ClientShepherdOverlay::default();
-        let mut dispatcher = FakeShepherdDispatcher::default();
-        overlay.select_tab(ShepherdTab::Tasks);
-
-        overlay.tasks.tasks = vec![ShepherdTaskRow {
-            id: 101,
-            title: "Task 101".into(),
-            state: "completed".into(),
-            branch: "task/101".into(),
-            pr: 12,
-            issue_url: None,
-            issue_markdown: String::new(),
-            criteria: Vec::new(),
-            description: "Done".into(),
-            spec: String::new(),
-            attachments: Vec::new(),
-            directory: PathBuf::from("/tmp/t101"),
-        }];
-
-        // Press 'a' to archive
-        route_shepherd_key(
-            &mut overlay,
-            KeyCode::Char('a'),
-            KeyModifiers::empty(),
-            &mut dispatcher,
-        );
-        assert!(matches!(
-            overlay.tasks.sub_modal,
-            TasksSubModal::ConfirmArchive { .. }
-        ));
-        assert!(
-            dispatcher.calls.is_empty(),
-            "Archive must NOT be dispatched without confirmation"
-        );
-
-        // Confirm with Enter
-        route_shepherd_key(
-            &mut overlay,
-            KeyCode::Enter,
-            KeyModifiers::empty(),
-            &mut dispatcher,
-        );
-        assert_eq!(dispatcher.calls.len(), 1);
-        assert_eq!(dispatcher.calls[0].0, "archive_task");
-        assert_eq!(dispatcher.calls[0].1["id"], 101);
-    }
-
-    #[test]
-    fn test_destructive_guard_cancel_run() {
-        let mut overlay = ClientShepherdOverlay::default();
-        let mut dispatcher = FakeShepherdDispatcher::default();
-        overlay.select_tab(ShepherdTab::Runs);
-
-        overlay.runs.runs = vec![ShepherdRunRow {
-            task_id: 202,
-            task_title: "Workflow Run".into(),
-            status: RunStatus::Running,
-            current_stage: "Coding".into(),
-            has_saved_plan: true,
-            pending_gate: None,
-            active_agents: vec!["coder-1".into()],
-            subtasks_progress: (1, 3),
-        }];
-
-        // Press 'c' to cancel run
-        route_shepherd_key(
-            &mut overlay,
-            KeyCode::Char('c'),
-            KeyModifiers::empty(),
-            &mut dispatcher,
-        );
-        assert!(matches!(
-            overlay.runs.sub_modal,
-            RunsSubModal::ConfirmCancelRun { .. }
-        ));
-        assert!(
-            dispatcher.calls.is_empty(),
-            "Cancel run must NOT be dispatched without confirmation"
-        );
-
-        // Confirm with Enter
-        route_shepherd_key(
-            &mut overlay,
-            KeyCode::Enter,
-            KeyModifiers::empty(),
-            &mut dispatcher,
-        );
-        assert_eq!(dispatcher.calls.len(), 1);
-        assert_eq!(dispatcher.calls[0].0, "cancel_run");
-        assert_eq!(dispatcher.calls[0].1["task"], "202");
-    }
-
-    #[test]
-    fn test_publishing_guard_approve_gate() {
-        let mut overlay = ClientShepherdOverlay::default();
-        let mut dispatcher = FakeShepherdDispatcher::default();
-        overlay.select_tab(ShepherdTab::Runs);
-
-        overlay.runs.runs = vec![ShepherdRunRow {
-            task_id: 303,
-            task_title: "PR ready".into(),
-            status: RunStatus::Running,
-            current_stage: "Review".into(),
-            has_saved_plan: true,
-            pending_gate: Some(GateKind::PushAndPr { subtask: 1 }),
-            active_agents: vec![],
-            subtasks_progress: (1, 1),
-        }];
-
-        // Press 'a' to open approve gate confirm (which triggers push & PR)
-        route_shepherd_key(
-            &mut overlay,
-            KeyCode::Char('a'),
-            KeyModifiers::empty(),
-            &mut dispatcher,
-        );
-        assert!(matches!(
-            overlay.runs.sub_modal,
-            RunsSubModal::ConfirmApproveGate { .. }
-        ));
-        assert!(
-            dispatcher.calls.is_empty(),
-            "Push & PR must NEVER be dispatched without confirmation"
-        );
-
-        // Confirm with Enter
-        route_shepherd_key(
-            &mut overlay,
-            KeyCode::Enter,
-            KeyModifiers::empty(),
-            &mut dispatcher,
-        );
-        assert_eq!(dispatcher.calls.len(), 2);
-        assert_eq!(dispatcher.calls[0].0, "approve");
-        assert_eq!(dispatcher.calls[0].1["task"], "303");
-        assert_eq!(dispatcher.calls[0].1["target"], "1");
-        assert_eq!(dispatcher.calls[1].0, "runs");
-    }
-
-    #[test]
-    fn test_publishing_guard_reject_gate() {
-        let mut overlay = ClientShepherdOverlay::default();
-        let mut dispatcher = FakeShepherdDispatcher::default();
-        overlay.select_tab(ShepherdTab::Runs);
-
-        overlay.runs.runs = vec![ShepherdRunRow {
-            task_id: 304,
-            task_title: "PR rejected".into(),
-            status: RunStatus::Running,
-            current_stage: "Review".into(),
-            has_saved_plan: true,
-            pending_gate: Some(GateKind::PushAndPr { subtask: 1 }),
-            active_agents: vec![],
-            subtasks_progress: (1, 1),
-        }];
-
-        // Press 'd' to open reject gate confirm
-        route_shepherd_key(
-            &mut overlay,
-            KeyCode::Char('d'),
-            KeyModifiers::empty(),
-            &mut dispatcher,
-        );
-        assert!(matches!(
-            overlay.runs.sub_modal,
-            RunsSubModal::ConfirmRejectGate { .. }
-        ));
-        assert!(
-            dispatcher.calls.is_empty(),
-            "Reject must NOT be dispatched without confirmation"
-        );
-
-        // Confirm with Enter
-        route_shepherd_key(
-            &mut overlay,
-            KeyCode::Enter,
-            KeyModifiers::empty(),
-            &mut dispatcher,
-        );
-        assert_eq!(dispatcher.calls.len(), 2);
-        assert_eq!(dispatcher.calls[0].0, "reject");
-        assert_eq!(dispatcher.calls[0].1["task"], "304");
-        assert_eq!(dispatcher.calls[0].1["target"], "1");
-        assert_eq!(dispatcher.calls[1].0, "runs");
     }
 
     #[test]
@@ -1294,42 +925,6 @@ mod tests {
         assert_eq!(dispatcher.calls.len(), 1);
         assert_eq!(dispatcher.calls[0].0, "skills_restore");
         assert_eq!(dispatcher.calls[0].1["skill"], "git-review");
-    }
-
-    #[test]
-    fn test_open_editor_in_new_pane_action() {
-        let mut overlay = ClientShepherdOverlay::default();
-        let mut dispatcher = FakeShepherdDispatcher::default();
-        overlay.select_tab(ShepherdTab::Tasks);
-
-        overlay.tasks.tasks = vec![ShepherdTaskRow {
-            id: 404,
-            title: "Task with spec".into(),
-            state: "open".into(),
-            branch: "task/404".into(),
-            pr: 0,
-            issue_url: None,
-            issue_markdown: String::new(),
-            criteria: Vec::new(),
-            description: "Some spec".into(),
-            spec: String::new(),
-            attachments: Vec::new(),
-            directory: PathBuf::from("/tmp"),
-        }];
-
-        // Press 'e' on task
-        let outcome = route_shepherd_key(
-            &mut overlay,
-            KeyCode::Char('e'),
-            KeyModifiers::empty(),
-            &mut dispatcher,
-        );
-        assert!(matches!(
-            outcome,
-            ShepherdKeyOutcome::OpenEditor { task_id: 404, .. }
-        ));
-        assert_eq!(dispatcher.opened_editors.len(), 1);
-        assert_eq!(dispatcher.opened_editors[0].0, 404);
     }
 
     #[test]

@@ -180,6 +180,251 @@ impl<'a> crate::shepherd::ShepherdActionDispatcher for ClientActionDispatcher<'a
 }
 
 impl ClientShellState {
+    pub(super) fn toggle_shepherd_section(&mut self, outcome: &mut ClientShellInput) {
+        if !self.config.shepherd_enabled {
+            return;
+        }
+        if self.shepherd_section.is_some() {
+            self.shepherd_section = None;
+            self.invalidate_pane_surface();
+        } else {
+            self.shepherd_section =
+                Some(crate::shepherd::ui::state::ShepherdSectionState::default());
+            self.refresh_shepherd_views(outcome);
+        }
+        outcome.repaint = true;
+    }
+
+    pub(super) fn open_shepherd_tab_overlay(
+        &mut self,
+        tab: crate::shepherd::overlay::ShepherdTab,
+        outcome: &mut ClientShellInput,
+    ) {
+        if !self.config.shepherd_enabled {
+            return;
+        }
+        let mut overlay = crate::shepherd::ClientShepherdOverlay::default();
+        overlay.select_tab(tab);
+        self.overlay = Some(ClientShellOverlay::Shepherd(overlay));
+        self.refresh_shepherd_views(outcome);
+        outcome.repaint = true;
+    }
+
+    pub(super) fn route_shepherd_section_key(
+        &mut self,
+        key: &crate::input::TerminalKey,
+        outcome: &mut ClientShellInput,
+    ) -> bool {
+        let Some(ref mut section) = self.shepherd_section else {
+            return false;
+        };
+        let key_event = crossterm::event::KeyEvent::new(key.code, key.modifiers);
+        let section_outcome = section.handle_key(&key_event);
+        self.dispatch_shepherd_section_outcome(section_outcome, outcome);
+        true
+    }
+
+    pub(super) fn route_shepherd_section_mouse(
+        &mut self,
+        mouse: crossterm::event::MouseEvent,
+        point: (u16, u16),
+        outcome: &mut ClientShellInput,
+    ) -> bool {
+        let Some(ref mut section) = self.shepherd_section else {
+            return false;
+        };
+        let Some(hits) = self.hits.shepherd_section_hits.clone() else {
+            return false;
+        };
+        // If sidebar is visible and click is on the sidebar, do not intercept
+        if !self.sidebar_collapsed && point.0 < self.sidebar_width {
+            return false;
+        }
+        if super::contains(self.hits.sidebar_toggle, point) {
+            return false;
+        }
+        let section_outcome =
+            crate::shepherd::ui::handle_shepherd_section_mouse(section, &hits, mouse);
+        self.dispatch_shepherd_section_outcome(section_outcome, outcome);
+        true
+    }
+
+    pub(super) fn dispatch_shepherd_section_outcome(
+        &mut self,
+        section_outcome: crate::shepherd::ui::state::ShepherdSectionOutcome,
+        outcome: &mut ClientShellInput,
+    ) {
+        use crate::shepherd::ui::state::{ShepherdSectionAction, ShepherdSectionOutcome};
+        match section_outcome {
+            ShepherdSectionOutcome::Close => {
+                self.shepherd_section = None;
+                self.invalidate_pane_surface();
+                outcome.repaint = true;
+            }
+            ShepherdSectionOutcome::Handled => {
+                outcome.repaint = true;
+            }
+            ShepherdSectionOutcome::Action(action) => {
+                match action {
+                    ShepherdSectionAction::Tasks(tasks_action) => {
+                        self.dispatch_shepherd_tasks_action(tasks_action, outcome);
+                    }
+                    ShepherdSectionAction::Runs(runs_action) => {
+                        self.dispatch_shepherd_runs_action(runs_action, outcome);
+                    }
+                    ShepherdSectionAction::OpenLegacyOverlay(tab) => {
+                        self.open_shepherd_tab_overlay(tab, outcome);
+                    }
+                }
+                outcome.repaint = true;
+            }
+            ShepherdSectionOutcome::Ignored => {}
+        }
+    }
+
+    pub(super) fn dispatch_shepherd_tasks_action(
+        &mut self,
+        action: crate::shepherd::tasks::ShepherdTasksAction,
+        outcome: &mut ClientShellInput,
+    ) {
+        use crate::shepherd::tasks::ShepherdTasksAction;
+        match action {
+            ShepherdTasksAction::OpenEditor { task_id, file_path } => {
+                let mut d = ClientActionDispatcher {
+                    state: self,
+                    outcome,
+                };
+                d.open_editor(task_id, &file_path);
+            }
+            ShepherdTasksAction::CreateTask {
+                title,
+                description,
+                criteria,
+                attachments,
+            } => {
+                let attach_strings: Vec<String> =
+                    attachments.into_iter().map(|p| p.display().to_string()).collect();
+                let method = shepherd_op_to_method(
+                    "create_task",
+                    serde_json::json!({
+                        "title": title,
+                        "description": description,
+                        "criteria": criteria,
+                        "attachments": attach_strings,
+                    }),
+                );
+                self.push_endpoint_method_with_kind(
+                    method,
+                    PendingEndpointKind::ShepherdCall {
+                        op: "create_task".to_string(),
+                    },
+                    outcome,
+                );
+            }
+            ShepherdTasksAction::ImportGhIssue { issue_ref } => {
+                let method = shepherd_op_to_method(
+                    "import_task",
+                    serde_json::json!({ "issue_ref": issue_ref }),
+                );
+                self.push_endpoint_method_with_kind(
+                    method,
+                    PendingEndpointKind::ShepherdCall {
+                        op: "import_task".to_string(),
+                    },
+                    outcome,
+                );
+            }
+            ShepherdTasksAction::ArchiveTask { task_id } => {
+                let method = shepherd_op_to_method(
+                    "archive_task",
+                    serde_json::json!({ "id": task_id }),
+                );
+                self.push_endpoint_method_with_kind(
+                    method,
+                    PendingEndpointKind::ShepherdCall {
+                        op: "archive_task".to_string(),
+                    },
+                    outcome,
+                );
+            }
+        }
+    }
+
+    pub(super) fn dispatch_shepherd_runs_action(
+        &mut self,
+        action: crate::shepherd::runs::ShepherdRunsAction,
+        outcome: &mut ClientShellInput,
+    ) {
+        use crate::shepherd::runs::{GateKind, ShepherdRunsAction};
+        match action {
+            ShepherdRunsAction::LaunchOrResume { task_id, options } => {
+                let method = shepherd_op_to_method(
+                    "run",
+                    serde_json::json!({
+                        "task": task_id.to_string(),
+                        "auto_push": options.auto_push,
+                        "replan": options.replan,
+                    }),
+                );
+                self.push_endpoint_method_with_kind(
+                    method,
+                    PendingEndpointKind::ShepherdCall {
+                        op: "run".to_string(),
+                    },
+                    outcome,
+                );
+            }
+            ShepherdRunsAction::CancelRun { task_id } => {
+                let method = shepherd_op_to_method(
+                    "cancel_run",
+                    serde_json::json!({ "task": task_id.to_string() }),
+                );
+                self.push_endpoint_method_with_kind(
+                    method,
+                    PendingEndpointKind::ShepherdCall {
+                        op: "cancel_run".to_string(),
+                    },
+                    outcome,
+                );
+            }
+            ShepherdRunsAction::ApproveGate { task_id, gate } => {
+                let target = match gate {
+                    GateKind::PlanApproval => "plan".to_string(),
+                    GateKind::PushAndPr { subtask } => format!("subtask:{subtask}"),
+                };
+                let method = shepherd_op_to_method(
+                    "approve",
+                    serde_json::json!({ "task": task_id.to_string(), "target": target }),
+                );
+                self.push_endpoint_method_with_kind(
+                    method,
+                    PendingEndpointKind::ShepherdCall {
+                        op: "approve".to_string(),
+                    },
+                    outcome,
+                );
+            }
+            ShepherdRunsAction::RejectGate { task_id, gate } => {
+                let target = match gate {
+                    GateKind::PlanApproval => "plan".to_string(),
+                    GateKind::PushAndPr { subtask } => format!("subtask:{subtask}"),
+                };
+                let method = shepherd_op_to_method(
+                    "reject_gate",
+                    serde_json::json!({ "task": task_id.to_string(), "target": target }),
+                );
+                self.push_endpoint_method_with_kind(
+                    method,
+                    PendingEndpointKind::ShepherdCall {
+                        op: "reject_gate".to_string(),
+                    },
+                    outcome,
+                );
+            }
+        }
+    }
+
+    #[allow(dead_code)]
     pub(super) fn open_shepherd_overlay(&mut self, outcome: &mut ClientShellInput) {
         if !self.config.shepherd_enabled {
             return;
@@ -514,20 +759,23 @@ impl ClientShellState {
         result: Result<crate::api::schema::ResponseResult, ClientShellEndpointError>,
         outcome: &mut ClientShellInput,
     ) {
-        let Some(ClientShellOverlay::Shepherd(ref mut overlay)) = self.overlay else {
+        if self.overlay.is_none() && self.shepherd_section.is_none() {
             return;
-        };
+        }
 
         match result {
             Ok(crate::api::schema::ResponseResult::ShepherdTaskList { tasks }) => {
-                overlay.tasks.tasks = tasks
+                let rows: Vec<crate::shepherd::tasks::ShepherdTaskRow> = tasks
                     .iter()
                     .map(crate::shepherd::tasks::ShepherdTaskRow::from_created_task)
                     .collect();
+                if let Some(ref mut section) = self.shepherd_section {
+                    section.tasks.tasks = rows;
+                }
                 outcome.repaint = true;
             }
             Ok(crate::api::schema::ResponseResult::ShepherdRunList { runs }) => {
-                overlay.runs.runs = runs
+                let rows: Vec<crate::shepherd::runs::ShepherdRunRow> = runs
                     .iter()
                     .filter_map(|r| {
                         serde_json::to_value(r)
@@ -535,25 +783,38 @@ impl ClientShellState {
                             .and_then(|v| crate::shepherd::runs::ShepherdRunRow::from_value(&v))
                     })
                     .collect();
-                overlay.status_message = None;
+                if let Some(ref mut section) = self.shepherd_section {
+                    section.runs.runs = rows;
+                    section.status_message = None;
+                }
                 outcome.repaint = true;
             }
             Ok(crate::api::schema::ResponseResult::ShepherdSkillList { skills }) => {
-                overlay.skills.catalog_skills = skills
-                    .iter()
-                    .map(crate::shepherd::skills::CatalogSkillItem::from)
-                    .collect();
-                overlay.status_message = None;
+                if let Some(ClientShellOverlay::Shepherd(ref mut overlay)) = self.overlay {
+                    overlay.skills.catalog_skills = skills
+                        .iter()
+                        .map(crate::shepherd::skills::CatalogSkillItem::from)
+                        .collect();
+                    overlay.status_message = None;
+                }
                 outcome.repaint = true;
             }
             Ok(crate::api::schema::ResponseResult::ShepherdGitStatus { status }) => {
-                overlay.git.update_from_status(&status);
-                overlay.status_message = None;
+                if let Some(ClientShellOverlay::Shepherd(ref mut overlay)) = self.overlay {
+                    overlay.git.update_from_status(&status);
+                    overlay.status_message = None;
+                }
                 outcome.repaint = true;
             }
             Ok(crate::api::schema::ResponseResult::ShepherdTaskCreated { .. })
             | Ok(crate::api::schema::ResponseResult::ShepherdTaskArchived { .. }) => {
-                overlay.status_message = Some(format!("Tarea actualizada exitosamente ({op})"));
+                let msg = format!("Tarea actualizada exitosamente ({op})");
+                if let Some(ClientShellOverlay::Shepherd(ref mut overlay)) = self.overlay {
+                    overlay.status_message = Some(msg.clone());
+                }
+                if let Some(ref mut section) = self.shepherd_section {
+                    section.status_message = Some(msg);
+                }
                 self.refresh_shepherd_views(outcome);
                 outcome.repaint = true;
             }
@@ -565,7 +826,13 @@ impl ClientShellState {
             | Ok(crate::api::schema::ResponseResult::ShepherdPatternValidated { .. })
             | Ok(crate::api::schema::ResponseResult::ShepherdTopicCreated { .. })
             | Ok(crate::api::schema::ResponseResult::ShepherdMessagePublished { .. }) => {
-                overlay.status_message = Some(format!("Operación completada ({op})"));
+                let msg = format!("Operación completada ({op})");
+                if let Some(ClientShellOverlay::Shepherd(ref mut overlay)) = self.overlay {
+                    overlay.status_message = Some(msg.clone());
+                }
+                if let Some(ref mut section) = self.shepherd_section {
+                    section.status_message = Some(msg);
+                }
                 self.refresh_shepherd_views(outcome);
                 outcome.repaint = true;
             }
@@ -576,7 +843,13 @@ impl ClientShellState {
             | Ok(crate::api::schema::ResponseResult::ShepherdAgentReconciled { .. })
             | Ok(crate::api::schema::ResponseResult::ShepherdAgentResumed { .. })
             | Ok(crate::api::schema::ResponseResult::ShepherdAgentList { .. }) => {
-                overlay.status_message = Some(format!("Operación de agente completada ({op})"));
+                let msg = format!("Operación de agente completada ({op})");
+                if let Some(ClientShellOverlay::Shepherd(ref mut overlay)) = self.overlay {
+                    overlay.status_message = Some(msg.clone());
+                }
+                if let Some(ref mut section) = self.shepherd_section {
+                    section.status_message = Some(msg);
+                }
                 self.refresh_shepherd_views(outcome);
                 outcome.repaint = true;
             }
@@ -586,20 +859,26 @@ impl ClientShellState {
                         if let Ok(tasks) =
                             serde_json::from_value::<Vec<shepherd_core::CreatedTask>>(data.clone())
                         {
-                            overlay.tasks.tasks = tasks
+                            let rows: Vec<crate::shepherd::tasks::ShepherdTaskRow> = tasks
                                 .iter()
                                 .map(crate::shepherd::tasks::ShepherdTaskRow::from_created_task)
                                 .collect();
+                            if let Some(ref mut section) = self.shepherd_section {
+                                section.tasks.tasks = rows;
+                            }
                         }
                     }
                     "runs" => {
                         if let Some(arr) = data.as_array() {
-                            overlay.runs.runs = arr
+                            let rows: Vec<crate::shepherd::runs::ShepherdRunRow> = arr
                                 .iter()
                                 .filter_map(crate::shepherd::runs::ShepherdRunRow::from_value)
                                 .collect();
+                            if let Some(ref mut section) = self.shepherd_section {
+                                section.runs.runs = rows;
+                                section.status_message = None;
+                            }
                         }
-                        overlay.status_message = None;
                     }
                     "skills" => {
                         // If skills JSON is returned, update skills view
@@ -607,49 +886,86 @@ impl ClientShellState {
                             Vec<shepherd_core::skills::Skill>,
                         >(data.clone())
                         {
-                            overlay.skills.catalog_skills = skills
-                                .iter()
-                                .map(crate::shepherd::skills::CatalogSkillItem::from)
-                                .collect();
+                            if let Some(ClientShellOverlay::Shepherd(ref mut overlay)) =
+                                self.overlay
+                            {
+                                overlay.skills.catalog_skills = skills
+                                    .iter()
+                                    .map(crate::shepherd::skills::CatalogSkillItem::from)
+                                    .collect();
+                                overlay.status_message = None;
+                            }
                         }
-                        overlay.status_message = None;
                     }
                     "git_status" => {
                         if let Ok(status) = serde_json::from_value::<
                             shepherd_core::git::GitRepoStatus,
                         >(data.clone())
                         {
-                            overlay.git.update_from_status(&status);
+                            if let Some(ClientShellOverlay::Shepherd(ref mut overlay)) =
+                                self.overlay
+                            {
+                                overlay.git.update_from_status(&status);
+                                overlay.status_message = None;
+                            }
                         }
-                        overlay.status_message = None;
                     }
                     "archive_task" | "create_task" | "import_task" | "task_create"
                     | "task_archive" => {
-                        overlay.status_message =
-                            Some(format!("Tarea actualizada exitosamente ({op})"));
+                        let msg = format!("Tarea actualizada exitosamente ({op})");
+                        if let Some(ClientShellOverlay::Shepherd(ref mut overlay)) = self.overlay {
+                            overlay.status_message = Some(msg.clone());
+                        }
+                        if let Some(ref mut section) = self.shepherd_section {
+                            section.status_message = Some(msg);
+                        }
                         self.refresh_shepherd_views(outcome);
                     }
                     "run" | "approve" | "cancel_run" | "reject_gate" => {
-                        overlay.status_message = Some(format!("Operación completada ({op})"));
+                        let msg = format!("Operación completada ({op})");
+                        if let Some(ClientShellOverlay::Shepherd(ref mut overlay)) = self.overlay {
+                            overlay.status_message = Some(msg.clone());
+                        }
+                        if let Some(ref mut section) = self.shepherd_section {
+                            section.status_message = Some(msg);
+                        }
                         self.refresh_shepherd_views(outcome);
                     }
                     "skills_toggle" | "skills_restore" | "skills_create" | "skills_delete" => {
-                        overlay.status_message =
-                            Some(format!("Configuración de skills actualizada ({op})"));
+                        let msg = format!("Configuración de skills actualizada ({op})");
+                        if let Some(ClientShellOverlay::Shepherd(ref mut overlay)) = self.overlay {
+                            overlay.status_message = Some(msg);
+                        }
                         self.refresh_shepherd_views(outcome);
                     }
                     _ => {
-                        overlay.status_message = Some("Operación completada".to_string());
+                        if let Some(ClientShellOverlay::Shepherd(ref mut overlay)) = self.overlay {
+                            overlay.status_message = Some("Operación completada".to_string());
+                        }
+                        if let Some(ref mut section) = self.shepherd_section {
+                            section.status_message = Some("Operación completada".to_string());
+                        }
                     }
                 }
                 outcome.repaint = true;
             }
             Ok(_) => {
-                overlay.status_message = Some("Respuesta inesperada del servidor".to_string());
+                if let Some(ClientShellOverlay::Shepherd(ref mut overlay)) = self.overlay {
+                    overlay.status_message = Some("Respuesta inesperada del servidor".to_string());
+                }
+                if let Some(ref mut section) = self.shepherd_section {
+                    section.status_message = Some("Respuesta inesperada del servidor".to_string());
+                }
                 outcome.repaint = true;
             }
             Err(err) => {
-                overlay.status_message = Some(format!("Error: {}", err.message));
+                let msg = format!("Error: {}", err.message);
+                if let Some(ClientShellOverlay::Shepherd(ref mut overlay)) = self.overlay {
+                    overlay.status_message = Some(msg.clone());
+                }
+                if let Some(ref mut section) = self.shepherd_section {
+                    section.status_message = Some(msg);
+                }
                 outcome.repaint = true;
             }
         }

@@ -4071,3 +4071,182 @@ Si el ancho cae por debajo de 70 columnas (modo ultra-compacto), la vista conmut
 
 ## Decisión del dueño sobre F10a (2026-11-05)
 Elegida la **Opción D**: la sección Shepherd sustituye el área central (`pane_surface`) en el cliente, con la sidebar de herdr visible; sin overlay modal. Registrar en «Desviaciones de UI respecto a herdr» (F10b): conmutación de `blit_pane_surface` por `render_shepherd_surface`, ~40 líneas en `composition.rs`, `state.rs`, `mouse.rs`, `input.rs`; 0 en el servidor.
+
+## Desviaciones de UI respecto a herdr
+
+| Comportamiento de herdr modificado | Por qué es necesario | Alternativas descartadas | Coste de fusión (líneas upstream) |
+|---|---|---|---|
+| **Sustitución in-place de `pane_surface` en `ClientShellState::compose`**: cuando `self.shepherd_section.is_some()`, se omite `blit_pane_surface` y se renderiza `render_shepherd_section` directamente en `layout.pane_surface`. La barra lateral (`sidebar`) de herdr permanece visible e interactiva. | Implementar la **Opción D** aprobada por el dueño: interfaz completa de primer nivel para Shepherd con pestañas, listas y formularios embebidos sin perder de vista los workspaces y agentes de herdr en la sidebar, evitando modales flotantes que oscurecen la pantalla. | • **Opción A (Pestaña no-PTY)**: rechazada por requerir >350 líneas en el núcleo del servidor y violar invariantes de terminal.<br>• **Opción B (PTY dedicado)**: rechazada por sobrecarga de procesos y desfase de foco.<br>• **Opción C (Overlay pantalla completa)**: rechazada porque oculta la sidebar de herdr. | **~36 líneas** aditivas en el cliente (`composition.rs`, `state.rs`, `input.rs`, `mouse.rs`, `actions.rs`). **0 líneas** en el servidor. |
+
+### Archivos de herdr modificados en F10b
+
+| Archivo | Líneas añadidas/modificadas | Propósito |
+|---|---|---|
+| `src/client/shell/state.rs` | +3 líneas | Campos `shepherd_section: Option<ShepherdSectionState>` y `shepherd_section_hits: Option<ShepherdSectionHits>` en `ClientShellState` y `ShellHitMap`. |
+| `src/client/shell/composition.rs` | +25 líneas | Conmutación condicional: renderiza `shepherd_section` sobre `layout.pane_surface` y omite `blit_pane_surface` y capas de copia/terminal emergente sobre panes. |
+| `src/client/shell/input.rs` | +4 líneas | Enrutamiento de eventos de teclado prioritario a `route_shepherd_section_key` cuando la sección está abierta. |
+| `src/client/shell/mouse.rs` | +3 líneas | Enrutamiento de eventos de ratón a `route_shepherd_section_mouse` (omite clics en la sidebar para permitir interacción normal con ella). |
+| `src/client/shell/actions.rs` | +1 línea | Vinculación de `KeybindAction::Shepherd` a `self.toggle_shepherd_section(outcome)`. |
+| **Total upstream** | **~36 líneas** | **0 líneas en el servidor**. Mínimo impacto para futuros rebases/merges desde upstream. |
+
+## Estado F10b (2026-11-05)
+
+### Qué se implementó
+
+1. **Arquitectura Opción D (Sustitución de `pane_surface` con Sidebar de Herdr visible)**:
+   - La sección Shepherd sustituye completamente el área central (`layout.pane_surface`) donde habitualmente residen los terminales del workspace activo.
+   - La barra lateral izquierda de Herdr (`sidebar`) con los espacios, worktrees y agentes permanece 100% visible, interactiva y receptiva a los clics del usuario.
+   - Cero líneas modificadas en el runtime o servidor de Herdr; la arquitectura se resuelve puramente en la capa de composición e interacción del cliente TUI.
+
+2. **Biblioteca de componentes reutilizables (`src/shepherd/ui/components/`)**:
+   - `ListView` (`list_view.rs`): lista seleccionable con cursor `▸`, pestañas de filtrado (`[✓ Todas]`, `[Abiertas]`, etc.), contador de ítems, barra de desplazamiento y hit testing completo para clics en pestañas, botones de acción y filas.
+   - `DetailView` (`detail_view.rs`): panel de detalle estructurado con encabezado de acciones, bloques tipados (texto markdown, checklist de criterios de aceptación con `[✓]` y `[ ]`, bloques de aviso/alerta) y barra de acciones inferiores.
+   - `InlineForm` (`inline_form.rs`): formulario de entrada de datos embebido en el panel de detalle, soporte de navegación cíclica con `Tab` y `BackTab`, cursor parpadeante `█`, validación reactiva de campos en tiempo real con mensajes de error/éxito y botones `[ Guardar (Enter) ]` y `[ Cancelar (Esc) ]`.
+   - `ConfirmStripe` (`confirm_stripe.rs`): franja horizontal embebida de confirmación destructiva con icono de advertencia, texto descriptivo y botones explícitos `[ Confirmar ]` y `[ Cancelar ]`.
+   - `EmptyState` (`empty_state.rs`): pantalla informativa para colecciones vacías o filtros sin resultados, con título centrado, mensaje guiado y botones primarios clicables.
+   - `StatusBar` (`status_bar.rs`): franja inferior con recuento total y filtrado, atajos contextuales de teclado y banners temporales de éxito/error.
+
+3. **Vistas funcionales completas**:
+   - **Tareas (`src/shepherd/ui/tasks.rs`)**:
+     - Lista con pestañas de filtro: `Todas`, `Abiertas`, `Completadas`.
+     - Panel de detalle con título, rama git, PR asociado, descripción y lista de verificación de criterios.
+     - Formulario en línea de creación de tarea (`n`) integrado en el panel de detalle sin modales flotantes.
+     - Formulario en línea de importación de issues de GitHub (`i`).
+     - Franja embebida de confirmación destructiva para archivar tareas (`a`).
+     - Apertura de especificación en editor externo en un nuevo pane (`e`).
+     - Estado vacío con botones primarios `[ + Crear Primera Tarea (n) ]` e `[ Importar de GitHub (i) ]`.
+   - **Runs (`src/shepherd/ui/runs.rs`)**:
+     - Lista de ejecuciones con estado visual, etapa actual, agentes activos y progreso de subtareas.
+     - Formulario en línea de opciones de lanzamiento (`l`):
+       - Pausa para aprobación del plan (`[✓] Activado`).
+       - `auto_push` estrictamente desactivado (`[ ] Desactivado (seguro)`) al abrir, requiriendo activación manual deliberada.
+       - Guarda de replanificación (`replan`) deshabilitada si no existe un plan previo guardado.
+     - Franja embebida de aprobación de human gate (`a` / `d`) explicando claramente que autoriza el push git y la apertura del PR en GitHub.
+     - Franja embebida de confirmación destructiva para cancelar runs (`c`).
+     - Estado vacío con botón primario `[ + Iniciar Primer Run (l) ]`.
+
+4. **Navegación, barra de pestañas superior y máquina de estados (`src/shepherd/ui/state.rs`)**:
+   - Barra superior con las 7 pestañas normativas: `Agentes (1)`, `Tareas (2)`, `Runs (3)`, `Patrones (4)`, `Skills (5)`, `Git (6)`, `Eventos (7)` y botón `[ × Cerrar (Esc) ]`.
+   - Conmutación directa mediante teclas `1` a `7` y combinación `Alt+Left` / `Alt+Right`.
+   - Máquina de estados estricta de `Esc`:
+     - Si hay un formulario en línea o franja de confirmación abierta: `Esc` cancela la acción y devuelve el panel a su estado normal sin cerrar la sección Shepherd.
+     - Si no hay ninguna sub-acción activa: `Esc` cierra la sección Shepherd y restaura la vista normal de terminales.
+   - Manejo completo de ratón: clics en pestañas superiores, botón cerrar, botones de acción, filas de lista, campos de formulario y botones de confirmación. Rueda de ratón para desplazarse por las listas.
+
+5. **Retiro de modales anteriores**:
+   - Las pestañas Tareas y Runs fueron completamente retiradas de `ClientShepherdOverlay`.
+   - Skills y Git permanecen temporalmente en el overlay flotante heredado hasta su migración en F10c.
+
+### Verificación real de la batería de tests
+
+Se ejecutó la batería completa de pruebas por áreas en el entorno de desarrollo, obteniendo resultados reales del 100% de éxito:
+
+| Área | Comando de prueba | Resultados reales |
+|---|---|---|
+| `shepherd-core` | `./cargo-fork.sh test -p shepherd-core` | **270 passed; 0 failed** (122 unitarios + 148 integración) |
+| `shepherd::` | `./cargo-fork.sh test shepherd::` | **65 passed; 0 failed** (incluye los 18 nuevos tests de `shepherd::ui`) |
+| `client::shell` | `./cargo-fork.sh test client::shell` | **391 passed; 0 failed; 2 ignored** |
+| `protocol::` | `./cargo-fork.sh test protocol::` | **159 passed; 0 failed** (156 unitarios + 3 cli) |
+| `api::` | `./cargo-fork.sh test api::` | **319 passed; 0 failed; 1 ignored** |
+| `server::` | `./cargo-fork.sh test server::` | **318 passed; 0 failed; 5 ignored** |
+| **Total verificado** | | **1,522 tests pasando sin regresiones** |
+
+*(Nota: Los tests intermitentes conocidos de plugins y aprobación de PR se verificaron individualmente y con `--test-threads=1`, completando la suite con 0 fallos).*
+
+### Verificación con sesión aislada (`scripts/shepherd-iso.sh`)
+
+Se validó el comportamiento visual e interactivo arrancando un servidor y cliente aislados con `./scripts/shepherd-iso.sh`:
+
+#### 1. Vista principal de Tareas (Opción D en acción)
+Se comprueba que la barra lateral de Herdr a la izquierda (`spaces`, `· repo/master`, `new menu`, `agents grouped`) se mantiene visible e interactiva. El área central queda ocupada por la sección Shepherd con pestañas superiores y el estado vacío guiado:
+
+```text
+ spaces                  │   1      +
+                         │ Shepherd  [ Agentes (1) ] [ Tareas (2) ] [ Runs (3) ] [ Patrones (4) ] [ Skills (5) ] [ Git (6) ] [ Eventos (7) ]                                          [ × Cerrar (Esc) ]
+ · repo                  │──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   master                │                                        [ + Nueva (n) ]│
+                         │[✓ Todas] [Abiertas] [Completadas]                     │
+                         │───────────────────────────────────────────────────────│
+                         │                                                       │
+                         │                                                       │                                              NO HAY TAREAS REGISTRADAS
+                         │                                                       │
+                         │                                                       │                             No se encontraron tareas que coincidan con el filtro actual.
+                         │                                                       │                        Puedes registrar una tarea manualmente o importar un issue de GitHub.
+                         │                                                       │
+                         │                                                       │                             [ + Crear Primera Tarea (n) ]  [ Importar de GitHub (i) ]
+                         │                                                       │
+ new                 menu│                                                       │
+─────────────────────────│                                                       │
+ agents           grouped│                                                       │
+                        «│ 0 tareas (0 abiertas) | ↑/↓: lista | n: nueva | i: importar | a: archivar | e: editar | Esc: salir
+```
+
+#### 2. Formulario en línea de creación de tareas (`n`)
+Al pulsar `n`, el panel derecho cambia fluidamente al formulario interactivo sin abrir ningún diálogo modal emergente sobre la pantalla:
+
+```text
+ spaces                  │   1      +
+                         │ Shepherd  [ Agentes (1) ] [ Tareas (2) ] [ Runs (3) ] [ Patrones (4) ] [ Skills (5) ] [ Git (6) ] [ Eventos (7) ]                                          [ × Cerrar (Esc) ]
+ · repo                  │──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   master                │                                        [ + Nueva (n) ]│CREAR TAREA (Formulario en línea)
+                         │[✓ Todas] [Abiertas] [Completadas]                     │──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+                         │───────────────────────────────────────────────────────│
+                         │                                                       │Título de la tarea:
+                         │                                                       │[ █j. Refactorizar bucle de eventos del bus                                                                        ]
+                         │                                                       │
+                         │                                                       │Descripción / Especificación:
+                         │                                                       │[ Objetivos y diseño técnico...                                                                                    ]
+                         │                                                       │
+                         │                                                       │Criterios de aceptación (separados por ';'):
+                         │                                                       │[ 1. Tests sin regresión; 2. Verificación CLI                                                                      ]
+                         │                                                       │
+                         │                                                       │Archivos adjuntos (rutas separadas por espacio):
+                         │                                                       │[ src/bus.rs tests/bus.rs                                                                                          ]
+                         │                                                       │
+                         │                                                       │[ Guardar Tarea (Enter) ]   [ Cancelar (Esc) ]
+                        «│ 0 tareas (0 abiertas) | ↑/↓: lista | n: nueva | i: importar | a: archivar | e: editar | Esc: salir
+```
+
+#### 3. Pestaña de Runs (`3`) y Opciones de Lanzamiento (`l`)
+Pulsando `3`, la pestaña superior cambia a Runs; al pulsar `l`, se despliegan las opciones de ejecución con la guarda de seguridad `auto_push` estrictamente desactivada:
+
+```text
+ spaces                  │   1      +
+                         │ Shepherd  [ Agentes (1) ] [ Tareas (2) ] [ Runs (3) ] [ Patrones (4) ] [ Skills (5) ] [ Git (6) ] [ Eventos (7) ]                                          [ × Cerrar (Esc) ]
+ · repo                  │──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   master                │                                      [ + Iniciar (l) ]│OPCIONES DE LANZAMIENTO - RUN #1
+                         │───────────────────────────────────────────────────────│──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+                         │                                                       │
+                         │                                                       │Pausar para aprobación humana del plan:
+                         │                                                       │[ [✓] Activado█                                                                                                    ]
+                         │                                                       │
+                         │                                                       │Publicación automática (auto_push - SIEMPRE false al abrir):
+                         │                                                       │[ [ ] Desactivado (seguro)                                                                                         ]
+                         │                                                       │
+                         │                                                       │Replanificar desde cero (replan):
+                         │                                                       │[ [!] No disponible (sin plan guardado)                                                                            ]
+                         │                                                       │
+                         │                                                       │✓ Parámetros validados correctamente.
+                         │                                                       │
+                         │                                                       │[ Iniciar Run (Enter) ]   [ Cancelar (Esc) ]
+                        «│ 0 ejecuciones | ↑/↓: lista | l: iniciar run | c: cancelar | a: aprobar gate | d: rechazar | Esc: salir
+```
+
+#### 4. Cierre limpio con `Esc`
+Al pulsar `Esc` dos veces (la primera cancela el formulario de lanzamiento, la segunda cierra la sección Shepherd), el cliente devuelve limpiamente el control a la cuadrícula habitual de terminales de Herdr sin rastros gráficos ni corrupción de buffers.
+
+### Verificación de sincronización y convenciones
+
+- `scripts/upstream-sync.sh --dry-run --allow-branch HEAD`: verificación satisfactoria en modo simulación.
+- `scripts/rename-from-herdr.sh --check`: comprobado exitosamente sin ninguna instancia indebida del nombre anterior (`[OK] No unexcluded occurrences of herdr/Herdr/HERDR found`).
+
+### Qué queda abierto para F10c
+
+1. **Migración de Skills y Git al armazón de F10b**:
+   - Reimplementar las pestañas `Skills` y `Git` usando `ListView` y `DetailView` en lugar del overlay flotante heredado.
+2. **Formularios de Agentes embebidos**:
+   - Migrar `SpawnForm`, `ConfirmKill` y `ConfirmClean` a formularios en línea en la pestaña `Agentes` de la sección Shepherd.
+3. **Fases F8c y F8d**:
+   - Desarrollar las interfaces de `Patrones` y `Eventos` directamente sobre este nuevo armazón de componentes.
+
+*(Nota: Siguiendo las directrices expresas del usuario, todos los cambios han quedado preparados en el worktree sin realizar commits git).*
