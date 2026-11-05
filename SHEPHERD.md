@@ -2357,3 +2357,24 @@ Consecuencias para la UI (F10 y cualquier pantalla nueva):
 ### Corrección y formato aplicado (2026-11-05)
 
 Corrección a lo afirmado arriba: de las 814 diferencias de `cargo fmt`, **no todas eran de Shepherd**: herdr tampoco pasa `cargo fmt --check` con la versión de rustfmt de este entorno (por ejemplo `src/remote/attach.rs`, `src/client/shell/agent_sidebar.rs`, `tests/support/mod.rs`, `src/agent_resume.rs`). Por tanto **nunca se formatea código de herdr** (reformatearlo provocaría conflictos en cada fusión con upstream) y la puerta de formato se aplica **solo a los archivos propios de Shepherd**: `crates/shepherd-core/**`, `src/shepherd/**` y `src/client/shell/shepherd.rs`. Se ejecutó `cargo fmt --all` y se revirtieron los 67 archivos de herdr que tocó; quedaron formateados solo los 22 archivos propios (commit «style: cargo fmt Shepherd-owned files»). Comprobación para revisión: `./cargo-fork.sh fmt --all -- --check` no debe mostrar diferencias en esas rutas (las de herdr se ignoran).
+
+## Plan F11 — Snapshots locales por agente (planificado 2026-11-05, después de F10)
+
+Origen: idea tomada de mrq (getmrq.com: snapshots automáticos del estado de los archivos mientras trabaja un agente de IA, con descripción y restauración). **No se integra mrq**: es un servicio externo con cuenta, propietario y en beta, que sube el código cifrado a sus servidores (incompatible con la regla de no enviar código a terceros sin confirmar la política, y con el criterio de reutilizar lo que ya existe). Se implementa la idea en local, sobre git y sobre los eventos de herdr, sin dependencias nuevas.
+
+Ventajas buscadas: deshacer errores de un agente sin perder trabajo; historial de ramas limpio (los snapshots no son commits de la rama); línea de tiempo por agente con diffs entre momentos; restaurar archivos sueltos o el estado completo; revisar el recorrido completo antes de aprobar un gate de push/PR; recuperar el trabajo no commiteado tras un cierre de sesión (ya perdimos así parte del trabajo de `coder-22` y `coder-24`); todo local.
+
+Diseño inicial (a refinar en F11a):
+- **Captura**: refs ocultas `refs/shepherd/snapshots/<agente>/<n>` creadas con objetos de git (sin tocar el índice ni la rama), cuando el agente pasa a `idle`/`done` (evento de herdr) o tras una pausa de actividad configurable, y antes de operaciones de riesgo (restaurar, limpiar, matar). Respeta `.gitignore`; descarta capturas idénticas a la anterior.
+- **Límites**: máximo de snapshots por agente y por disco con limpieza de los más viejos, exclusión de binarios/archivos grandes por umbral.
+- **Uso**: listar, ver diff entre snapshots, restaurar archivos o todo el worktree (siempre guardando antes el estado actual como snapshot), borrar; CLI `shepherd snapshot list|diff|restore|prune --json` y métodos tipados (siguiendo F9).
+- **Interfaz**: panel de línea de tiempo por agente dentro de las pestañas Agentes y Git del armazón de F10, con botones visibles y sin modales, siguiendo las reglas de estilo y de UI de herdr.
+- Descripciones: resumen automático del diff sin enviar código fuera (p. ej. lista de archivos y conteo de líneas); nada de IA remota.
+
+| Fase | Contenido |
+|---|---|
+| F11a | Núcleo: captura, refs, límites, restauración segura, CLI y API tipada, tests con repos temporales |
+| F11b | Integración con eventos de herdr (disparo automático), recuperación tras reinicio y limpieza |
+| F11c | Panel de línea de tiempo en la UI (sobre el armazón de F10) y verificación con agentes reales |
+
+Orden de trabajo actualizado: F9a–F9e → F10a–F10c → F8c → F8d → F10d → **F11a → F11b → F11c**.
