@@ -64,6 +64,9 @@ pub struct PatternRun {
     pub finished_at: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// `done` reached by quiescence (agents idle, no pending messages); a new message revives it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub quiesced: bool,
 }
 
 impl PatternRun {
@@ -274,6 +277,7 @@ impl OrchestrationService {
                             updated_at: now.clone(),
                             finished_at: Some(now),
                             error: Some(e.clone()),
+                            quiesced: false,
                         };
                         let runs_file = pattern_runs_path(root, &self.service_config.state_dir);
                         let mut existing = load_pattern_runs(&runs_file).unwrap_or_default();
@@ -314,6 +318,7 @@ impl OrchestrationService {
             updated_at: now,
             finished_at: None,
             error: None,
+            quiesced: false,
         };
 
         let runs_file = pattern_runs_path(root, &self.service_config.state_dir);
@@ -321,6 +326,33 @@ impl OrchestrationService {
         existing.push(run.clone());
         save_pattern_runs(&runs_file, &existing)?;
         Ok(run)
+    }
+
+    /// True when any live run agent has unacknowledged messages from another publisher.
+    fn run_has_pending_messages(
+        &self,
+        run: &PatternRun,
+        registry: &crate::AgentRegistryFile,
+    ) -> bool {
+        let Ok(bus) = self.bus() else {
+            return false;
+        };
+        let live_ids: Vec<String> = registry.live().into_iter().map(|a| a.id.clone()).collect();
+        let run_live =
+            |id: &String| run.agents.iter().any(|a| &a.id == id) && live_ids.contains(id);
+        run.topics.iter().any(|topic| {
+            bus.consumer_groups(Some(topic))
+                .unwrap_or_default()
+                .iter()
+                .flat_map(|g| g.members.iter())
+                .filter(|m| run_live(m))
+                .any(|m| {
+                    bus.poll_active(m, topic, None, Some(&live_ids))
+                        .unwrap_or_default()
+                        .iter()
+                        .any(|msg| &msg.from != m)
+                })
+        })
     }
 
     pub fn reconcile_pattern_runs(
@@ -359,7 +391,11 @@ impl OrchestrationService {
             let mut dirty = false;
 
             for run in &mut runs {
-                if run.state != PatternRunState::Running && run.state != PatternRunState::Paused {
+                let revivable = run.state == PatternRunState::Done && run.quiesced;
+                if run.state != PatternRunState::Running
+                    && run.state != PatternRunState::Paused
+                    && !revivable
+                {
                     continue;
                 }
 
@@ -378,8 +414,24 @@ impl OrchestrationService {
                         !matches!(a.state.as_str(), "done" | "exited" | "killed" | "failed")
                     })
                     .count();
+                let busy = run
+                    .agents
+                    .iter()
+                    .any(|a| matches!(a.state.as_str(), "working" | "blocked" | "starting"));
+
+                if revivable {
+                    if busy || self.run_has_pending_messages(run, registry) {
+                        run.state = PatternRunState::Running;
+                        run.quiesced = false;
+                        run.finished_at = None;
+                        run.updated_at = now.clone();
+                        dirty = true;
+                    }
+                    continue;
+                }
 
                 if live_count == 0 {
+                    self.run_quiet_since.lock().unwrap().remove(&run.id);
                     let all_done =
                         !run.agents.is_empty() && run.agents.iter().all(|a| a.state == "done");
                     let all_failed = !run.agents.is_empty()
@@ -401,6 +453,30 @@ impl OrchestrationService {
                     }
                     run.updated_at = now.clone();
                     dirty = true;
+                } else if run.state == PatternRunState::Running {
+                    // Quiescence: every live agent idle, nothing pending, sustained.
+                    let period_ms = self.service_config.run_quiescence_secs.saturating_mul(1000);
+                    if period_ms == 0 || busy || self.run_has_pending_messages(run, registry) {
+                        self.run_quiet_since.lock().unwrap().remove(&run.id);
+                    } else {
+                        let now_ms = self.clock.now_ms();
+                        let since = *self
+                            .run_quiet_since
+                            .lock()
+                            .unwrap()
+                            .entry(run.id.clone())
+                            .or_insert(now_ms);
+                        if now_ms.saturating_sub(since) >= period_ms {
+                            self.run_quiet_since.lock().unwrap().remove(&run.id);
+                            run.state = PatternRunState::Done;
+                            run.quiesced = true;
+                            run.finished_at = Some(now.clone());
+                            run.updated_at = now.clone();
+                            dirty = true;
+                        }
+                    }
+                } else {
+                    self.run_quiet_since.lock().unwrap().remove(&run.id);
                 }
             }
 

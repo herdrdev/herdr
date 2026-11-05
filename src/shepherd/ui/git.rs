@@ -2,14 +2,16 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{buffer::Buffer, layout::Rect, style::Style};
 use std::path::PathBuf;
 
-use crate::app::state::Palette;
 use super::components::{
     confirm_stripe::{render_confirm_stripe, ConfirmStripeHits},
-    detail_view::{render_detail_view, AlertLevel, DetailContentBlock, DetailHeader, DetailViewHits},
+    detail_view::{
+        render_detail_view, AlertLevel, DetailContentBlock, DetailHeader, DetailViewHits,
+    },
     empty_state::{render_empty_state, EmptyStateHits},
     inline_form::{render_inline_form, FormField, InlineFormHits, InlineFormState},
     list_view::{render_list_view, ListViewHits, ListViewItem},
 };
+use crate::app::state::Palette;
 pub use crate::shepherd::git::{GitRepoStatus, ShepherdGitAction, ShepherdGitRow};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -277,17 +279,15 @@ impl ShepherdGitSectionState {
                     form.cycle_backward();
                     return (true, None);
                 }
-                KeyCode::Enter => {
-                    match self.submit_create_worktree() {
-                        Ok(act) => return (true, act),
-                        Err(e) => {
-                            if let Some(ref mut f) = self.worktree_form {
-                                f.error = Some(e);
-                            }
-                            return (true, None);
+                KeyCode::Enter => match self.submit_create_worktree() {
+                    Ok(act) => return (true, act),
+                    Err(e) => {
+                        if let Some(ref mut f) = self.worktree_form {
+                            f.error = Some(e);
                         }
+                        return (true, None);
                     }
-                }
+                },
                 KeyCode::Backspace => {
                     let idx = form.active_field;
                     if idx < form.fields.len() {
@@ -295,7 +295,10 @@ impl ShepherdGitSectionState {
                     }
                     return (true, None);
                 }
-                KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) && !key.modifiers.contains(KeyModifiers::ALT) => {
+                KeyCode::Char(c)
+                    if !key.modifiers.contains(KeyModifiers::CONTROL)
+                        && !key.modifiers.contains(KeyModifiers::ALT) =>
+                {
                     let idx = form.active_field;
                     if idx < form.fields.len() {
                         form.fields[idx].value.push(c);
@@ -321,17 +324,15 @@ impl ShepherdGitSectionState {
                     form.cycle_backward();
                     return (true, None);
                 }
-                KeyCode::Enter => {
-                    match self.submit_create_branch() {
-                        Ok(act) => return (true, act),
-                        Err(e) => {
-                            if let Some(ref mut f) = self.branch_form {
-                                f.error = Some(e);
-                            }
-                            return (true, None);
+                KeyCode::Enter => match self.submit_create_branch() {
+                    Ok(act) => return (true, act),
+                    Err(e) => {
+                        if let Some(ref mut f) = self.branch_form {
+                            f.error = Some(e);
                         }
+                        return (true, None);
                     }
-                }
+                },
                 KeyCode::Backspace => {
                     let idx = form.active_field;
                     if idx < form.fields.len() {
@@ -339,7 +340,10 @@ impl ShepherdGitSectionState {
                     }
                     return (true, None);
                 }
-                KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) && !key.modifiers.contains(KeyModifiers::ALT) => {
+                KeyCode::Char(c)
+                    if !key.modifiers.contains(KeyModifiers::CONTROL)
+                        && !key.modifiers.contains(KeyModifiers::ALT) =>
+                {
                     let idx = form.active_field;
                     if idx < form.fields.len() {
                         form.fields[idx].value.push(c);
@@ -412,7 +416,9 @@ pub fn render_git_section(
     let list_w = if is_compact {
         area.width
     } else {
-        (area.width * 34 / 100).max(24).min(area.width.saturating_sub(24))
+        (area.width * 34 / 100)
+            .max(24)
+            .min(area.width.saturating_sub(24))
     };
     let list_area = Rect::new(area.x, area.y, list_w, area.height);
 
@@ -463,9 +469,7 @@ pub fn render_git_section(
     // Vertical divider
     let div_x = list_area.right();
     for y in area.y..area.bottom() {
-        buffer[(div_x, y)]
-            .set_char('│')
-            .set_fg(palette.surface_dim);
+        buffer[(div_x, y)].set_char('│').set_fg(palette.surface_dim);
     }
 
     let detail_x = div_x + 1;
@@ -517,7 +521,8 @@ pub fn render_git_section(
 
     // 4. Confirm remove stripe
     if let Some(ref path) = state.confirm_remove {
-        let msg = format!("¿Eliminar el worktree '{path}' del disco? Se perderán cambios no guardados.");
+        let msg =
+            format!("¿Eliminar el worktree '{path}' del disco? Se perderán cambios no guardados.");
         hits.stripe_hits = Some(render_confirm_stripe(
             buffer,
             detail_area,
@@ -599,7 +604,9 @@ pub fn render_git_section(
 
         if let Some(ref agent_id) = row.agent_id {
             blocks.push(DetailContentBlock::Notice {
-                text: format!("AGENTE VINCULADO:\nAgente activo '{agent_id}' asignado a este worktree."),
+                text: format!(
+                    "AGENTE VINCULADO:\nAgente activo '{agent_id}' asignado a este worktree."
+                ),
                 level: AlertLevel::Info,
             });
         }

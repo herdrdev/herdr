@@ -5,20 +5,21 @@ use ratatui::{
     style::{Modifier, Style},
 };
 
-use crate::app::state::Palette;
 use super::components::{
     confirm_stripe::{render_confirm_stripe, ConfirmStripeHits},
-    detail_view::{render_detail_view, AlertLevel, DetailContentBlock, DetailHeader, DetailViewHits},
+    detail_view::{
+        render_detail_view, AlertLevel, DetailContentBlock, DetailHeader, DetailViewHits,
+    },
     empty_state::{render_empty_state, EmptyStateHits},
     inline_form::{render_inline_form, FormField, InlineFormHits, InlineFormState},
     list_view::{render_list_view, ListViewHits, ListViewItem},
 };
+use crate::app::state::Palette;
+pub use crate::shepherd::skills::{
+    AgentSkillItem, CatalogSkillItem, CreateSkillFormState, ShepherdSkillsAction, SkillsViewMode,
+};
 #[allow(unused_imports)]
 pub use shepherd_core::skills::{Level, Scope};
-pub use crate::shepherd::skills::{
-    AgentSkillItem, CatalogSkillItem, CreateSkillFormState, ShepherdSkillsAction,
-    SkillsViewMode,
-};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ShepherdSkillsHits {
@@ -327,12 +328,10 @@ impl ShepherdSkillsSectionState {
                     // Cycle form fields / options
                     return (true, None);
                 }
-                KeyCode::Enter => {
-                    match self.submit_create_skill() {
-                        Ok(act) => return (true, act),
-                        Err(_) => return (true, None),
-                    }
-                }
+                KeyCode::Enter => match self.submit_create_skill() {
+                    Ok(act) => return (true, act),
+                    Err(_) => return (true, None),
+                },
                 KeyCode::Backspace => {
                     if !form.description.is_empty() {
                         form.description.pop();
@@ -341,7 +340,10 @@ impl ShepherdSkillsSectionState {
                     }
                     return (true, None);
                 }
-                KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) && !key.modifiers.contains(KeyModifiers::ALT) => {
+                KeyCode::Char(c)
+                    if !key.modifiers.contains(KeyModifiers::CONTROL)
+                        && !key.modifiers.contains(KeyModifiers::ALT) =>
+                {
                     if form.name.len() < 32 {
                         form.name.push(c);
                     } else {
@@ -407,7 +409,9 @@ pub fn render_skills_section(
     let list_w = if is_compact {
         area.width
     } else {
-        (area.width * 34 / 100).max(24).min(area.width.saturating_sub(24))
+        (area.width * 34 / 100)
+            .max(24)
+            .min(area.width.saturating_sub(24))
     };
     let list_area = Rect::new(area.x, area.y, list_w, area.height);
 
@@ -492,9 +496,7 @@ pub fn render_skills_section(
     // Vertical divider
     let div_x = list_area.right();
     for y in area.y..area.bottom() {
-        buffer[(div_x, y)]
-            .set_char('│')
-            .set_fg(palette.surface_dim);
+        buffer[(div_x, y)].set_char('│').set_fg(palette.surface_dim);
     }
 
     let detail_x = div_x + 1;
@@ -597,7 +599,14 @@ pub fn render_skills_section(
                 &[("+ Nueva Skill", Some("n"))],
             ),
         };
-        hits.empty_hits = Some(render_empty_state(buffer, detail_area, title, desc, actions, palette));
+        hits.empty_hits = Some(render_empty_state(
+            buffer,
+            detail_area,
+            title,
+            desc,
+            actions,
+            palette,
+        ));
         return hits;
     }
 
@@ -611,22 +620,42 @@ pub fn render_skills_section(
                     Scope::Repo => Style::default().fg(palette.green),
                 };
                 let status_style = if skill.active {
-                    Style::default().fg(palette.green).add_modifier(Modifier::BOLD)
+                    Style::default()
+                        .fg(palette.green)
+                        .add_modifier(Modifier::BOLD)
                 } else {
                     Style::default().fg(palette.overlay0)
                 };
                 let mut badges = vec![
                     (format!("[{:?}]", skill.scope).to_lowercase(), scope_style),
-                    (if skill.active { "[activa]".to_string() } else { "[inactiva]".to_string() }, status_style),
+                    (
+                        if skill.active {
+                            "[activa]".to_string()
+                        } else {
+                            "[inactiva]".to_string()
+                        },
+                        status_style,
+                    ),
                 ];
                 if skill.edited {
-                    badges.push(("[modificada]".to_string(), Style::default().fg(palette.yellow)));
+                    badges.push((
+                        "[modificada]".to_string(),
+                        Style::default().fg(palette.yellow),
+                    ));
                 }
 
                 let meta_line = format!(
                     "Agente: {} ({}) | Ámbito: {:?} | Modificada: {}",
-                    if state.selected_agent_id.is_empty() { "todos" } else { &state.selected_agent_id },
-                    if state.agent_role.is_empty() { "general" } else { &state.agent_role },
+                    if state.selected_agent_id.is_empty() {
+                        "todos"
+                    } else {
+                        &state.selected_agent_id
+                    },
+                    if state.agent_role.is_empty() {
+                        "general"
+                    } else {
+                        &state.agent_role
+                    },
                     skill.scope,
                     if skill.edited { "Sí" } else { "No" }
                 );
@@ -682,7 +711,10 @@ pub fn render_skills_section(
                     badges.push(("[global]".to_string(), Style::default().fg(palette.accent)));
                 }
                 if !skill.enabled {
-                    badges.push(("[con errores]".to_string(), Style::default().fg(palette.red)));
+                    badges.push((
+                        "[con errores]".to_string(),
+                        Style::default().fg(palette.red),
+                    ));
                 }
 
                 let meta_line = format!(

@@ -4,8 +4,8 @@ use ratatui::{
     style::{Modifier, Style},
 };
 
-use crate::app::state::Palette;
 use super::list_view::put_str;
+use crate::app::state::Palette;
 
 pub fn render_status_bar(
     buffer: &mut Buffer,
@@ -35,7 +35,10 @@ pub fn render_status_bar(
             y,
             area.width.saturating_sub(2),
             msg,
-            Style::default().fg(palette.yellow).bg(palette.surface0).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(palette.yellow)
+                .bg(palette.surface0)
+                .add_modifier(Modifier::BOLD),
         );
         return;
     }

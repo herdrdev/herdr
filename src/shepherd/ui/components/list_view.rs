@@ -69,7 +69,9 @@ pub fn render_list_view(
             current_y,
             btn_w,
             &label,
-            Style::default().fg(palette.accent).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(palette.accent)
+                .add_modifier(Modifier::BOLD),
         );
         hits.action_button = Some(btn_rect);
     }
@@ -91,7 +93,9 @@ pub fn render_list_view(
                 let tab_rect = Rect::new(tab_x, current_y, tab_w, 1);
                 hits.filter_tabs.push((tab_rect, i));
                 let style = if active {
-                    Style::default().fg(palette.accent).add_modifier(Modifier::BOLD)
+                    Style::default()
+                        .fg(palette.accent)
+                        .add_modifier(Modifier::BOLD)
                 } else {
                     Style::default().fg(palette.overlay0)
                 };
@@ -154,7 +158,10 @@ pub fn render_list_view(
         // Selection indicator
         let indicator = if is_selected { "▸ " } else { "  " };
         let marker_style = if is_selected {
-            Style::default().fg(palette.accent).bg(bg_color).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(palette.accent)
+                .bg(bg_color)
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(palette.overlay0).bg(bg_color)
         };
@@ -166,7 +173,14 @@ pub fn render_list_view(
         if let Some((badge_text, badge_style)) = &items[idx].badge {
             let b_w = badge_text.chars().count() as u16;
             if text_x + b_w < area.x + content_w {
-                put_str(buffer, text_x, item_y, b_w, badge_text, badge_style.bg(bg_color));
+                put_str(
+                    buffer,
+                    text_x,
+                    item_y,
+                    b_w,
+                    badge_text,
+                    badge_style.bg(bg_color),
+                );
                 text_x += b_w + 1;
             }
         }
@@ -174,16 +188,31 @@ pub fn render_list_view(
         // Title
         let remaining_w = (area.x + content_w).saturating_sub(text_x);
         let title_style = if is_selected {
-            Style::default().fg(palette.text).bg(bg_color).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(palette.text)
+                .bg(bg_color)
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(palette.text).bg(bg_color)
         };
-        put_str(buffer, text_x, item_y, remaining_w, &items[idx].title, title_style);
+        put_str(
+            buffer,
+            text_x,
+            item_y,
+            remaining_w,
+            &items[idx].title,
+            title_style,
+        );
     }
 
     // Scrollbar if needed
     if has_scrollbar {
-        let scrollbar_rect = Rect::new(area.right().saturating_sub(1), current_y, 1, list_height as u16);
+        let scrollbar_rect = Rect::new(
+            area.right().saturating_sub(1),
+            current_y,
+            1,
+            list_height as u16,
+        );
         let max_offset = total_items.saturating_sub(list_height);
         let metrics = ScrollMetrics {
             viewport_rows: list_height,

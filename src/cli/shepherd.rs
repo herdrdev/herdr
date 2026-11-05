@@ -611,13 +611,38 @@ fn print_human_api_response(
             for g in groups {
                 let topic = g.get("topic").and_then(Value::as_str).unwrap_or("-");
                 let group = g.get("group").and_then(Value::as_str).unwrap_or("-");
-                let members = g.get("active_members").and_then(Value::as_u64).unwrap_or(0);
-                let committed = g
-                    .get("committed_offset")
-                    .and_then(Value::as_u64)
-                    .unwrap_or(0);
+                let members = g
+                    .get("members")
+                    .and_then(Value::as_array)
+                    .map_or(0, Vec::len);
+                let per_partition = |key: &str, only_nonzero: bool| {
+                    let mut parts: Vec<(u64, u64)> = g
+                        .get(key)
+                        .and_then(Value::as_object)
+                        .map(|o| {
+                            o.iter()
+                                .filter_map(|(k, v)| Some((k.parse().ok()?, v.as_u64()?)))
+                                .filter(|(_, v)| !only_nonzero || *v > 0)
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    parts.sort_unstable();
+                    parts
+                };
+                let join = |parts: Vec<(u64, u64)>, sep: &str, empty: &str| {
+                    if parts.is_empty() {
+                        empty.to_owned()
+                    } else {
+                        parts
+                            .iter()
+                            .map(|(p, v)| format!("p{p}:{sep}{v}"))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    }
+                };
+                let committed = join(per_partition("committed_offsets", false), "#", "-");
+                let lag = join(per_partition("lag_by_partition", true), "", "0");
                 let total = g.get("total_messages").and_then(Value::as_u64).unwrap_or(0);
-                let lag = g.get("lag").and_then(Value::as_u64).unwrap_or(0);
                 writeln!(
                     writer,
                     "{topic}\t{group}\t{members}\t{committed}\t{total}\t{lag}"
@@ -753,5 +778,39 @@ fn execute_local_command(
             }
             Ok(0)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use shepherd_core::bus::MessageBus;
+
+    /// Regression (F8f): `topic groups` printed `0 0 0 0` for real groups because the
+    /// formatter read fields the serialized `ConsumerGroupSummary` does not have.
+    #[test]
+    fn topic_groups_table_shows_real_members_committed_total_and_lag() {
+        let dir = std::env::temp_dir().join(format!("shep-f8f-groups-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let bus = MessageBus::open(&dir.join("messages.jsonl")).unwrap();
+        bus.topic_create("results", 1).unwrap();
+        bus.subscribe("coder-1", "results", None).unwrap();
+        for _ in 0..3 {
+            bus.publish("results", "m", None, Some(0), "brain-1")
+                .unwrap();
+        }
+        bus.ack("coder-1", "results", Some(0), Some(0)).unwrap();
+        let groups = bus.consumer_groups(Some("results")).unwrap();
+        let result = serde_json::json!({ "groups": groups });
+
+        let mut out = Vec::new();
+        let method = Method::ShepherdTopicGroups(Default::default());
+        print_human_api_response(&mut out, &method, &result).unwrap();
+        let text = String::from_utf8(out).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(
+            text,
+            "TOPIC\tGROUP\tMEMBERS\tCOMMITTED\tTOTAL\tLAG\nresults\tcoder-1\t1\tp0:#0\t3\tp0:2\n"
+        );
     }
 }

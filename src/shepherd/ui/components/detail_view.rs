@@ -4,10 +4,10 @@ use ratatui::{
     style::{Modifier, Style},
 };
 
+use super::list_view::put_str;
 use crate::app::state::Palette;
 use crate::pane::ScrollMetrics;
 use crate::ui::render_scrollbar_buffer;
-use super::list_view::put_str;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AlertLevel {
@@ -65,7 +65,9 @@ pub fn render_detail_view(
         current_y,
         area.width,
         &header.title,
-        Style::default().fg(palette.text).add_modifier(Modifier::BOLD),
+        Style::default()
+            .fg(palette.text)
+            .add_modifier(Modifier::BOLD),
     );
     title_x += header.title.chars().count() as u16 + 1;
 
@@ -95,7 +97,9 @@ pub fn render_detail_view(
                 current_y,
                 w,
                 &label,
-                Style::default().fg(palette.accent).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(palette.accent)
+                    .add_modifier(Modifier::BOLD),
             );
             action_right = x.saturating_sub(1);
         }
@@ -145,7 +149,9 @@ pub fn render_detail_view(
                 lines.push((String::new(), Style::default()));
                 lines.push((
                     h.clone(),
-                    Style::default().fg(palette.accent).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(palette.accent)
+                        .add_modifier(Modifier::BOLD),
                 ));
             }
             DetailContentBlock::Paragraph(p) => {
@@ -166,10 +172,7 @@ pub fn render_detail_view(
             }
             DetailContentBlock::BulletList(items) => {
                 for text in items {
-                    lines.push((
-                        format!("• {text}"),
-                        Style::default().fg(palette.text),
-                    ));
+                    lines.push((format!("• {text}"), Style::default().fg(palette.text)));
                 }
             }
             DetailContentBlock::Notice { text, level } => {
@@ -204,7 +207,12 @@ pub fn render_detail_view(
     }
 
     if has_scrollbar {
-        let scrollbar_rect = Rect::new(area.right().saturating_sub(1), current_y, 1, visible_content_h as u16);
+        let scrollbar_rect = Rect::new(
+            area.right().saturating_sub(1),
+            current_y,
+            1,
+            visible_content_h as u16,
+        );
         let max_offset = total_lines.saturating_sub(visible_content_h);
         let metrics = ScrollMetrics {
             viewport_rows: visible_content_h,
@@ -234,7 +242,9 @@ pub fn render_detail_view(
                 let rect = Rect::new(act_x, act_y, w, 1);
                 hits.bottom_actions.push((rect, i));
                 let style = if primary {
-                    Style::default().fg(palette.accent).add_modifier(Modifier::BOLD)
+                    Style::default()
+                        .fg(palette.accent)
+                        .add_modifier(Modifier::BOLD)
                 } else {
                     Style::default().fg(palette.overlay0)
                 };

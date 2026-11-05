@@ -4,8 +4,8 @@ use ratatui::{
     style::{Modifier, Style},
 };
 
-use crate::app::state::Palette;
 use super::list_view::put_str;
+use crate::app::state::Palette;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FormField {
@@ -116,7 +116,9 @@ pub fn render_inline_form(
         current_y,
         area.width,
         &form.title,
-        Style::default().fg(palette.accent).add_modifier(Modifier::BOLD),
+        Style::default()
+            .fg(palette.accent)
+            .add_modifier(Modifier::BOLD),
     );
     current_y += 1;
 
@@ -141,11 +143,20 @@ pub fn render_inline_form(
 
         // Label
         let label_style = if is_active {
-            Style::default().fg(palette.accent).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(palette.accent)
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(palette.overlay0)
         };
-        put_str(buffer, area.x, current_y, area.width, &field.label, label_style);
+        put_str(
+            buffer,
+            area.x,
+            current_y,
+            area.width,
+            &field.label,
+            label_style,
+        );
         current_y += 1;
 
         // Input box
@@ -166,7 +177,14 @@ pub fn render_inline_form(
             cell.set_bg(box_bg);
         }
 
-        put_str(buffer, area.x, current_y, 1, "[", Style::default().fg(palette.surface1));
+        put_str(
+            buffer,
+            area.x,
+            current_y,
+            1,
+            "[",
+            Style::default().fg(palette.surface1),
+        );
 
         if field.value.is_empty() {
             put_str(
@@ -190,7 +208,8 @@ pub fn render_inline_form(
 
         // Active field cursor
         if is_active {
-            let cursor_x = area.x + 2 + (field.value.chars().count() as u16).min(box_w.saturating_sub(5));
+            let cursor_x =
+                area.x + 2 + (field.value.chars().count() as u16).min(box_w.saturating_sub(5));
             if cursor_x < area.x + box_w.saturating_sub(1) {
                 let cell = &mut buffer[(cursor_x, current_y)];
                 cell.set_char('█');
@@ -219,7 +238,9 @@ pub fn render_inline_form(
                 current_y,
                 area.width,
                 &format!("⚠ Error: {err}"),
-                Style::default().fg(palette.red).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(palette.red)
+                    .add_modifier(Modifier::BOLD),
             );
             current_y += 2;
         }
@@ -231,7 +252,9 @@ pub fn render_inline_form(
                 current_y,
                 area.width,
                 &format!("✓ {ok_msg}"),
-                Style::default().fg(palette.green).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(palette.green)
+                    .add_modifier(Modifier::BOLD),
             );
             current_y += 2;
         }
@@ -249,7 +272,9 @@ pub fn render_inline_form(
         hits.submit_button = Some(submit_rect);
 
         let sub_style = if is_valid {
-            Style::default().fg(palette.accent).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(palette.accent)
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(palette.overlay0)
         };

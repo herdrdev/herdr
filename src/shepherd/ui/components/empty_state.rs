@@ -4,8 +4,8 @@ use ratatui::{
     style::{Modifier, Style},
 };
 
-use crate::app::state::Palette;
 use super::list_view::put_str;
+use crate::app::state::Palette;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct EmptyStateHits {
@@ -36,7 +36,9 @@ pub fn render_empty_state(
         current_y,
         area.width,
         title,
-        Style::default().fg(palette.accent).add_modifier(Modifier::BOLD),
+        Style::default()
+            .fg(palette.accent)
+            .add_modifier(Modifier::BOLD),
     );
     current_y += 2;
 
@@ -77,7 +79,9 @@ pub fn render_empty_state(
                 let rect = Rect::new(btn_x, current_y, w, 1);
                 hits.actions.push((rect, i));
                 let style = if i == 0 {
-                    Style::default().fg(palette.accent).add_modifier(Modifier::BOLD)
+                    Style::default()
+                        .fg(palette.accent)
+                        .add_modifier(Modifier::BOLD)
                 } else {
                     Style::default().fg(palette.overlay0)
                 };
@@ -104,7 +108,10 @@ mod tests {
         let area = Rect::new(0, 0, 60, 12);
         let mut buffer = Buffer::empty(area);
 
-        let actions = [("+ Create First Task", Some("n")), ("Import GitHub", Some("i"))];
+        let actions = [
+            ("+ Create First Task", Some("n")),
+            ("Import GitHub", Some("i")),
+        ];
         let hits = render_empty_state(
             &mut buffer,
             area,

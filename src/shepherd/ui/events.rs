@@ -809,6 +809,10 @@ fn render_pattern_runs_view(
             PatternRunState::Paused => (palette.yellow, "⏸ PAUSADA"),
             PatternRunState::Stopped => (palette.red, "⏹ DETENIDA"),
             PatternRunState::Failed => (palette.red, "✗ ERROR EN EJECUCIÓN"),
+            PatternRunState::Done if detail.quiesced => (
+                palette.blue,
+                "✓ COMPLETADA (en reposo; despierta con mensaje nuevo)",
+            ),
             PatternRunState::Done => (palette.blue, "✓ COMPLETADA"),
             PatternRunState::Degraded => (palette.yellow, "⚠ DEGRADADA"),
         };
@@ -1028,6 +1032,7 @@ mod tests {
             updated_at: "2026-11-05T12:00:00Z".into(),
             finished_at: None,
             error: None,
+            quiesced: false,
         });
 
         let area = Rect::new(0, 0, 100, 30);

@@ -4,8 +4,8 @@ use ratatui::{
     style::{Modifier, Style},
 };
 
-use crate::app::state::Palette;
 use super::list_view::put_str;
+use crate::app::state::Palette;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ConfirmStripeHits {
@@ -34,8 +34,18 @@ pub fn render_confirm_stripe(
     };
 
     // Draw top separator/border
-    let top_border = format!("┌─ CONFIRMACIÓN ─{}", "─".repeat(area.width.saturating_sub(18) as usize));
-    put_str(buffer, area.x, area.y, area.width, &top_border, Style::default().fg(border_color));
+    let top_border = format!(
+        "┌─ CONFIRMACIÓN ─{}",
+        "─".repeat(area.width.saturating_sub(18) as usize)
+    );
+    put_str(
+        buffer,
+        area.x,
+        area.y,
+        area.width,
+        &top_border,
+        Style::default().fg(border_color),
+    );
 
     let content_y = area.y + 1;
 
@@ -52,14 +62,31 @@ pub fn render_confirm_stripe(
     let warn_prefix = if is_destructive { "⚠ " } else { "🔒 " };
     let full_warn = format!("{warn_prefix}{warning_text}");
     let warn_style = if is_destructive {
-        Style::default().fg(palette.red).bg(palette.surface0).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(palette.red)
+            .bg(palette.surface0)
+            .add_modifier(Modifier::BOLD)
     } else {
-        Style::default().fg(palette.yellow).bg(palette.surface0).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(palette.yellow)
+            .bg(palette.surface0)
+            .add_modifier(Modifier::BOLD)
     };
-    put_str(buffer, area.x + 2, content_y, area.width.saturating_sub(4), &full_warn, warn_style);
+    put_str(
+        buffer,
+        area.x + 2,
+        content_y,
+        area.width.saturating_sub(4),
+        &full_warn,
+        warn_style,
+    );
 
     // Buttons line (either same line or line below if height allows)
-    let btn_y = if area.height >= 3 { content_y + 1 } else { content_y };
+    let btn_y = if area.height >= 3 {
+        content_y + 1
+    } else {
+        content_y
+    };
     let mut btn_x = area.x + 2;
 
     // If same line, place buttons on right
@@ -79,9 +106,15 @@ pub fn render_confirm_stripe(
         let conf_rect = Rect::new(btn_x, btn_y, conf_w, 1);
         hits.confirm_button = Some(conf_rect);
         let conf_style = if is_destructive {
-            Style::default().fg(palette.red).bg(palette.surface0).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(palette.red)
+                .bg(palette.surface0)
+                .add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(palette.green).bg(palette.surface0).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(palette.green)
+                .bg(palette.surface0)
+                .add_modifier(Modifier::BOLD)
         };
         put_str(buffer, btn_x, btn_y, conf_w, &conf_text, conf_style);
         btn_x += conf_w + 2;
@@ -107,7 +140,14 @@ pub fn render_confirm_stripe(
     let bot_y = area.bottom().saturating_sub(1);
     if bot_y > content_y {
         let bot_border = format!("└{}┘", "─".repeat(area.width.saturating_sub(2) as usize));
-        put_str(buffer, area.x, bot_y, area.width, &bot_border, Style::default().fg(border_color));
+        put_str(
+            buffer,
+            area.x,
+            bot_y,
+            area.width,
+            &bot_border,
+            Style::default().fg(border_color),
+        );
     }
 
     hits

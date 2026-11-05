@@ -16,12 +16,9 @@ use ratatui::{
 };
 
 use crate::app::state::Palette;
-use components::{
-    list_view::put_str,
-    status_bar::render_status_bar,
-};
 #[allow(unused_imports)]
 pub use agents::{ShepherdAgentsAction, ShepherdAgentsHits, ShepherdAgentsSectionState};
+use components::{list_view::put_str, status_bar::render_status_bar};
 #[allow(unused_imports)]
 pub use events::{ShepherdEventsAction, ShepherdEventsHits, ShepherdEventsSectionState};
 #[allow(unused_imports)]
@@ -71,7 +68,9 @@ pub fn render_shepherd_section(
         top_y,
         title_w,
         title,
-        Style::default().fg(palette.accent).add_modifier(Modifier::BOLD),
+        Style::default()
+            .fg(palette.accent)
+            .add_modifier(Modifier::BOLD),
     );
     tab_x += title_w + 1;
 
@@ -91,7 +90,9 @@ pub fn render_shepherd_section(
             hits.tabs.push((tab_rect, tab));
 
             let tab_style = if is_active {
-                Style::default().fg(palette.accent).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(palette.accent)
+                    .add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(palette.overlay0)
             };
@@ -263,8 +264,15 @@ pub fn render_shepherd_section(
         ShepherdSectionTab::Events => {
             let sum = match state.events.active_subtab {
                 events::ShepherdEventsSubTab::Topics => {
-                    let paused_str = if state.events.view_paused { " (PAUSADO)" } else { "" };
-                    format!("Tópicos y Streaming{paused_str} ({} msgs)", state.events.messages.len())
+                    let paused_str = if state.events.view_paused {
+                        " (PAUSADO)"
+                    } else {
+                        ""
+                    };
+                    format!(
+                        "Tópicos y Streaming{paused_str} ({} msgs)",
+                        state.events.messages.len()
+                    )
                 }
                 events::ShepherdEventsSubTab::PatternRuns => {
                     format!("Ejecuciones de patrones ({})", state.events.runs.len())
@@ -290,14 +298,7 @@ pub fn render_shepherd_section(
         }
     });
 
-    render_status_bar(
-        buffer,
-        status_area,
-        &summary,
-        help_text,
-        notice,
-        palette,
-    );
+    render_status_bar(buffer, status_area, &summary, help_text, notice, palette);
 
     hits
 }
@@ -589,11 +590,7 @@ pub fn handle_shepherd_section_mouse(
                     // Header action in list (+ Iniciar)
                     if let Some(btn_rect) = run_hits.list_hits.action_button {
                         if contains_point(btn_rect, point) {
-                            let task_id = state
-                                .runs
-                                .selected_run()
-                                .map(|r| r.task_id)
-                                .unwrap_or(1);
+                            let task_id = state.runs.selected_run().map(|r| r.task_id).unwrap_or(1);
                             state.runs.start_launch_run(task_id, false);
                             return ShepherdSectionOutcome::Handled;
                         }
@@ -688,7 +685,9 @@ pub fn handle_shepherd_section_mouse(
                                 match action_idx {
                                     0 => {
                                         if let Some(r) = state.runs.selected_run() {
-                                            state.runs.start_launch_run(r.task_id, r.has_saved_plan);
+                                            state
+                                                .runs
+                                                .start_launch_run(r.task_id, r.has_saved_plan);
                                         }
                                         return ShepherdSectionOutcome::Handled;
                                     }
@@ -715,7 +714,10 @@ pub fn handle_shepherd_section_mouse(
             }
             ShepherdSectionTab::Patterns => {
                 if let Some(ref pattern_hits) = hits.patterns_hits {
-                    let (handled, act) = state.patterns.handle_mouse(mouse.column, mouse.row, pattern_hits);
+                    let (handled, act) =
+                        state
+                            .patterns
+                            .handle_mouse(mouse.column, mouse.row, pattern_hits);
                     if let Some(a) = act {
                         return ShepherdSectionOutcome::Action(ShepherdSectionAction::Patterns(a));
                     } else if handled {
@@ -819,7 +821,8 @@ pub fn handle_shepherd_section_mouse(
                                     }
                                     skills::SkillsViewMode::CatalogView => {
                                         if action_idx == 0 {
-                                            if let Some(act) = state.skills.toggle_catalog_global() {
+                                            if let Some(act) = state.skills.toggle_catalog_global()
+                                            {
                                                 return ShepherdSectionOutcome::Action(
                                                     ShepherdSectionAction::Skills(act),
                                                 );
@@ -840,7 +843,9 @@ pub fn handle_shepherd_section_mouse(
                             if contains_point(btn_rect, point) {
                                 match state.skills.mode {
                                     skills::SkillsViewMode::AgentView => state.skills.toggle_mode(),
-                                    skills::SkillsViewMode::CatalogView => state.skills.start_create_skill(),
+                                    skills::SkillsViewMode::CatalogView => {
+                                        state.skills.start_create_skill()
+                                    }
                                 }
                                 return ShepherdSectionOutcome::Handled;
                             }

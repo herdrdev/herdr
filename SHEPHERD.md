@@ -5164,3 +5164,35 @@ Fallos nuevos:
 No cubierto: pestaña Eventos con tráfico real (capturas), patrones jerárquico/blackboard/market con agentes reales.
 
 Limpieza: sesión aislada parada y reseteada, worktrees eliminados.
+
+## Estado F8f — quiescencia de runs, auto-despertar, `topic groups` (2026-11-05)
+
+Sin commits. Cada fallo tiene test que fallaba antes de la corrección (`service/tests_f8f.rs`, test de formateador en `src/cli/shepherd.rs`, golden nuevo).
+
+**Causas raíz y arreglos**
+1. *Run no pasaba a `done`*: `reconcile_pattern_runs` solo consideraba agentes `done`/`killed`/`exited`/`failed`; un agente interactivo (MCP) al acabar el turno queda `idle`, así que nunca había `LIVE 0`. Ahora hay **quiescencia**.
+2. *Auto-despertar*: `wake_dormant_topic_subscribers` contaba como «nuevos» los mensajes sin reconocer del propio agente (un publicador nunca hace `ack` de lo que publica). Ahora cuenta solo mensajes con `from != agente`; los ya reconocidos ya los excluía `poll`.
+3. *`topic groups` a cero*: el formateador de `src/cli/shepherd.rs` leía `active_members`, `committed_offset`, `total_messages` y `lag`, campos que `ConsumerGroupSummary` nunca serializó (los reales eran `members` y `committed_offsets`); el bus, los sidecars y el nombre de grupo (`brain-1`/`coder-1` vía `subscribe`) estaban bien. Se añadieron `total_messages` y `lag_by_partition` (opcionales, omitidos si vacíos → golden existentes intactos) y el formateador usa los campos reales: `MEMBERS` = nº de miembros, `COMMITTED` = `p0:#N`, `TOTAL`, `LAG` = `p0:N`.
+
+**Definición de quiescencia**: un run `running` (no `paused`) pasa a `done` (con `quiesced = true`) cuando (a) tiene agentes vivos y ninguno está `working`/`blocked`/`starting` (solo `idle`/`done`), (b) ningún miembro vivo del run tiene mensajes sin reconocer de otros publicadores en los tópicos del run, y (c) (a)+(b) se mantienen `run_quiescence_secs` seguidos. Config: `[shepherd.limits] run_quiescence_secs` (default 30; 0 la desactiva), documentada en `config-reference.json`. Un run `done` con `quiesced` vuelve a `running` si llega un mensaje pendiente o algún agente pasa a activo (el despertar ya existente ya no excluye estos runs). `stopped`/`failed`/`degraded` no se tocan; `paused` tampoco. El temporizador es en memoria: tras reiniciar el servidor se recalcula desde cero (test `quiescence_is_reconciled_after_server_restart`). Pestaña Eventos: el detalle del run muestra «✓ COMPLETADA (en reposo; despierta con mensaje nuevo)»; CLI/API: `state: done` + campo `quiesced` en `pattern run show`.
+
+**Archivos de herdr tocados: 0.** (Cambios solo en `crates/shepherd-core`, `src/cli/shepherd.rs`, `src/shepherd/ui/events.rs`, `docs/next/api/shepherd-api.schema.json` —solo adiciones: `lag_by_partition`, `total_messages`, `quiesced`— y `config-reference.json`. Los demás archivos que ves en `git status` son formato rustfmt de archivos shepherd.)
+
+**Números reales**: shepherd-core 139 + 155 ok; `shepherd::` 90; `client::shell` 403 (2 ignored); `protocol::` 156; `api::` 318/319 en la tanda (intermitente de plugins; `plugin_pane_open_injects…` y antes `plugin_launch_survives…` pasan solos); `server::` 318 (5 ignored); `workflow::…explicit_approval…` ok solo. `rename-from-herdr.sh --check` OK; rustfmt --check de archivos propios OK; `testRepo|araquesebastian` = 0. Golden existentes intactos; nuevo: `handle_call_consumer_groups_with_messages.json`.
+
+**Prueba aislada** (`shepherd-iso.sh`, `run_quiescence_secs = 8`, vendor falso = symlink `claude`→`sleep`, estados dirigidos con `pane.report_agent`; ningún agente real):
+```
+run orchestrator-worker, 4 agentes idle  →  run done, quiesced=true, LIVE 4 (≈8 s después)
+brain-1 publica en results (propio)      →  run sigue done; pane de brain-1: 0 avisos
+publica "human" en results               →  run running; pane: "Hay 1 mensaje nuevo en 'results': usa poll"  (cuenta 1, no 2)
+topic groups:
+TOPIC    GROUP        MEMBERS COMMITTED TOTAL LAG
+orders   worker-pool  3       -         0     0
+results  brain        1       -         2     p0:2
+```
+
+**Límites / qué NO queda**
+- **La quiescencia depende de que los agentes hagan `ack`**: un agente que lee con `poll` pero no reconoce deja lag y el run no pasa a `done` (los mensajes propios sí se excluyen). Habrá que reforzarlo en el prompt/skill de patrones o hacer `ack` implícito en `poll`.
+- Los agentes no MCP se entregan por pane y se reconocen al entregar, así que no bloquean la quiescencia.
+- Temporizador en memoria (reinicio = recuento desde cero). Lista de runs de Eventos no distingue `quiesced` (solo el detalle).
+- Pendiente de la prueba real con claude y codex (la repetirá el brain); no se probaron hierárquico/blackboard/market ni capturas de Eventos con tráfico real.

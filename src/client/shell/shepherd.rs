@@ -233,11 +233,7 @@ impl ClientShellState {
         self.persist_chrome_preferences(outcome);
     }
 
-    pub(super) fn set_shepherd_tab_active(
-        &mut self,
-        active: bool,
-        outcome: &mut ClientShellInput,
-    ) {
+    pub(super) fn set_shepherd_tab_active(&mut self, active: bool, outcome: &mut ClientShellInput) {
         if !self.config.shepherd_enabled {
             return;
         }
@@ -557,8 +553,10 @@ impl ClientShellState {
                 criteria,
                 attachments,
             } => {
-                let attach_strings: Vec<String> =
-                    attachments.into_iter().map(|p| p.display().to_string()).collect();
+                let attach_strings: Vec<String> = attachments
+                    .into_iter()
+                    .map(|p| p.display().to_string())
+                    .collect();
                 let method = shepherd_op_to_method(
                     "create_task",
                     serde_json::json!({
@@ -590,10 +588,8 @@ impl ClientShellState {
                 );
             }
             ShepherdTasksAction::ArchiveTask { task_id } => {
-                let method = shepherd_op_to_method(
-                    "archive_task",
-                    serde_json::json!({ "id": task_id }),
-                );
+                let method =
+                    shepherd_op_to_method("archive_task", serde_json::json!({ "id": task_id }));
                 self.push_endpoint_method_with_kind(
                     method,
                     PendingEndpointKind::ShepherdCall {
@@ -700,10 +696,7 @@ impl ClientShellState {
             ShepherdPatternsAction::Get { name } => {
                 self.push_endpoint_method_with_kind(
                     crate::api::schema::Method::ShepherdPatternGet(
-                        crate::api::schema::ShepherdPatternGetParams {
-                            root: None,
-                            name,
-                        },
+                        crate::api::schema::ShepherdPatternGetParams { root: None, name },
                     ),
                     PendingEndpointKind::ShepherdCall {
                         op: "pattern_get".to_string(),
@@ -729,10 +722,7 @@ impl ClientShellState {
             ShepherdPatternsAction::Delete { name } => {
                 self.push_endpoint_method_with_kind(
                     crate::api::schema::Method::ShepherdPatternDelete(
-                        crate::api::schema::ShepherdPatternDeleteParams {
-                            root: None,
-                            name,
-                        },
+                        crate::api::schema::ShepherdPatternDeleteParams { root: None, name },
                     ),
                     PendingEndpointKind::ShepherdCall {
                         op: "pattern_delete".to_string(),
@@ -947,10 +937,8 @@ impl ClientShellState {
                 );
             }
             ShepherdGitAction::RemoveWorktree { path } => {
-                let method = shepherd_op_to_method(
-                    "remove_worktree",
-                    serde_json::json!({ "path": path }),
-                );
+                let method =
+                    shepherd_op_to_method("remove_worktree", serde_json::json!({ "path": path }));
                 self.push_endpoint_method_with_kind(
                     method,
                     PendingEndpointKind::ShepherdCall {
@@ -994,10 +982,7 @@ impl ClientShellState {
             ShepherdEventsAction::ShowRun { id } => {
                 self.push_endpoint_method_with_kind(
                     crate::api::schema::Method::ShepherdPatternRunShow(
-                        crate::api::schema::ShepherdPatternRunShowParams {
-                            root: None,
-                            id,
-                        },
+                        crate::api::schema::ShepherdPatternRunShowParams { root: None, id },
                     ),
                     PendingEndpointKind::ShepherdCall {
                         op: "pattern_run_show".to_string(),
@@ -1005,7 +990,11 @@ impl ClientShellState {
                     outcome,
                 );
             }
-            ShepherdEventsAction::TailTopic { topic, partition, limit } => {
+            ShepherdEventsAction::TailTopic {
+                topic,
+                partition,
+                limit,
+            } => {
                 self.push_endpoint_method_with_kind(
                     crate::api::schema::Method::ShepherdTopicTail(
                         crate::api::schema::ShepherdTopicTailParams {
@@ -1020,7 +1009,12 @@ impl ClientShellState {
                     outcome,
                 );
             }
-            ShepherdEventsAction::ReplayTopic { topic, partition, from_offset, limit } => {
+            ShepherdEventsAction::ReplayTopic {
+                topic,
+                partition,
+                from_offset,
+                limit,
+            } => {
                 self.push_endpoint_method_with_kind(
                     crate::api::schema::Method::ShepherdTopicReplay(
                         crate::api::schema::ShepherdTopicReplayParams {
@@ -1039,10 +1033,7 @@ impl ClientShellState {
             ShepherdEventsAction::PauseRun { id } => {
                 self.push_endpoint_method_with_kind(
                     crate::api::schema::Method::ShepherdPatternRunPause(
-                        crate::api::schema::ShepherdPatternRunPauseParams {
-                            root: None,
-                            id,
-                        },
+                        crate::api::schema::ShepherdPatternRunPauseParams { root: None, id },
                     ),
                     PendingEndpointKind::ShepherdCall {
                         op: "pattern_run_pause".to_string(),
@@ -1053,10 +1044,7 @@ impl ClientShellState {
             ShepherdEventsAction::ResumeRun { id } => {
                 self.push_endpoint_method_with_kind(
                     crate::api::schema::Method::ShepherdPatternRunResume(
-                        crate::api::schema::ShepherdPatternRunResumeParams {
-                            root: None,
-                            id,
-                        },
+                        crate::api::schema::ShepherdPatternRunResumeParams { root: None, id },
                     ),
                     PendingEndpointKind::ShepherdCall {
                         op: "pattern_run_resume".to_string(),
@@ -1349,10 +1337,7 @@ impl ClientShellState {
                 if let Some(id) = auto_show_run {
                     self.push_endpoint_method_with_kind(
                         crate::api::schema::Method::ShepherdPatternRunShow(
-                            crate::api::schema::ShepherdPatternRunShowParams {
-                                root: None,
-                                id,
-                            },
+                            crate::api::schema::ShepherdPatternRunShowParams { root: None, id },
                         ),
                         PendingEndpointKind::ShepherdCall {
                             op: "pattern_run_show".to_string(),
@@ -1567,7 +1552,8 @@ impl ClientShellState {
                         }
                         self.refresh_shepherd_views(outcome);
                     }
-                    "pattern_run_start" | "pattern_run_pause" | "pattern_run_resume" | "pattern_run_stop" => {
+                    "pattern_run_start" | "pattern_run_pause" | "pattern_run_resume"
+                    | "pattern_run_stop" => {
                         let msg = format!("Operación de ejecución completada ({op})");
                         if let Some(ref mut section) = self.shepherd_section {
                             section.status_message = Some(msg);
@@ -1616,9 +1602,8 @@ impl ClientShellState {
                         }
                     }
                     "topic_tail" | "topic_replay" => {
-                        if let Ok(messages) = serde_json::from_value::<
-                            Vec<shepherd_core::bus::Message>,
-                        >(data.clone())
+                        if let Ok(messages) =
+                            serde_json::from_value::<Vec<shepherd_core::bus::Message>>(data.clone())
                         {
                             if let Some(ref mut section) = self.shepherd_section {
                                 if !section.events.view_paused {
@@ -1662,9 +1647,9 @@ impl ClientShellState {
         }
 
         let should_refresh = self.pending_shepherd_refresh
-            || self
-                .last_shepherd_refresh
-                .is_none_or(|last| now.saturating_duration_since(last) >= std::time::Duration::from_millis(1500));
+            || self.last_shepherd_refresh.is_none_or(|last| {
+                now.saturating_duration_since(last) >= std::time::Duration::from_millis(1500)
+            });
 
         if should_refresh {
             self.refresh_shepherd_views(outcome);

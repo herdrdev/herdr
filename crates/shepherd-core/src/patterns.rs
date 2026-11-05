@@ -1423,7 +1423,12 @@ mod tests {
 
     #[test]
     fn test_get_builtin_pattern_loads_all_four_types() {
-        for name in &["orchestrator-worker", "hierarchical", "blackboard", "market"] {
+        for name in &[
+            "orchestrator-worker",
+            "hierarchical",
+            "blackboard",
+            "market",
+        ] {
             let pat = get_builtin_pattern(name).expect("builtin pattern must deserialize");
             assert_eq!(&pat.name, name);
             assert!(!pat.agents.is_empty());

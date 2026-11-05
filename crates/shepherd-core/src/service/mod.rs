@@ -132,6 +132,8 @@ pub struct ServiceConfig {
     pub reaction_poll_interval: Duration,
     pub max_prompt_resends: usize,
     pub non_mcp_done_quiet_secs: u64,
+    /// Seconds a pattern run must stay quiescent before it becomes `done` (0 disables).
+    pub run_quiescence_secs: u64,
     pub reconcile_interval: Duration,
 }
 
@@ -152,6 +154,7 @@ impl ServiceConfig {
             reaction_poll_interval: Duration::from_millis(100),
             max_prompt_resends: 3,
             non_mcp_done_quiet_secs: 60,
+            run_quiescence_secs: 30,
             reconcile_interval: Duration::from_secs(2),
         }
     }
@@ -279,6 +282,8 @@ pub struct OrchestrationService {
     pub(crate) quiet_screens: Arc<Mutex<HashMap<String, ScreenQuietTracker>>>,
     pub(crate) failed_requests: Arc<Mutex<Vec<FailedRequestLogEntry>>>,
     pub(crate) topic_wake_notified: Arc<Mutex<HashMap<(String, String), (u64, u64)>>>,
+    /// Run id -> ms since which the run has been continuously quiescent.
+    pub(crate) run_quiet_since: Arc<Mutex<HashMap<String, u64>>>,
 }
 
 impl OrchestrationService {
@@ -299,6 +304,9 @@ impl OrchestrationService {
         {
             svc_cfg.non_mcp_done_quiet_secs = shepherd_config.limits.non_mcp_done_quiet_secs;
         }
+        if svc_cfg.run_quiescence_secs == 30 {
+            svc_cfg.run_quiescence_secs = shepherd_config.limits.run_quiescence_secs;
+        }
         Self {
             service_config: svc_cfg,
             shepherd_config,
@@ -310,6 +318,7 @@ impl OrchestrationService {
             quiet_screens: Arc::new(Mutex::new(HashMap::new())),
             failed_requests: Arc::new(Mutex::new(Vec::new())),
             topic_wake_notified: Arc::new(Mutex::new(HashMap::new())),
+            run_quiet_since: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -972,7 +981,14 @@ impl OrchestrationService {
                     .get("confirm_over_limit")
                     .and_then(Value::as_bool)
                     .unwrap_or(false);
-                let run = self.start_pattern_run(&root, pattern_name, pattern_obj, task, worktree, confirm)?;
+                let run = self.start_pattern_run(
+                    &root,
+                    pattern_name,
+                    pattern_obj,
+                    task,
+                    worktree,
+                    confirm,
+                )?;
                 serde_json::to_value(run).map_err(|e| e.to_string())
             }
             "pattern_runs" | "pattern_run_list" => {
@@ -1153,3 +1169,5 @@ pub use registry::{
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_f8f;

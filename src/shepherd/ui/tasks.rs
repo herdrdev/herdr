@@ -1,11 +1,6 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use ratatui::{
-    buffer::Buffer,
-    layout::Rect,
-    style::Style,
-};
+use ratatui::{buffer::Buffer, layout::Rect, style::Style};
 
-use crate::app::state::Palette;
 use super::components::{
     confirm_stripe::{render_confirm_stripe, ConfirmStripeHits},
     detail_view::{render_detail_view, DetailContentBlock, DetailHeader, DetailViewHits},
@@ -13,6 +8,7 @@ use super::components::{
     inline_form::{render_inline_form, FormField, InlineFormHits, InlineFormState},
     list_view::{render_list_view, ListViewHits, ListViewItem},
 };
+use crate::app::state::Palette;
 pub use crate::shepherd::tasks::{
     CreateTaskFormState, ImportGhFormState, ShepherdTaskRow, ShepherdTasksAction,
 };
@@ -77,7 +73,9 @@ impl ShepherdTasksSectionState {
 
     pub fn selected_task(&self) -> Option<&ShepherdTaskRow> {
         let indices = self.filtered_indices();
-        indices.get(self.selected).and_then(|&idx| self.tasks.get(idx))
+        indices
+            .get(self.selected)
+            .and_then(|&idx| self.tasks.get(idx))
     }
 
     pub fn select_prev(&mut self) {
@@ -223,17 +221,18 @@ impl ShepherdTasksSectionState {
                     form.cycle_field_backward();
                     return (true, None);
                 }
-                KeyCode::Enter => {
-                    match self.submit_create_task() {
-                        Ok(act) => return (true, act),
-                        Err(_) => return (true, None),
-                    }
-                }
+                KeyCode::Enter => match self.submit_create_task() {
+                    Ok(act) => return (true, act),
+                    Err(_) => return (true, None),
+                },
                 KeyCode::Backspace => {
                     form.delete_char();
                     return (true, None);
                 }
-                KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) && !key.modifiers.contains(KeyModifiers::ALT) => {
+                KeyCode::Char(c)
+                    if !key.modifiers.contains(KeyModifiers::CONTROL)
+                        && !key.modifiers.contains(KeyModifiers::ALT) =>
+                {
                     form.insert_char(c);
                     return (true, None);
                 }
@@ -248,17 +247,18 @@ impl ShepherdTasksSectionState {
                     self.import_gh = None;
                     return (true, None);
                 }
-                KeyCode::Enter => {
-                    match self.submit_import_gh() {
-                        Ok(act) => return (true, act),
-                        Err(_) => return (true, None),
-                    }
-                }
+                KeyCode::Enter => match self.submit_import_gh() {
+                    Ok(act) => return (true, act),
+                    Err(_) => return (true, None),
+                },
                 KeyCode::Backspace => {
                     import_form.delete_char();
                     return (true, None);
                 }
-                KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) && !key.modifiers.contains(KeyModifiers::ALT) => {
+                KeyCode::Char(c)
+                    if !key.modifiers.contains(KeyModifiers::CONTROL)
+                        && !key.modifiers.contains(KeyModifiers::ALT) =>
+                {
                     import_form.insert_char(c);
                     return (true, None);
                 }
@@ -361,7 +361,10 @@ pub fn render_tasks_section(
             };
             ListViewItem {
                 title: format!("#{:02} {}", t.id, t.title),
-                badge: Some((format!("[{}]", t.state.to_uppercase()), Style::default().fg(badge_color))),
+                badge: Some((
+                    format!("[{}]", t.state.to_uppercase()),
+                    Style::default().fg(badge_color),
+                )),
                 meta: None,
             }
         })
@@ -477,12 +480,19 @@ pub fn render_tasks_section(
                 "done" | "completed" => palette.overlay0,
                 _ => palette.yellow,
             };
-            badges.push((format!("[{}]", task.state.to_uppercase()), Style::default().fg(badge_color)));
+            badges.push((
+                format!("[{}]", task.state.to_uppercase()),
+                Style::default().fg(badge_color),
+            ));
 
             let meta = format!(
                 "Estado: {}  |  Rama: {}  |  PR: #{}",
                 task.state,
-                if task.branch.is_empty() { "ninguna" } else { &task.branch },
+                if task.branch.is_empty() {
+                    "ninguna"
+                } else {
+                    &task.branch
+                },
                 task.pr
             );
 
@@ -500,7 +510,9 @@ pub fn render_tasks_section(
             }
 
             if !task.criteria.is_empty() {
-                content.push(DetailContentBlock::Heading("CRITERIOS DE ACEPTACIÓN:".into()));
+                content.push(DetailContentBlock::Heading(
+                    "CRITERIOS DE ACEPTACIÓN:".into(),
+                ));
                 let checklist = task
                     .criteria
                     .iter()

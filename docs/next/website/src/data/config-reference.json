@@ -1568,6 +1568,12 @@
           "type": "integer",
           "default": "3",
           "description": "Delay in seconds before notifying for blocked or idle agents."
+        },
+        {
+          "key": "shepherd.limits.run_quiescence_secs",
+          "type": "integer",
+          "default": "30",
+          "description": "Seconds a pattern run must stay quiescent (all agents idle or done, no unacknowledged messages) before it becomes done. 0 disables."
         }
       ]
     }

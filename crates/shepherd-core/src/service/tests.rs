@@ -3,10 +3,10 @@ use crate::bus::Message;
 use crate::terminals::{InMemoryTerminals, TerminalAgentStatus};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-struct TestDir(PathBuf);
+pub(super) struct TestDir(PathBuf);
 
 impl TestDir {
-    fn new(name: &str) -> Self {
+    pub(super) fn new(name: &str) -> Self {
         static COUNTER: AtomicUsize = AtomicUsize::new(1);
         let n = COUNTER.fetch_add(1, Ordering::SeqCst);
         let nonce = std::time::SystemTime::now()
@@ -21,7 +21,7 @@ impl TestDir {
         Self(dir)
     }
 
-    fn path(&self) -> &Path {
+    pub(super) fn path(&self) -> &Path {
         &self.0
     }
 }
@@ -32,7 +32,7 @@ impl Drop for TestDir {
     }
 }
 
-fn test_service(dir: &Path) -> (OrchestrationService, InMemoryTerminals, ManualClock) {
+pub(super) fn test_service(dir: &Path) -> (OrchestrationService, InMemoryTerminals, ManualClock) {
     let state_dir = dir.join("state");
     std::fs::create_dir_all(&state_dir).unwrap();
     let terminals = InMemoryTerminals::new();

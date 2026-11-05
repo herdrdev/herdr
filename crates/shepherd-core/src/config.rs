@@ -111,6 +111,8 @@ pub struct Limits {
     pub protected_branches: Vec<String>,
     pub non_mcp_done_quiet_secs: u64,
     pub notice_after_secs: u64,
+    /// Seconds a pattern run stays quiescent (agents idle, nothing pending) before it is `done`.
+    pub run_quiescence_secs: u64,
 }
 
 impl Default for Limits {
@@ -122,6 +124,7 @@ impl Default for Limits {
             protected_branches: vec!["main".into(), "master".into(), "develop".into()],
             non_mcp_done_quiet_secs: 60,
             notice_after_secs: 3,
+            run_quiescence_secs: 30,
         }
     }
 }
@@ -306,6 +309,7 @@ struct TomlLimitsSection {
     max_depth: Option<u32>,
     max_concurrent: Option<usize>,
     notice_after_secs: Option<u64>,
+    run_quiescence_secs: Option<u64>,
 }
 
 pub fn global_config_toml_path() -> Option<PathBuf> {
@@ -409,6 +413,9 @@ pub fn load_config_with_diagnostics(
                 }
                 if let Some(notice) = lim.notice_after_secs {
                     config.limits.notice_after_secs = notice;
+                }
+                if let Some(quiet) = lim.run_quiescence_secs {
+                    config.limits.run_quiescence_secs = quiet;
                 }
             }
         }

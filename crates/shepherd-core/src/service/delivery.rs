@@ -537,7 +537,7 @@ impl OrchestrationService {
                                     | crate::service::patterns_run::PatternRunState::Stopped
                                     | crate::service::patterns_run::PatternRunState::Failed
                                     | crate::service::patterns_run::PatternRunState::Done
-                            )
+                            ) && !r.quiesced
                         })
                         .flat_map(|r| r.agents.into_iter().map(|a| a.id))
                 })
@@ -593,10 +593,14 @@ impl OrchestrationService {
                 }
 
                 // Check unread messages on the topic
-                let unread = match bus.poll(member_id, &grp.topic, None) {
-                    Ok(msgs) if !msgs.is_empty() => msgs,
-                    _ => continue,
+                // Only unacknowledged messages from other publishers count (not its own).
+                let unread: Vec<_> = match bus.poll(member_id, &grp.topic, None) {
+                    Ok(msgs) => msgs.into_iter().filter(|m| &m.from != member_id).collect(),
+                    Err(_) => continue,
                 };
+                if unread.is_empty() {
+                    continue;
+                }
 
                 let count = unread.len();
                 let max_offset = unread.iter().map(|m| m.offset).max().unwrap_or(0);

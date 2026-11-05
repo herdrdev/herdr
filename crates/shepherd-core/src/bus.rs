@@ -111,6 +111,16 @@ pub struct ConsumerGroupSummary {
     pub group: String,
     pub members: Vec<String>,
     pub committed_offsets: HashMap<u32, u64>,
+    /// Messages in the topic (all partitions). Omitted when the topic is empty.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub total_messages: u64,
+    /// Unacknowledged messages per partition (only partitions holding messages).
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub lag_by_partition: HashMap<u32, u64>,
+}
+
+fn is_zero(n: &u64) -> bool {
+    *n == 0
 }
 
 /// 64-bit FNV-1a stable hash for deterministic partition routing.
@@ -199,7 +209,8 @@ impl MessageBus {
         // 3b. Load paused topics sidecar if present
         let paused_path = path_with_suffix(&path, ".paused");
         if let Ok(bytes) = std::fs::read(&paused_path) {
-            if let Ok(paused) = serde_json::from_slice::<std::collections::HashSet<String>>(&bytes) {
+            if let Ok(paused) = serde_json::from_slice::<std::collections::HashSet<String>>(&bytes)
+            {
                 state.paused_topics = paused;
             }
         }
@@ -719,11 +730,25 @@ impl MessageBus {
                     .and_then(|g| g.get(grp_name))
                     .cloned()
                     .unwrap_or_default();
+                let mut lag_by_partition: HashMap<u32, u64> = HashMap::new();
+                let mut total_messages = 0u64;
+                for m in state.all.iter().filter(|m| &m.topic == topic) {
+                    total_messages += 1;
+                    let lag = lag_by_partition.entry(m.partition).or_insert(0);
+                    if committed_offsets
+                        .get(&m.partition)
+                        .is_none_or(|c| m.offset > *c)
+                    {
+                        *lag += 1;
+                    }
+                }
                 groups.push(ConsumerGroupSummary {
                     topic: topic.clone(),
                     group: grp_name.clone(),
                     members: members.clone(),
                     committed_offsets,
+                    total_messages,
+                    lag_by_partition,
                 });
             }
         }
@@ -742,7 +767,10 @@ impl MessageBus {
     }
 
     /// Resume message consumption on a previously paused topic.
-    pub fn resume_topic(&self, topic: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub fn resume_topic(
+        &self,
+        topic: &str,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let mut state = self.state.lock().map_err(|_| "message bus lock poisoned")?;
         state.paused_topics.remove(topic);
         save_json_sidecar(&self.path, ".paused", &state.paused_topics)?;
@@ -1236,11 +1264,18 @@ mod tests {
         bus.subscribe("worker-1", "pipeline", Some("pool")).unwrap();
 
         // 1. Publish while running
-        bus.publish("pipeline", "job-1", Some("k1"), None, "user").unwrap();
+        bus.publish("pipeline", "job-1", Some("k1"), None, "user")
+            .unwrap();
         let polled = bus.poll("worker-1", "pipeline", None).unwrap();
         assert_eq!(polled.len(), 1);
         assert_eq!(polled[0].content, "job-1");
-        bus.ack("worker-1", "pipeline", Some(polled[0].partition), Some(polled[0].offset)).unwrap();
+        bus.ack(
+            "worker-1",
+            "pipeline",
+            Some(polled[0].partition),
+            Some(polled[0].offset),
+        )
+        .unwrap();
 
         // 2. Pause topic
         assert!(!bus.is_topic_paused("pipeline"));
@@ -1248,8 +1283,10 @@ mod tests {
         assert!(bus.is_topic_paused("pipeline"));
 
         // Publishing during pause still succeeds without loss
-        bus.publish("pipeline", "job-2", Some("k2"), None, "user").unwrap();
-        bus.publish("pipeline", "job-3", Some("k3"), None, "user").unwrap();
+        bus.publish("pipeline", "job-2", Some("k2"), None, "user")
+            .unwrap();
+        bus.publish("pipeline", "job-3", Some("k3"), None, "user")
+            .unwrap();
 
         // Polling during pause yields NO messages
         let paused_polled = bus.poll("worker-1", "pipeline", None).unwrap();

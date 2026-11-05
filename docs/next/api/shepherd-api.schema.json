@@ -8250,6 +8250,18 @@
             "group": {
               "type": "string"
             },
+            "lag_by_partition": {
+              "additionalProperties": false,
+              "description": "Unacknowledged messages per partition (only partitions holding messages).",
+              "patternProperties": {
+                "^\\d+$": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "type": "object"
+            },
             "members": {
               "items": {
                 "type": "string"
@@ -8258,6 +8270,12 @@
             },
             "topic": {
               "type": "string"
+            },
+            "total_messages": {
+              "description": "Messages in the topic (all partitions). Omitted when the topic is empty.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
             }
           },
           "required": [
@@ -10427,6 +10445,10 @@
             },
             "pattern": {
               "type": "string"
+            },
+            "quiesced": {
+              "description": "`done` reached by quiescence (agents idle, no pending messages); a new message revives it.",
+              "type": "boolean"
             },
             "state": {
               "$ref": "#/schemas/success_response/$defs/PatternRunState"

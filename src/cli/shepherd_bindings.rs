@@ -988,7 +988,8 @@ pub(crate) fn parse_operation(args: &[String]) -> Result<ShepherdOperation, Pars
                 }
                 "run-show" => {
                     let matches = parse_matches(
-                        Command::new("run-show").args(ShepherdPatternRunShowProjection::arguments()),
+                        Command::new("run-show")
+                            .args(ShepherdPatternRunShowProjection::arguments()),
                         sub_args,
                     )?;
                     let params = ShepherdPatternRunShowProjection::from_matches(&matches)?;
@@ -1016,7 +1017,8 @@ pub(crate) fn parse_operation(args: &[String]) -> Result<ShepherdOperation, Pars
                 }
                 "resume" => {
                     let matches = parse_matches(
-                        Command::new("resume").args(ShepherdPatternRunResumeProjection::arguments()),
+                        Command::new("resume")
+                            .args(ShepherdPatternRunResumeProjection::arguments()),
                         sub_args,
                     )?;
                     let params = ShepherdPatternRunResumeProjection::from_matches(&matches)?;

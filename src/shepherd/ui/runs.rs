@@ -5,14 +5,16 @@ use ratatui::{
     style::{Modifier, Style},
 };
 
-use crate::app::state::Palette;
 use super::components::{
     confirm_stripe::{render_confirm_stripe, ConfirmStripeHits},
-    detail_view::{render_detail_view, AlertLevel, DetailContentBlock, DetailHeader, DetailViewHits},
+    detail_view::{
+        render_detail_view, AlertLevel, DetailContentBlock, DetailHeader, DetailViewHits,
+    },
     empty_state::{render_empty_state, EmptyStateHits},
     inline_form::{render_inline_form, FormField, InlineFormHits, InlineFormState},
     list_view::{render_list_view, ListViewHits, ListViewItem},
 };
+use crate::app::state::Palette;
 pub use crate::shepherd::runs::{
     GateKind, LaunchOptionsFormState, RunStatus, ShepherdRunRow, ShepherdRunsAction,
 };
@@ -271,13 +273,28 @@ pub fn render_runs_section(
         .iter()
         .map(|r| {
             let (badge_str, badge_style) = if r.pending_gate.is_some() {
-                ("[GATE: PUSH/PR]".to_string(), Style::default().fg(palette.yellow).add_modifier(Modifier::BOLD))
+                (
+                    "[GATE: PUSH/PR]".to_string(),
+                    Style::default()
+                        .fg(palette.yellow)
+                        .add_modifier(Modifier::BOLD),
+                )
             } else {
                 match &r.status {
-                    RunStatus::Running => ("[RUNNING]".to_string(), Style::default().fg(palette.green)),
-                    RunStatus::Completed => ("[COMPLETED]".to_string(), Style::default().fg(palette.overlay0)),
-                    RunStatus::Failed { .. } => ("[FAILED]".to_string(), Style::default().fg(palette.red)),
-                    RunStatus::Cancelled => ("[CANCELLED]".to_string(), Style::default().fg(palette.peach)),
+                    RunStatus::Running => {
+                        ("[RUNNING]".to_string(), Style::default().fg(palette.green))
+                    }
+                    RunStatus::Completed => (
+                        "[COMPLETED]".to_string(),
+                        Style::default().fg(palette.overlay0),
+                    ),
+                    RunStatus::Failed { .. } => {
+                        ("[FAILED]".to_string(), Style::default().fg(palette.red))
+                    }
+                    RunStatus::Cancelled => (
+                        "[CANCELLED]".to_string(),
+                        Style::default().fg(palette.peach),
+                    ),
                 }
             };
             ListViewItem {
@@ -318,12 +335,21 @@ pub fn render_runs_section(
                 fields: vec![
                     FormField {
                         label: "Pausar para aprobación humana del plan:".into(),
-                        value: if form.options.wait_plan_approval { "[✓] Activado".into() } else { "[ ] Desactivado".into() },
+                        value: if form.options.wait_plan_approval {
+                            "[✓] Activado".into()
+                        } else {
+                            "[ ] Desactivado".into()
+                        },
                         placeholder: "Espacio para alternar".into(),
                     },
                     FormField {
-                        label: "Publicación automática (auto_push - SIEMPRE false al abrir):".into(),
-                        value: if form.options.auto_push { "[✓] Activado".into() } else { "[ ] Desactivado (seguro)".into() },
+                        label: "Publicación automática (auto_push - SIEMPRE false al abrir):"
+                            .into(),
+                        value: if form.options.auto_push {
+                            "[✓] Activado".into()
+                        } else {
+                            "[ ] Desactivado (seguro)".into()
+                        },
                         placeholder: "Espacio para alternar".into(),
                     },
                     FormField {
@@ -361,7 +387,9 @@ pub fn render_runs_section(
             if run.pending_gate.is_some() {
                 badges.push((
                     "[ESPERANDO PUERTA HUMANA]".into(),
-                    Style::default().fg(palette.yellow).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(palette.yellow)
+                        .add_modifier(Modifier::BOLD),
                 ));
             } else {
                 let status_name = match &run.status {
@@ -525,18 +553,16 @@ mod tests {
     #[test]
     fn test_runs_section_navigation_and_cancel_guard() {
         let mut state = ShepherdRunsSectionState::default();
-        state.runs = vec![
-            ShepherdRunRow {
-                task_id: 101,
-                task_title: "Task 101".into(),
-                status: RunStatus::Running,
-                current_stage: "coding".into(),
-                has_saved_plan: true,
-                pending_gate: None,
-                active_agents: vec!["coder-1".into()],
-                subtasks_progress: (1, 3),
-            },
-        ];
+        state.runs = vec![ShepherdRunRow {
+            task_id: 101,
+            task_title: "Task 101".into(),
+            status: RunStatus::Running,
+            current_stage: "coding".into(),
+            has_saved_plan: true,
+            pending_gate: None,
+            active_agents: vec!["coder-1".into()],
+            subtasks_progress: (1, 3),
+        }];
 
         // Start cancel
         state.start_cancel_run();
@@ -556,21 +582,20 @@ mod tests {
     #[test]
     fn test_runs_section_gate_confirmation_guards() {
         let mut state = ShepherdRunsSectionState::default();
-        state.runs = vec![
-            ShepherdRunRow {
-                task_id: 102,
-                task_title: "Task 102".into(),
-                status: RunStatus::Running,
-                current_stage: "waiting_gate".into(),
-                has_saved_plan: true,
-                pending_gate: Some(GateKind::PushAndPr { subtask: 1 }),
-                active_agents: vec![],
-                subtasks_progress: (1, 1),
-            },
-        ];
+        state.runs = vec![ShepherdRunRow {
+            task_id: 102,
+            task_title: "Task 102".into(),
+            status: RunStatus::Running,
+            current_stage: "waiting_gate".into(),
+            has_saved_plan: true,
+            pending_gate: Some(GateKind::PushAndPr { subtask: 1 }),
+            active_agents: vec![],
+            subtasks_progress: (1, 1),
+        }];
 
         // Press 'a' to approve gate
-        let (handled, act) = state.handle_key(&KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
+        let (handled, act) =
+            state.handle_key(&KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
         assert!(handled);
         assert_eq!(
             act,

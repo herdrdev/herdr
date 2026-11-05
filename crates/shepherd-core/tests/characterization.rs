@@ -2494,6 +2494,34 @@ fn test_typed_topic_replay_matches_golden() {
 }
 
 #[test]
+fn test_characterization_handle_call_consumer_groups_with_messages() {
+    let env = TestEnv::new("hc-consumer-groups-msgs");
+    env.service
+        .handle_call(
+            "topic_create",
+            json!({ "name": "results", "partitions": 2 }),
+        )
+        .unwrap();
+    let bus = MessageBus::open(&env.state_dir.join("messages.jsonl")).unwrap();
+    bus.subscribe("brain-1", "results", None).unwrap();
+    bus.subscribe("coder-1", "results", None).unwrap();
+    for _ in 0..3 {
+        bus.publish("results", "m", None, Some(0), "coder-1")
+            .unwrap();
+    }
+    bus.publish("results", "m", None, Some(1), "brain-1")
+        .unwrap();
+    bus.ack("coder-1", "results", Some(0), Some(1)).unwrap();
+
+    let res = env
+        .service
+        .handle_call("consumer_groups", json!({ "topic": "results" }))
+        .unwrap();
+    let norm = normalize_json(&res, &env);
+    assert_golden("handle_call_consumer_groups_with_messages", &norm);
+}
+
+#[test]
 fn test_typed_topic_groups_matches_golden() {
     let env = TestEnv::new("typed-topic-groups");
     env.service.create_topic("groups-topic", 1).unwrap();
