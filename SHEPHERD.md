@@ -3410,4 +3410,60 @@ Verificación real contra sesión aislada (sin agentes reales ni tocar estado de
 - Cero commits realizados (siguiendo la instrucción de no commitear).
 - Cero peticiones de red/push/gh/fetch reales. Servidor aislado detenido.
 
+---
+
+## Estado F9d
+
+**Refactorización pura de `crates/shepherd-core`:**
+Se modularizaron los 6 archivos grandes del crate en submódulos cohesivos por responsabilidad, eliminando "god objects" y alineando la estructura del core con el estilo de herdr para facilitar la sincronización upstream continua.
+Ningún archivo de código de producción excede las ~1250 líneas (todos muy por debajo del umbral objetivo de 1500 líneas).
+El comportamiento, la API pública y el formato de salida permanecen 100% idénticos e intactos.
+
+### 1. Resumen de Descomposición Modular y Líneas de Código
+
+| Archivo Original (F9c) | Líneas Antes | Módulos Resultantes (F9d) | Líneas Después | Responsabilidad |
+|---|---|---|---|---|
+| `crates/shepherd-core/src/terminals.rs` | 2164 | `src/terminals/mod.rs`<br>`src/terminals/in_process.rs`<br>`src/terminals/socket.rs`<br>`src/terminals/fakes.rs` | 662<br>321<br>143<br>1107 | Trait `Terminals`, selección de backend, adapters de conexión (`ShepherdInProcess`, `ShepherdSocket`) y fakes de pruebas (`InMemoryTerminals`, `HcCli`). |
+| `crates/shepherd-core/src/mcp.rs` | 1941 | `src/mcp/mod.rs`<br>`src/mcp/server.rs`<br>`src/mcp/tools.rs`<br>`src/mcp/events.rs` | 868<br>282<br>721<br>133 | Estado MCP y tokens, servidor HTTP JSON-RPC, catálogo de tools de agente/código y herramientas MCP del bus de eventos. |
+| `crates/shepherd-core/src/service.rs` | 4272 | `src/service/mod.rs`<br>`src/service/registry.rs`<br>`src/service/spawn.rs`<br>`src/service/reconcile.rs`<br>`src/service/delivery.rs`<br>`src/service/gates.rs`<br>`src/service/tests.rs` | 1043<br>239<br>369<br>259<br>655<br>138<br>1633 | Struct `OrchestrationService` y dispatcher `handle_call`, ciclo de vida de agentes (kill/clean/focus), spawn seguro, reconciliación periódica, entrega de prompts y gates de workflow (`approve`/`reject`). |
+| `crates/shepherd-core/src/workflow.rs` | 1361 | `src/workflow/mod.rs`<br>`src/workflow/runner.rs`<br>`src/workflow/verification.rs`<br>`src/workflow/pr.rs` | 476<br>310<br>342<br>285 | Orquestador de subtasks, ejecución concurrente de coders con `&dyn Terminals`, rondas de verificación y feedback, y aprobación de planes/subtasks con creación de PR. |
+| `crates/shepherd-core/src/lib.rs` | 1898 | `src/lib.rs`<br>`src/plan.rs`<br>`src/tasks.rs` | 1111<br>386<br>414 | `lib.rs`: Modelos de datos raíz, registro de agentes, serializadores y re-exportaciones.<br>`plan.rs`: Parser de planes (`field_value`), validador de dependencias/ciclos y criterios de revisión.<br>`tasks.rs`: Persistencia de tareas, estructura de carpetas, lectura/escritura de secciones y slugging. |
+| `crates/shepherd-core/src/cli.rs` | 3984 | `src/cli/mod.rs`<br>`src/cli/runtime.rs`<br>`src/cli/tasks.rs`<br>`src/cli/patterns.rs`<br>`src/cli/topics.rs`<br>`src/cli/tests.rs` | 289<br>1239<br>409<br>508<br>467<br>1108 | `mod.rs`: Puntos de entrada `run_cli*`, `project_root`, `usage` y dispatcher general.<br>`runtime.rs`: Comandos de agentes, spawn, kill, clean, gates, skills, runs y git.<br>`tasks.rs`: Comandos de tareas (create, list, show, plan, edit, path, archive).<br>`patterns.rs`: Comandos de patrones declarativos.<br>`topics.rs`: Comandos del bus de eventos.<br>`tests.rs`: Tests unitarios de integración CLI del core. |
+
+### 2. Resultados Reales de Tests por Área
+
+Todas las áreas fueron ejecutadas de forma real con `./cargo-fork.sh`:
+
+| Área de Tests | Comando Ejecutado | Pasados Antes (F9c) | Pasados Después (F9d) | Fallados | Ignorados | Notas |
+|---|---|---|---|---|---|---|
+| `shepherd-core` | `./cargo-fork.sh test -p shepherd-core` | 265 | **265** | 0 | 0 | 117 unit + 148 characterization. 0 warnings. 90 JSON goldens intactos. `grep -c testRepo` = 0. |
+| `shepherd::` | `./cargo-fork.sh test shepherd::` | 52 | **52** | 0 | 0 | Integración completa de Shepherd en el runtime de herdr. |
+| `client::shell` | `./cargo-fork.sh test client::shell` | 391 | **391** | 0 | 2 | Suite de capa TUI/cliente. |
+| `protocol::` | `./cargo-fork.sh test protocol::` | 159 | **159** | 0 | 0 | Framing wire y surface delta (156 unit + 3 en `tests/cli.rs`). |
+| `api::` | `./cargo-fork.sh test api:: -- --test-threads=1` | 319 | **319** | 0 | 1 | Métodos y endpoints de API. |
+| `server::` | `./cargo-fork.sh test server::` | 318 | **318** | 0 | 5 | Servidor headless, sockets y gestión de conexiones. |
+
+### 3. Verificación con Servidor Aislado (`./scripts/shepherd-iso.sh`)
+
+Test de humo ejecutado exitosamente contra el daemon aislado:
+1. `start`: Daemon iniciado en `/tmp/shfiso/run` sin tocar estado de usuario.
+2. `call shepherd.agent.list '{}'`: Respuesta `{"id":"1","result":{"type":"shepherd_agent_list","agents":[]}}`.
+3. Comandos con servidor:
+   - `shepherd agents`: Devuelve `no agents` (código 0).
+   - `shepherd tasks`: Devuelve `no tasks` (código 0).
+4. Comandos in-process (`--no-server`):
+   - `shepherd agents --no-server`: Devuelve `no agents` (código 0).
+   - `shepherd tasks --no-server`: Devuelve `no tasks` (código 0).
+5. `stop`: Parada limpia del daemon aislado.
+
+### 4. Mantenimiento, Guardarraíles y Alcance
+
+- **Archivos de herdr modificados**: **0**. Toda la refactorización se contuvo dentro de `crates/shepherd-core`.
+- **Formato**: `./cargo-fork.sh fmt --package shepherd-core --check` en verde; formateados exclusivamente archivos propios de Shepherd.
+- **Detección de nombres**: `./scripts/rename-from-herdr.sh --check` en verde (`[OK] No unexcluded occurrences of herdr/Herdr/HERDR found`).
+- **Commits**: Cero commits realizados (siguiendo estrictamente la instrucción de no commitear).
+- **Lo que NO entra (alcance para F9e)**:
+  - F9e: Unificación de configuración y persistencia entre `shepherd-core` y herdr.
+
+
 
