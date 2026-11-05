@@ -838,17 +838,15 @@ impl OrchestrationService {
                                 &format!("Shepherd: agente {} requiere intervención", agent.id),
                                 Some(BLOCKED_HUMAN_NOTICE),
                             );
-                            let _ = bus.send(Message {
-                                id: 0,
-                                ts: String::new(),
-                                from: "system".into(),
-                                to: "brain".into(),
-                                kind: KIND_SYSTEM.into(),
-                                content: format!(
+                            let _ = bus.send(Message::directed(
+                                "system",
+                                "brain",
+                                KIND_SYSTEM,
+                                format!(
                                     "agent {} ({}) is blocked waiting for human attention in pane {}",
                                     agent.id, agent.role, agent.pane
                                 ),
-                            });
+                            ));
                         }
                     }
                     "idle" | "done" => {
@@ -1936,6 +1934,62 @@ impl OrchestrationService {
                     .map_err(|e| e.to_string())?;
                 serde_json::to_value(status).map_err(|e| e.to_string())
             }
+            "topics" => {
+                let bus = self.bus()?;
+                let list = bus.list_topics().map_err(|e| e.to_string())?;
+                serde_json::to_value(list).map_err(|e| e.to_string())
+            }
+            "topic_create" => {
+                let name = args
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| "missing 'name' for topic_create".to_owned())?;
+                let partitions = args
+                    .get("partitions")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(1) as u32;
+                let bus = self.bus()?;
+                let topic = bus.topic_create(name, partitions).map_err(|e| e.to_string())?;
+                serde_json::to_value(topic).map_err(|e| e.to_string())
+            }
+            "publish" => {
+                let topic = args
+                    .get("topic")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| "missing 'topic' for publish".to_owned())?;
+                let content = args
+                    .get("content")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| "missing 'content' for publish".to_owned())?;
+                let key = args.get("key").and_then(Value::as_str);
+                let partition = args.get("partition").and_then(Value::as_u64).map(|p| p as u32);
+                let from = args.get("from").and_then(Value::as_str).unwrap_or("user");
+                let bus = self.bus()?;
+                let msg = bus.publish(topic, content, key, partition, from).map_err(|e| e.to_string())?;
+                serde_json::to_value(msg).map_err(|e| e.to_string())
+            }
+            "topic_tail" | "topic_replay" => {
+                let topic = args
+                    .get("topic")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| "missing 'topic' for topic_tail/replay".to_owned())?;
+                let partition = args.get("partition").and_then(Value::as_u64).map(|p| p as u32);
+                let from_offset = args
+                    .get("from_offset")
+                    .or_else(|| args.get("from"))
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0);
+                let limit = args.get("limit").and_then(Value::as_u64).map(|l| l as usize);
+                let bus = self.bus()?;
+                let msgs = bus.replay(topic, partition, from_offset, limit).map_err(|e| e.to_string())?;
+                serde_json::to_value(msgs).map_err(|e| e.to_string())
+            }
+            "consumer_groups" => {
+                let topic = args.get("topic").and_then(Value::as_str);
+                let bus = self.bus()?;
+                let groups = bus.consumer_groups(topic).map_err(|e| e.to_string())?;
+                serde_json::to_value(groups).map_err(|e| e.to_string())
+            }
             other => {
                 let msg = format!("unknown shepherd operation {other:?}");
                 self.record_failure(other, &msg);
@@ -1982,18 +2036,9 @@ impl OrchestrationService {
                             agent.delivery_cursor, agent.id
                         ),
                     );
-                    continue;
+                    Vec::new()
                 }
             };
-
-            if messages.is_empty() {
-                continue;
-            }
-
-            // Only type when pane is free (idle and quiet screen, not blocked, not working)
-            if !self.is_pane_free_for_delivery(agent) {
-                continue;
-            }
 
             let target = if !agent.pane.is_empty() {
                 agent.pane.clone()
@@ -2001,20 +2046,48 @@ impl OrchestrationService {
                 agent.id.clone()
             };
 
-            for msg in messages {
-                if !self.is_pane_free_for_delivery(agent) {
-                    break;
-                }
+            // 1. Deliver directed messages (if pane is free)
+            if !messages.is_empty() && self.is_pane_free_for_delivery(agent) {
+                for msg in messages {
+                    if !self.is_pane_free_for_delivery(agent) {
+                        break;
+                    }
 
-                let line = format_shep_message(&msg.from, &msg.content, &reg_snapshot);
-                let delivered =
-                    self.deliver_single_message_with_retries(agent, &target, msg.id, &line);
-                if delivered {
-                    agent.delivery_cursor = msg.id;
-                    agent.updated = self.clock.now_rfc3339();
-                    registry_dirty = true;
-                } else {
-                    break;
+                    let line = format_shep_message(&msg.from, &msg.content, &reg_snapshot);
+                    let delivered =
+                        self.deliver_single_message_with_retries(agent, &target, msg.id, &line);
+                    if delivered {
+                        agent.delivery_cursor = msg.id;
+                        agent.updated = self.clock.now_rfc3339();
+                        registry_dirty = true;
+                    } else {
+                        break;
+                    }
+                }
+            }
+
+            // 2. Deliver subscribed topic events for live non-MCP agents
+            let groups = bus.consumer_groups(None).unwrap_or_default();
+            let live_ids: Vec<String> = reg_snapshot.live().into_iter().map(|a| a.id.clone()).collect();
+            for grp_info in groups {
+                if grp_info.members.contains(&agent.id) {
+                    if !self.is_pane_free_for_delivery(agent) {
+                        break;
+                    }
+                    if let Ok(topic_msgs) = bus.poll_active(&agent.id, &grp_info.topic, Some(10), Some(&live_ids)) {
+                        for t_msg in topic_msgs {
+                            if !self.is_pane_free_for_delivery(agent) {
+                                break;
+                            }
+                            let line = format_shep_topic_message(&t_msg, &reg_snapshot);
+                            let delivered = self.deliver_single_message_with_retries(agent, &target, t_msg.id, &line);
+                            if delivered {
+                                let _ = bus.ack(&agent.id, &t_msg.topic, Some(t_msg.partition), Some(t_msg.offset));
+                            } else {
+                                break;
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -2116,6 +2189,12 @@ impl OrchestrationService {
             {
                 // Fallback: The pane has no agent detected by runtime (e.g. raw shell).
                 // Falls back to typing with `send_text` and screen verification.
+                self.deliver_message_via_raw_pane_fallback(agent, target, msg_id, line)
+            }
+            Err(crate::terminals::TerminalError::Protocol(ref msg))
+                if msg.contains("agent did not become ready") =>
+            {
+                // Fallback: prompt timed out waiting for agent to become ready (raw shell).
                 self.deliver_message_via_raw_pane_fallback(agent, target, msg_id, line)
             }
             Err(err) => {
@@ -2232,6 +2311,15 @@ pub fn format_shep_message(from: &str, content: &str, registry: &AgentRegistryFi
     let sender = format_shep_sender(from, registry);
     let clean_content = format_shep_content(content);
     format!("[shep] from {sender}: {clean_content}")
+}
+
+pub fn format_shep_topic_message(msg: &Message, registry: &AgentRegistryFile) -> String {
+    let sender = format_shep_sender(&msg.from, registry);
+    let clean_content = format_shep_content(&msg.content);
+    format!(
+        "[shep] topic {}[{}]#{} from {}: {}",
+        msg.topic, msg.partition, msg.offset, sender, clean_content
+    )
 }
 
 fn status_query_target(agent: &Agent) -> String {
@@ -3304,44 +3392,36 @@ mod tests {
         // Send messages to the bus
         let bus = service.bus().unwrap();
         let _m1 = bus
-            .send(Message {
-                id: 0,
-                ts: String::new(),
-                from: "brain-1".into(),
-                to: non_mcp.id.clone(),
-                kind: "msg".into(),
-                content: "first instruction".into(),
-            })
+            .send(Message::directed(
+                "brain-1",
+                non_mcp.id.clone(),
+                "msg",
+                "first instruction",
+            ))
             .unwrap();
         let m2 = bus
-            .send(Message {
-                id: 0,
-                ts: String::new(),
-                from: "brain-1".into(),
-                to: non_mcp.id.clone(),
-                kind: "msg".into(),
-                content: "second instruction\nmultiline".into(),
-            })
+            .send(Message::directed(
+                "brain-1",
+                non_mcp.id.clone(),
+                "msg",
+                "second instruction\nmultiline",
+            ))
             .unwrap();
         let _m3 = bus
-            .send(Message {
-                id: 0,
-                ts: String::new(),
-                from: "brain-1".into(),
-                to: mcp.id.clone(),
-                kind: "msg".into(),
-                content: "for mcp agent".into(),
-            })
+            .send(Message::directed(
+                "brain-1",
+                mcp.id.clone(),
+                "msg",
+                "for mcp agent",
+            ))
             .unwrap();
         let _m4 = bus
-            .send(Message {
-                id: 0,
-                ts: String::new(),
-                from: "brain-1".into(),
-                to: "user".into(),
-                kind: "msg".into(),
-                content: "for user".into(),
-            })
+            .send(Message::directed(
+                "brain-1",
+                "user",
+                "msg",
+                "for user",
+            ))
             .unwrap();
 
         // Run reconcile tick
@@ -3424,14 +3504,12 @@ mod tests {
         let m5 = service2
             .bus()
             .unwrap()
-            .send(Message {
-                id: 0,
-                ts: String::new(),
-                from: "coder-1".into(),
-                to: non_mcp.id.clone(),
-                kind: "msg".into(),
-                content: "third instruction".into(),
-            })
+            .send(Message::directed(
+                "coder-1",
+                non_mcp.id.clone(),
+                "msg",
+                "third instruction",
+            ))
             .unwrap();
 
         let reg2 = service2.reconcile_once().unwrap();
@@ -3458,14 +3536,12 @@ mod tests {
 
         let bus = service.bus().unwrap();
         let m1 = bus
-            .send(Message {
-                id: 0,
-                ts: String::new(),
-                from: "brain-1".into(),
-                to: non_mcp.id.clone(),
-                kind: "msg".into(),
-                content: "do not type yet".into(),
-            })
+            .send(Message::directed(
+                "brain-1",
+                non_mcp.id.clone(),
+                "msg",
+                "do not type yet",
+            ))
             .unwrap();
 
         let initial_prompts_len = terminals.prompts().len();
@@ -3524,14 +3600,12 @@ mod tests {
         service.save_registry(&reg_file).unwrap();
 
         let _m2 = bus
-            .send(Message {
-                id: 0,
-                ts: String::new(),
-                from: "brain-1".into(),
-                to: non_mcp.id.clone(),
-                kind: "msg".into(),
-                content: "agent is already done".into(),
-            })
+            .send(Message::directed(
+                "brain-1",
+                non_mcp.id.clone(),
+                "msg",
+                "agent is already done",
+            ))
             .unwrap();
 
         let sent_before = terminals.prompts().len();
@@ -3548,14 +3622,12 @@ mod tests {
         service.save_registry(&reg_file).unwrap();
 
         let _m3 = bus
-            .send(Message {
-                id: 0,
-                ts: String::new(),
-                from: "brain-1".into(),
-                to: non_mcp.id.clone(),
-                kind: "msg".into(),
-                content: "agent is exited".into(),
-            })
+            .send(Message::directed(
+                "brain-1",
+                non_mcp.id.clone(),
+                "msg",
+                "agent is exited",
+            ))
             .unwrap();
 
         service.reconcile_once().unwrap();
@@ -3579,29 +3651,26 @@ mod tests {
                 ..ServiceSpawnRequest::default()
             })
             .unwrap();
-        terminals.set_status(
-            &non_mcp.id,
-            TerminalAgentStatus {
-                state: "live".into(),
-                status: "idle".into(),
-                pane: non_mcp.pane.clone(),
-                tab: non_mcp.tab.clone(),
-                title: non_mcp.label.clone(),
-                seq: 1,
-            },
-        );
+        let st = TerminalAgentStatus {
+            state: "live".into(),
+            status: "idle".into(),
+            pane: non_mcp.pane.clone(),
+            tab: non_mcp.tab.clone(),
+            title: non_mcp.label.clone(),
+            seq: 1,
+        };
+        terminals.set_status(&non_mcp.id, st.clone());
+        terminals.set_status(&non_mcp.pane, st);
         terminals.set_screen(&non_mcp.pane, "shell$ ");
 
         let bus = service.bus().unwrap();
         let m1 = bus
-            .send(Message {
-                id: 0,
-                ts: String::new(),
-                from: "brain-1".into(),
-                to: non_mcp.id.clone(),
-                kind: "msg".into(),
-                content: "needs verification".into(),
-            })
+            .send(Message::directed(
+                "brain-1",
+                non_mcp.id.clone(),
+                "msg",
+                "needs verification",
+            ))
             .unwrap();
 
         // Force agent.prompt to report agent_not_ready so it falls back to raw pane typing + screen verification
@@ -3724,5 +3793,167 @@ mod tests {
         assert!(del_builtin_err.contains("cannot delete built-in"));
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_format_shep_topic_message() {
+        let registry = AgentRegistryFile {
+            seq: 2,
+            next: std::collections::HashMap::new(),
+            agents: vec![Agent {
+                id: "coder-1".into(),
+                seq: 1,
+                role: "coder".into(),
+                ..Agent::default()
+            }],
+        };
+        let msg = Message {
+            id: 1,
+            ts: "2026-11-05T00:00:00Z".into(),
+            from: "coder-1".into(),
+            to: String::new(),
+            kind: "msg".into(),
+            content: "feature implementation done\nall tests passing".into(),
+            topic: "results".into(),
+            key: "task-42".into(),
+            partition: 2,
+            offset: 5,
+        };
+        let formatted = format_shep_topic_message(&msg, &registry);
+        assert_eq!(
+            formatted,
+            "[shep] topic results[2]#5 from coder#1: feature implementation done all tests passing"
+        );
+    }
+
+    #[test]
+    fn test_handle_call_topic_operations() {
+        let tmp = TestDir::new("test-topic-ops");
+        let (service, _terminals, _clock) = test_service(tmp.path());
+
+        // 1. topic_create
+        let create_val = service
+            .handle_call(
+                "topic_create",
+                serde_json::json!({
+                    "name": "orders",
+                    "partitions": 3
+                }),
+            )
+            .unwrap();
+        assert_eq!(create_val["name"], "orders");
+        assert_eq!(create_val["partitions"], 3);
+
+        // 2. topics list
+        let topics_val = service
+            .handle_call("topics", serde_json::json!({}))
+            .unwrap();
+        let topics = topics_val.as_array().expect("array of topics");
+        assert_eq!(topics.len(), 1);
+        assert_eq!(topics[0]["name"], "orders");
+        assert_eq!(topics[0]["partitions"], 3);
+
+        // 3. publish
+        let pub_val = service
+            .handle_call(
+                "publish",
+                serde_json::json!({
+                    "topic": "orders",
+                    "content": "process payment",
+                    "key": "user-99"
+                }),
+            )
+            .unwrap();
+        assert_eq!(pub_val["topic"], "orders");
+        assert_eq!(pub_val["content"], "process payment");
+        assert_eq!(pub_val["offset"], 0);
+
+        // 4. topic_tail
+        let tail_val = service
+            .handle_call(
+                "topic_tail",
+                serde_json::json!({
+                    "topic": "orders"
+                }),
+            )
+            .unwrap();
+        let msgs = tail_val.as_array().expect("array of messages");
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0]["content"], "process payment");
+
+        // 5. consumer_groups
+        let bus = service.bus().unwrap();
+        bus.subscribe("coder-1", "orders", Some("workers")).unwrap();
+        let groups_val = service
+            .handle_call(
+                "consumer_groups",
+                serde_json::json!({
+                    "topic": "orders"
+                }),
+            )
+            .unwrap();
+        let groups = groups_val.as_array().expect("array of groups");
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0]["group"], "workers");
+        assert_eq!(groups[0]["members"], serde_json::json!(["coder-1"]));
+    }
+
+    #[test]
+    fn test_deliver_topic_messages_to_non_mcp_agent() {
+        let tmp = TestDir::new("test-non-mcp-topics");
+        let (service, terminals, _clock) = test_service(tmp.path());
+
+        // Spawn non-MCP agent (docs)
+        let non_mcp = service
+            .spawn(ServiceSpawnRequest {
+                root: tmp.path().to_path_buf(),
+                role: "docs".into(),
+                task: "docs-review".into(),
+                ..ServiceSpawnRequest::default()
+            })
+            .unwrap();
+        assert!(!non_mcp.mcp);
+
+        let st = TerminalAgentStatus {
+            state: "live".into(),
+            status: "idle".into(),
+            pane: non_mcp.pane.clone(),
+            tab: non_mcp.tab.clone(),
+            title: non_mcp.label.clone(),
+            seq: 1,
+        };
+        terminals.set_status(&non_mcp.id, st.clone());
+        terminals.set_status(&non_mcp.pane, st);
+        terminals.set_screen(&non_mcp.pane, "shell$ ");
+
+        // Set state to idle in registry
+        let mut reg = service.load_registry().unwrap();
+        reg.agents[0].state = "idle".into();
+        service.save_registry(&reg).unwrap();
+
+        // Initial prompt was sent during spawn
+        let prompts_init = terminals.prompts();
+        assert_eq!(prompts_init.len(), 1);
+
+        // Subscribe docs-1 to topic "docs-tasks" in group "docs-pool"
+        let bus = service.bus().unwrap();
+        bus.subscribe(&non_mcp.id, "docs-tasks", Some("docs-pool")).unwrap();
+
+        // Publish event to "docs-tasks"
+        bus.publish("docs-tasks", "document new API", None, Some(0), "brain-1").unwrap();
+
+        // Reconcile once -> delivers topic event via agent.prompt
+        let _reg_after = service.reconcile_once().unwrap();
+
+        let prompts = terminals.prompts();
+        assert_eq!(prompts.len(), 2);
+        assert_eq!(
+            prompts[1].1,
+            "[shep] topic docs-tasks[0]#0 from brain#1: document new API"
+        );
+
+        // Next reconcile does NOT re-deliver because offset 0 was acked upon successful delivery
+        service.reconcile_once().unwrap();
+        assert_eq!(terminals.prompts().len(), 2);
     }
 }

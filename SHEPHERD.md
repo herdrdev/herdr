@@ -2108,6 +2108,191 @@ $ ./scripts/shepherd-iso.sh call shepherd.call '{"op":"pattern_delete","args":{"
 - **F8d**: Ejecutor de patrones (lanzamiento de los paneles y procesos de agentes asociados por herdr, suscripción a sus tópicos, control de pausa/reanudación y telemetría en vivo).
 
 
+## Estado F8b — Capa de eventos en el bus (tópicos, particiones, consumer groups, offsets, replay, MCP y entrega no-MCP) (2026-11-05)
+
+Completada la fase F8b de Shepherd. Se añade al bus de mensajes (`MessageBus`) una capa de eventos basada en el log JSONL existente sin añadir dependencias externas, manteniendo compatibilidad hacia atrás total con los ficheros `messages.jsonl` y mensajes dirigidos de fases anteriores.
+
+### 1. Qué se ha implementado
+
+1. **Extensión del Bus (`crates/shepherd-core/src/bus.rs`)**:
+   - `Message` enriquecido con campos `topic`, `key`, `partition` (u32) y `offset` (u64).
+   - Serialización adaptativa: los mensajes dirigidos preservan la estructura idéntica de fases previas (omitiendo campos de tópicos vacíos), y los mensajes de tópicos omiten el campo `to`. La deserialización maneja con `#[serde(default)]` cualquier mensaje antiguo sin romper.
+   - Hashing determinista con FNV-1a de 64 bits para asignar particiones (`fnv1a(key) % partitions`).
+   - Round-robin seguro en mensajes sin clave.
+   - Metadatos y persistencia atómica en ficheros sidecar con permisos 0o600:
+     - `<bus>.topics`: tópicos registrados y conteo de particiones (`HashMap<String, Topic>`).
+     - `<bus>.subscriptions`: asignación de tópicos, grupos de consumidores y agentes miembros (`HashMap<String, HashMap<String, Vec<String>>>`).
+     - `<bus>.offsets`: commits de offset por grupo y partición (`HashMap<String, HashMap<String, HashMap<u32, u64>>>`).
+   - Rebalanceo determinista de particiones en grupos de consumidores: ordenación de miembros activos (`active_members`), asignación `partition % live_members.len() == index`. Cuando un agente cae o finaliza, el grupo reasigna automáticamente las particiones a los supervivientes.
+   - Reproducción (`replay`) sin efectos secundarios sobre los offsets confirmados del grupo.
+   - 9 pruebas unitarias exhaustivas en `bus.rs` cubriendo todas las garantías de diseño.
+
+2. **Herramientas MCP (`crates/shepherd-core/src/mcp.rs`)**:
+   - Se añadieron 6 nuevas herramientas a `tool_list` (total de 19 herramientas MCP):
+     - `publish`: publica mensajes en tópicos con clave opcional.
+     - `subscribe`: suscribe al agente llamante a un tópico (y grupo de consumidores opcional, por defecto su ID).
+     - `poll`: sondea mensajes no confirmados asignados al agente en su grupo de consumidores.
+     - `ack`: confirma el procesamiento de mensajes avanzando el offset comprometido.
+     - `replay`: reproduce eventos históricos desde un offset o timestamp sin avanzar offsets.
+     - `list_topics`: lista los tópicos, particiones y volumen de mensajes.
+   - Enlace estricto de identidad: el llamante MCP no puede suplantar la identidad de otro agente (`agent.id` se extrae del token autenticado).
+   - Test unitario completo en `mcp.rs`.
+
+3. **Servicio y CLI (`crates/shepherd-core/src/service.rs`, `crates/shepherd-core/src/cli.rs`, `src/cli.rs`)**:
+   - Ops añadidas a `handle_call`: `topics`, `topic_create`, `publish`, `topic_tail` / `topic_replay`, `consumer_groups`.
+   - Subcomandos de CLI implementados con soporte `--json` y tabla amigable:
+     - `shepherd topic list [--json]` (y alias `shepherd topics [--json]`).
+     - `shepherd topic create <topic> [--partitions N] [--json]`.
+     - `shepherd topic publish <topic> <content> [--key K] [--json]`.
+     - `shepherd topic tail <topic> [--partition P] [--max N] [--json]`.
+     - `shepherd topic replay <topic> [--partition P] [--from O] [--since T] [--json]`.
+     - `shepherd topic groups [topic] [--json]`.
+   - Registro de subcomandos directos en `src/cli.rs`.
+   - Tests unitarios en `service.rs` y `cli.rs`.
+
+4. **Entrega a agentes sin MCP (`crates/shepherd-core/src/service.rs`)**:
+   - Formato exacto requerido: `[shep] topic <topic>[<partition>]#<offset> from <role>#<n>: <content>`.
+   - En el bucle periódico de reconciliación (`deliver_pending_non_mcp_messages`), para agentes no-MCP activos (`!agent.mcp`), se comprueban suscripciones a tópicos y se entregan eventos pendientes verificando que la pantalla esté quieta / idle (`is_pane_free_for_delivery`).
+   - Entrega limpia a través de `agent.prompt` (con fallback transparente a escritura en terminal y verificación de pantalla para shells interactivos). Auto-ack inmediato tras entrega exitosa para garantizar avance monotónico sin duplicación.
+   - Tests unitarios dedicados en `service.rs`.
+
+5. **Skills de Eventos (`crates/shepherd-core/assets/skills/`, `crates/shepherd-core/src/skills.rs`)**:
+   - Creación de `shepherd-events/SKILL.md` documentando patrones reactivos (Work Queues, Fan-out/PubSub, Pizarra/Blackboard, Event Sourcing/Replay) y uso desde MCP y desde terminal sin MCP.
+   - Enlazado desde `shepherd-comms/SKILL.md`.
+   - Registro en `EMBEDDED_SKILLS` en `src/skills.rs`.
+   - Pruebas de paridad de skills en verde (cero deriva con disco).
+
+### 2. Esquema del log JSONL y sidecars
+
+- **Línea de mensaje en `messages.jsonl`**:
+  ```json
+  {"id":1,"ts":"2026-11-05T00:05:49Z","from":"user","kind":"msg","content":"order 1","topic":"orders","key":"user-1","partition":2,"offset":0}
+  ```
+  *(En mensajes dirigidos tradicionales, `topic`, `key`, `partition` y `offset` se omiten, conservando `"to": "agent-id"`).*
+
+- **Sidecar de tópicos (`messages.jsonl.topics`)**:
+  ```json
+  {
+    "orders": { "name": "orders", "partitions": 3 },
+    "alerts": { "name": "alerts", "partitions": 1 }
+  }
+  ```
+
+- **Sidecar de suscripciones (`messages.jsonl.subscriptions`)**:
+  ```json
+  {
+    "orders": {
+      "workers": ["worker-a", "worker-b"]
+    },
+    "alerts": {
+      "readers": ["nonmcp-1"]
+    }
+  }
+  ```
+
+- **Sidecar de offsets confirmados (`messages.jsonl.offsets`)**:
+  ```json
+  {
+    "orders": {
+      "workers": { "0": 1, "1": 0, "2": 2 }
+    },
+    "alerts": {
+      "readers": { "0": 0 }
+    }
+  }
+  ```
+
+### 3. Garantías semánticas
+
+- **Entrega al menos una vez (At-least-once)**: los mensajes no confirmados (`unacked`) se retienen y se vuelven a entregar en el siguiente `poll` o tick de reconciliación.
+- **Orden por partición**: dentro de una misma partición de un tópico, los offsets son estrictamente crecientes y los mensajes se leen en orden secuencial inmutable.
+- **Sin orden total global entre particiones distintas**: el bus no garantiza un orden total entre particiones diferentes de un mismo tópico (diseño tipo Kafka/pulsar).
+- **Aislamiento y no destructividad en Replay**: `replay` devuelve los mensajes históricos desde el offset o timestamp solicitado sin alterar ni avanzar los offsets comprometidos del grupo de consumidores.
+
+### 4. Límites conocidos
+
+- El bus almacena los mensajes secuencialmente en el log JSONL append-only en disco. Para volúmenes masivos de millones de eventos por segundo se requerirá compactación periódica o rotación de segmentos (diseñado para F9/F10).
+- La reasignación de particiones opera dinámicamente en base a los agentes activos (`reg.live()`). Si un agente muere repentinamente, sus particiones pendientes se rebalancean en el siguiente sondeo o tick de reconciliación.
+
+### 5. Archivos modificados y creados
+
+- `crates/shepherd-core/src/bus.rs`: Tipos de tópicos, hashing FNV-1a, sidecars atómicos, particiones, `publish`/`subscribe`/`poll`/`ack`/`replay`, grupos de consumidores y 9 tests unitarios.
+- `crates/shepherd-core/src/mcp.rs`: Registro de 6 herramientas de eventos (`publish`, `subscribe`, `poll`, `ack`, `replay`, `list_topics`), validación de identidad y tests unitarios.
+- `crates/shepherd-core/src/service.rs`: Ops de tópicos en `handle_call`, formato de mensajes de tópicos y bucle de entrega reactiva a agentes sin MCP con auto-ack y fallback para shells.
+- `crates/shepherd-core/src/cli.rs`: CLI `shepherd topic ...` con banderas `--json` y formateo tabular.
+- `src/cli.rs`: Registro en comandos directos (`"topic"` y `"topics"`).
+- `crates/shepherd-core/assets/skills/shepherd-events/SKILL.md`: Documentación completa de patrones de eventos.
+- `crates/shepherd-core/assets/skills/shepherd-comms/SKILL.md`: Referencia cruzada a eventos.
+- `crates/shepherd-core/src/skills.rs`: Inclusión de `shepherd-events` en `EMBEDDED_SKILLS`.
+- `SHEPHERD.md`: Registro del estado F8b.
+
+### 6. Comprobaciones reales con `./scripts/shepherd-iso.sh` (sin agentes reales)
+
+Se iniciaron sesiones aisladas con `./scripts/shepherd-iso.sh start` y se ejecutaron las validaciones requeridas:
+
+#### 1. Creación de tópicos y publicación con particionado determinista por clave
+```text
+$ shepherd --session iso topic create orders --partitions 3
+created topic 'orders' with 3 partition(s)
+
+$ shepherd --session iso topic publish orders "order 1" --key user-1
+published message 1 to orders[2]#0
+
+$ shepherd --session iso topic publish orders "order 2" --key user-2
+published message 2 to orders[2]#1
+
+$ shepherd --session iso topic publish orders "order 3" --key user-3
+published message 3 to orders[1]#0
+
+$ shepherd --session iso topic publish orders "order 4" --key user-1
+published message 4 to orders[2]#2
+
+$ shepherd --session iso topic publish orders "order 5 (no key)"
+published message 5 to orders[0]#0
+```
+*Observación: La misma clave (`user-1`) mapea deterministamente a la partición 2, y los mensajes sin clave usan round-robin.*
+
+#### 2. Inspección con Tail y Replay CLI
+```text
+$ shepherd --session iso topic tail orders
+[2026-11-05T00:05:49Z] orders[2]:#0 from user (key=user-1): order 1
+[2026-11-05T00:05:49Z] orders[2]:#1 from user (key=user-2): order 2
+[2026-11-05T00:05:49Z] orders[1]:#0 from user (key=user-3): order 3
+[2026-11-05T00:05:49Z] orders[2]:#2 from user (key=user-1): order 4
+[2026-11-05T00:05:49Z] orders[0]:#0 from user: order 5 (no key)
+
+$ shepherd --session iso topic replay orders --from 0
+(reproduce la secuencia completa sin modificar ningún puntero de lectura)
+```
+
+#### 3. Llamadas HTTP MCP autenticadas, grupos de consumidores y rebalanceo por caída
+Se autenticó `worker-a` con su token de `agents.json`, se suscribió a `workers` y leyó sus mensajes asignados. Tras agregar `worker-b`, las particiones se repartieron equitativamente (particiones 0 y 2 a `worker-a`, partición 1 a `worker-b`).
+Al simular la caída de `worker-b` (marcado como `exited`), el grupo reasignó inmediatamente la partición 1 a `worker-a`:
+```json
+// Poll de worker-a tras caída de worker-b:
+{
+  "messages": [
+    { "id": 7, "key": "user-3", "offset": 1, "partition": 1, "topic": "orders", "content": "msg for partition 1" },
+    { "id": 8, "key": "user-1", "offset": 3, "partition": 2, "topic": "orders", "content": "msg for partition 2" }
+  ],
+  "topic": "orders"
+}
+```
+
+#### 4. Entrega en vivo a agente no-MCP en pane interactivo
+Se configuró el agente ficticio `nonmcp-1` en el panel `w1:p1`, suscrito al tópico `alerts`. Al publicar un mensaje de alerta, el bucle de entrega detectó la pantalla en reposo y entregó el mensaje con el prefijo requerido:
+```text
+apolo@apolo:/tmp/shfiso/repo$ [shep] topic alerts[0]#0 from user: disk space 95%
+[shep]: command not found
+apolo@apolo:/tmp/shfiso/repo$
+```
+El offset de `alerts` avanzó a `#0` en `messages.jsonl.offsets`, garantizando que no se repitan entregas en ticks posteriores.
+
+### 7. Qué queda pendiente para F8c y F8d
+- **F8c**: Pestaña **Patrones** en el overlay TUI de Shepherd (galería visual de plantillas, diagramas de topología, edición reactiva de agentes/modelos/tópicos).
+- **F8d**: Ejecutor de patrones (lanzamiento de agentes coordinados por topología, conexión automática a tópicos del bus, arranque/pausa y telemetría de eventos en vivo).
+
+
 ## Plan F9 — Alinear Shepherd con las convenciones de herdr (planificado 2026-11-05, después de F8)
 
 Motivo (pregunta del dueño: «¿seguimos un patrón similar al código existente de herdr?»): en la parte que toca la TUI (`src/shepherd/*`, `src/client/shell/*`) se siguen las reglas de `AGENTS.md` (estado puro, render puro, cambios mínimos en archivos de herdr), pero en `crates/shepherd-core` y en la superficie de API/CLI hay divergencias: (1) una sola op genérica `shepherd.call {op,args}` con unas 25 ops dentro de un `match` (`agents spawn kill clean focus run approve reject reconcile resume tasks task_create task_archive skills patterns pattern_* runs git_status` y las de F8b), sin tipos, sin `cli_params!`, sin esquema JSON ni cobertura del contrato `tests/fixtures/endpoint-method-shapes-v1.json`; (2) CLI con argumentos parseados a mano (`cli.rs` ≈3.200 líneas) frente a las proyecciones/bindings de herdr; (3) módulos grandes (`service.rs` ≈3.700 líneas y 73 funciones, `terminals.rs` ≈2.000, `mcp.rs` ≈1.500) frente a «no god objects»; (4) ficheros y configuración propios (JSONL/JSON/YAML) frente a TOML y la persistencia de sesión de herdr; (5) estilo denso del crate importado.

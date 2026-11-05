@@ -1,5 +1,6 @@
 //! Reusable CLI entrypoint for Shepherd (`shepherd <subcommand>` and `shepherd shepherd <subcommand>`).
 
+use crate::bus::MessageBus;
 use crate::{
     agents_json, archive_task,
     config::{self, available_vendors, load_config, resolve_all, validate},
@@ -181,11 +182,28 @@ fn dispatch_cli(
         if area == "patterns" || area == "pattern" {
             return patterns_list_command(root, Vec::new(), server, json, writer);
         }
+        if area == "topics" || area == "topic" {
+            return topic_list_command(root, Vec::new(), server, json, writer);
+        }
         return usage();
     };
     let rest: Vec<String> = args_iter.collect();
 
     match area.as_str() {
+        "topic" => match command.as_str() {
+            "list" => topic_list_command(root, rest, server, json, writer),
+            "create" => topic_create_command(root, rest, server, json, writer),
+            "publish" => topic_publish_command(root, rest, server, json, writer),
+            "tail" => topic_tail_command(root, rest, server, json, writer),
+            "replay" => topic_replay_command(root, rest, server, json, writer),
+            "groups" => topic_groups_command(root, rest, server, json, writer),
+            _ => usage(),
+        },
+        "topics" => {
+            let mut list_args = vec![command];
+            list_args.extend(rest);
+            topic_list_command(root, list_args, server, json, writer)
+        }
         "pattern" => match command.as_str() {
             "list" => patterns_list_command(root, rest, server, json, writer),
             "show" => pattern_show_command(root, rest, server, json, writer),
@@ -2288,6 +2306,397 @@ fn pattern_edit_command(
     Ok(())
 }
 
+fn resolve_bus_path(root: &Path) -> PathBuf {
+    let local = root.join(".shepherd").join("messages.jsonl");
+    if local.exists() {
+        return local;
+    }
+    let local_direct = root.join("messages.jsonl");
+    if local_direct.exists() {
+        return local_direct;
+    }
+    let state = config::state_dir().join("messages.jsonl");
+    if state.exists() {
+        return state;
+    }
+    local
+}
+
+fn topic_list_command(
+    root: PathBuf,
+    _args: Vec<String>,
+    server: Option<&ShepherdClient>,
+    json: bool,
+    writer: &mut dyn std::io::Write,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    if let Some(client) = server {
+        let data = client.shepherd_call("topics", serde_json::json!({}))?;
+        if json {
+            writeln!(writer, "{}", serde_json::to_string_pretty(&data)?)?;
+        } else {
+            print_human_topics_from_value(writer, &data)?;
+        }
+        return Ok(());
+    }
+    let bus_path = resolve_bus_path(&root);
+    let bus = MessageBus::open(&bus_path)?;
+    let list = bus.list_topics()?;
+    if json {
+        writeln!(writer, "{}", serde_json::to_string_pretty(&list)?)?;
+    } else {
+        print_human_topics(writer, &list)?;
+    }
+    Ok(())
+}
+
+fn print_human_topics(writer: &mut dyn std::io::Write, list: &[crate::bus::TopicSummary]) -> std::io::Result<()> {
+    if list.is_empty() {
+        writeln!(writer, "no topics found")?;
+        return Ok(());
+    }
+    writeln!(writer, "NAME\tPARTITIONS\tMESSAGES")?;
+    for t in list {
+        writeln!(writer, "{}\t{}\t{}", t.name, t.partitions, t.messages_count)?;
+    }
+    Ok(())
+}
+
+fn print_human_topics_from_value(writer: &mut dyn std::io::Write, data: &Value) -> std::io::Result<()> {
+    let Some(arr) = data.as_array() else {
+        writeln!(writer, "{}", data)?;
+        return Ok(());
+    };
+    if arr.is_empty() {
+        writeln!(writer, "no topics found")?;
+        return Ok(());
+    }
+    writeln!(writer, "NAME\tPARTITIONS\tMESSAGES")?;
+    for item in arr {
+        let name = item.get("name").and_then(Value::as_str).unwrap_or("-");
+        let partitions = item.get("partitions").and_then(Value::as_u64).unwrap_or(1);
+        let count = item.get("messages_count").and_then(Value::as_u64).unwrap_or(0);
+        writeln!(writer, "{name}\t{partitions}\t{count}")?;
+    }
+    Ok(())
+}
+
+fn topic_create_command(
+    root: PathBuf,
+    args: Vec<String>,
+    server: Option<&ShepherdClient>,
+    json: bool,
+    writer: &mut dyn std::io::Write,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let mut name = None;
+    let mut partitions = 1u32;
+    let mut iter = args.into_iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--partitions" => {
+                if let Some(val) = iter.next() {
+                    partitions = val.parse().unwrap_or(1);
+                }
+            }
+            other if !other.starts_with("--") && name.is_none() => {
+                name = Some(other.to_string());
+            }
+            _ => {}
+        }
+    }
+    let name = name.ok_or("topic name is required: shepherd topic create <name> [--partitions <n>]")?;
+    if let Some(client) = server {
+        let res = client.shepherd_call(
+            "topic_create",
+            serde_json::json!({
+                "name": name,
+                "partitions": partitions,
+            }),
+        )?;
+        if json {
+            writeln!(writer, "{}", serde_json::to_string_pretty(&res)?)?;
+        } else {
+            writeln!(writer, "created topic '{}' with {} partition(s)", name, partitions)?;
+        }
+        return Ok(());
+    }
+    let bus_path = resolve_bus_path(&root);
+    let bus = MessageBus::open(&bus_path)?;
+    let topic = bus.topic_create(&name, partitions)?;
+    if json {
+        writeln!(writer, "{}", serde_json::to_string_pretty(&topic)?)?;
+    } else {
+        writeln!(writer, "created topic '{}' with {} partition(s)", topic.name, topic.partitions)?;
+    }
+    Ok(())
+}
+
+fn topic_publish_command(
+    root: PathBuf,
+    args: Vec<String>,
+    server: Option<&ShepherdClient>,
+    json: bool,
+    writer: &mut dyn std::io::Write,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let mut topic = None;
+    let mut content = None;
+    let mut key = None;
+    let mut partition = None;
+    let mut from = "user".to_string();
+
+    let mut iter = args.into_iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--key" => key = iter.next(),
+            "--partition" => partition = iter.next().and_then(|v| v.parse().ok()),
+            "--from" => from = iter.next().unwrap_or_else(|| "user".into()),
+            other if !other.starts_with("--") => {
+                if topic.is_none() {
+                    topic = Some(other.to_string());
+                } else if content.is_none() {
+                    content = Some(other.to_string());
+                } else {
+                    let mut c = content.take().unwrap();
+                    c.push(' ');
+                    c.push_str(other);
+                    content = Some(c);
+                }
+            }
+            _ => {}
+        }
+    }
+    let topic = topic.ok_or("topic is required: shepherd topic publish <topic> <content>")?;
+    let content = content.ok_or("content is required: shepherd topic publish <topic> <content>")?;
+
+    if let Some(client) = server {
+        let mut payload = serde_json::json!({
+            "topic": topic,
+            "content": content,
+            "from": from,
+        });
+        if let Some(ref k) = key {
+            payload["key"] = serde_json::json!(k);
+        }
+        if let Some(p) = partition {
+            payload["partition"] = serde_json::json!(p);
+        }
+        let res = client.shepherd_call("publish", payload)?;
+        if json {
+            writeln!(writer, "{}", serde_json::to_string_pretty(&res)?)?;
+        } else {
+            let id = res["id"].as_i64().unwrap_or(0);
+            let part = res["partition"].as_u64().unwrap_or(0);
+            let offset = res["offset"].as_u64().unwrap_or(0);
+            writeln!(writer, "published message {} to {}[{}]#{}", id, topic, part, offset)?;
+        }
+        return Ok(());
+    }
+    let bus_path = resolve_bus_path(&root);
+    let bus = MessageBus::open(&bus_path)?;
+    let msg = bus.publish(&topic, &content, key.as_deref(), partition, &from)?;
+    if json {
+        writeln!(writer, "{}", serde_json::to_string_pretty(&msg)?)?;
+    } else {
+        writeln!(writer, "published message {} to {}[{}]#{}", msg.id, msg.topic, msg.partition, msg.offset)?;
+    }
+    Ok(())
+}
+
+fn topic_tail_command(
+    root: PathBuf,
+    args: Vec<String>,
+    server: Option<&ShepherdClient>,
+    json: bool,
+    writer: &mut dyn std::io::Write,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    topic_replay_inner(root, args, 0, server, json, writer)
+}
+
+fn topic_replay_command(
+    root: PathBuf,
+    args: Vec<String>,
+    server: Option<&ShepherdClient>,
+    json: bool,
+    writer: &mut dyn std::io::Write,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    topic_replay_inner(root, args, 0, server, json, writer)
+}
+
+fn topic_replay_inner(
+    root: PathBuf,
+    args: Vec<String>,
+    default_from: u64,
+    server: Option<&ShepherdClient>,
+    json: bool,
+    writer: &mut dyn std::io::Write,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let mut topic = None;
+    let mut partition = None;
+    let mut from_offset = default_from;
+    let mut limit = None;
+
+    let mut iter = args.into_iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--partition" => partition = iter.next().and_then(|v| v.parse().ok()),
+            "--from" | "--from-offset" => from_offset = iter.next().and_then(|v| v.parse().ok()).unwrap_or(0),
+            "--limit" => limit = iter.next().and_then(|v| v.parse().ok()),
+            other if !other.starts_with("--") && topic.is_none() => {
+                topic = Some(other.to_string());
+            }
+            _ => {}
+        }
+    }
+    let topic = topic.ok_or("topic is required: shepherd topic tail|replay <topic>")?;
+
+    if let Some(client) = server {
+        let mut payload = serde_json::json!({
+            "topic": topic,
+            "from_offset": from_offset,
+        });
+        if let Some(p) = partition {
+            payload["partition"] = serde_json::json!(p);
+        }
+        if let Some(l) = limit {
+            payload["limit"] = serde_json::json!(l);
+        }
+        let data = client.shepherd_call("topic_tail", payload)?;
+        if json {
+            writeln!(writer, "{}", serde_json::to_string_pretty(&data)?)?;
+        } else {
+            print_human_topic_messages_from_value(writer, &data)?;
+        }
+        return Ok(());
+    }
+    let bus_path = resolve_bus_path(&root);
+    let bus = MessageBus::open(&bus_path)?;
+    let msgs = bus.replay(&topic, partition, from_offset, limit)?;
+    if json {
+        writeln!(writer, "{}", serde_json::to_string_pretty(&msgs)?)?;
+    } else {
+        print_human_topic_messages(writer, &msgs)?;
+    }
+    Ok(())
+}
+
+fn print_human_topic_messages(writer: &mut dyn std::io::Write, msgs: &[crate::bus::Message]) -> std::io::Result<()> {
+    if msgs.is_empty() {
+        writeln!(writer, "no messages")?;
+        return Ok(());
+    }
+    for m in msgs {
+        let key_str = if m.key.is_empty() { String::new() } else { format!(" (key={})", m.key) };
+        writeln!(
+            writer,
+            "[{}] {}[{}]:#{} from {}{}: {}",
+            m.ts, m.topic, m.partition, m.offset, m.from, key_str, m.content
+        )?;
+    }
+    Ok(())
+}
+
+fn print_human_topic_messages_from_value(writer: &mut dyn std::io::Write, data: &Value) -> std::io::Result<()> {
+    let Some(arr) = data.as_array() else {
+        writeln!(writer, "{}", data)?;
+        return Ok(());
+    };
+    if arr.is_empty() {
+        writeln!(writer, "no messages")?;
+        return Ok(());
+    }
+    for m in arr {
+        let ts = m.get("ts").and_then(Value::as_str).unwrap_or("-");
+        let topic = m.get("topic").and_then(Value::as_str).unwrap_or("-");
+        let partition = m.get("partition").and_then(Value::as_u64).unwrap_or(0);
+        let offset = m.get("offset").and_then(Value::as_u64).unwrap_or(0);
+        let from = m.get("from").and_then(Value::as_str).unwrap_or("-");
+        let content = m.get("content").and_then(Value::as_str).unwrap_or("");
+        let key = m.get("key").and_then(Value::as_str).unwrap_or("");
+        let key_str = if key.is_empty() { String::new() } else { format!(" (key={key})") };
+        writeln!(writer, "[{ts}] {topic}[{partition}]:#{offset} from {from}{key_str}: {content}")?;
+    }
+    Ok(())
+}
+
+fn topic_groups_command(
+    root: PathBuf,
+    args: Vec<String>,
+    server: Option<&ShepherdClient>,
+    json: bool,
+    writer: &mut dyn std::io::Write,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let topic = args.into_iter().find(|a| !a.starts_with("--"));
+    if let Some(client) = server {
+        let mut payload = serde_json::json!({});
+        if let Some(ref t) = topic {
+            payload["topic"] = serde_json::json!(t);
+        }
+        let data = client.shepherd_call("consumer_groups", payload)?;
+        if json {
+            writeln!(writer, "{}", serde_json::to_string_pretty(&data)?)?;
+        } else {
+            print_human_consumer_groups_from_value(writer, &data)?;
+        }
+        return Ok(());
+    }
+    let bus_path = resolve_bus_path(&root);
+    let bus = MessageBus::open(&bus_path)?;
+    let groups = bus.consumer_groups(topic.as_deref())?;
+    if json {
+        writeln!(writer, "{}", serde_json::to_string_pretty(&groups)?)?;
+    } else {
+        print_human_consumer_groups(writer, &groups)?;
+    }
+    Ok(())
+}
+
+fn print_human_consumer_groups(writer: &mut dyn std::io::Write, groups: &[crate::bus::ConsumerGroupSummary]) -> std::io::Result<()> {
+    if groups.is_empty() {
+        writeln!(writer, "no consumer groups")?;
+        return Ok(());
+    }
+    writeln!(writer, "TOPIC\tGROUP\tMEMBERS\tOFFSETS")?;
+    for g in groups {
+        let members_str = if g.members.is_empty() { "-".into() } else { g.members.join(",") };
+        let mut offsets_vec: Vec<_> = g.committed_offsets.iter().map(|(p, off)| format!("p{p}:#{off}")).collect();
+        offsets_vec.sort();
+        let offsets_str = if offsets_vec.is_empty() { "-".into() } else { offsets_vec.join(", ") };
+        writeln!(writer, "{}\t{}\t{}\t{}", g.topic, g.group, members_str, offsets_str)?;
+    }
+    Ok(())
+}
+
+fn print_human_consumer_groups_from_value(writer: &mut dyn std::io::Write, data: &Value) -> std::io::Result<()> {
+    let Some(arr) = data.as_array() else {
+        writeln!(writer, "{}", data)?;
+        return Ok(());
+    };
+    if arr.is_empty() {
+        writeln!(writer, "no consumer groups")?;
+        return Ok(());
+    }
+    writeln!(writer, "TOPIC\tGROUP\tMEMBERS\tOFFSETS")?;
+    for item in arr {
+        let topic = item.get("topic").and_then(Value::as_str).unwrap_or("-");
+        let group = item.get("group").and_then(Value::as_str).unwrap_or("-");
+        let members_arr = item.get("members").and_then(Value::as_array);
+        let members_str = match members_arr {
+            Some(m) if !m.is_empty() => m.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(","),
+            _ => "-".into(),
+        };
+        let offsets_map = item.get("committed_offsets").and_then(Value::as_object);
+        let offsets_str = match offsets_map {
+            Some(o) if !o.is_empty() => {
+                let mut parts: Vec<_> = o.iter().map(|(k, v)| format!("p{k}:#{v}")).collect();
+                parts.sort();
+                parts.join(", ")
+            }
+            _ => "-".into(),
+        };
+        writeln!(writer, "{topic}\t{group}\t{members_str}\t{offsets_str}")?;
+    }
+    Ok(())
+}
+
 pub fn project_root(mut path: PathBuf) -> PathBuf {
     loop {
         if path.join(".git").exists() || path.join(".shepherd").exists() {
@@ -2300,7 +2709,7 @@ pub fn project_root(mut path: PathBuf) -> PathBuf {
 }
 
 fn usage<T>() -> Result<T, Box<dyn std::error::Error + Send + Sync>> {
-    Err("usage: shepherd attach [shepherd-agent-name-or-pane-id] [--takeover] | shepherd mcp serve [port] | shepherd run <task-id> [--mcp-url <url>] [--auto-push] [--wait] [--json] | shepherd approve <task-id> plan|<subtask-number> [--json] | shepherd reject <task-id> plan|<subtask-number> [--reason <text>] [--json] | shepherd spawn <role> <task...> [--task-id <id>] [--vendor <name>] [--model <name>] [--mcp-url <url>] [--json] | shepherd agents [--json] | shepherd skills list [--json] | shepherd runs list [--json] | shepherd roles list [--json] | shepherd vendors list [--json] | shepherd config path|validate [--json] | shepherd task new <title> [--description <text>] [--criteria <text>]... [--id <number>] [--json] | task list [--archived] [--json] | task show <id-or-name> [section] [--json] | task plan <id-or-name> [--save] [--json] | task edit <id-or-name> [section] | task path <id-or-name> [--json] | task archive <id-or-name> [--json] | shepherd pattern list [--json] | pattern show <name> [--json] | pattern new <name> --from <template|name> [--global] [--json] | pattern validate <name|--file path> [--json] | pattern delete <name> [--json] | pattern edit <name>".into())
+    Err("usage: shepherd attach [shepherd-agent-name-or-pane-id] [--takeover] | shepherd mcp serve [port] | shepherd run <task-id> [--mcp-url <url>] [--auto-push] [--wait] [--json] | shepherd approve <task-id> plan|<subtask-number> [--json] | shepherd reject <task-id> plan|<subtask-number> [--reason <text>] [--json] | shepherd spawn <role> <task...> [--task-id <id>] [--vendor <name>] [--model <name>] [--mcp-url <url>] [--json] | shepherd agents [--json] | shepherd skills list [--json] | shepherd runs list [--json] | shepherd roles list [--json] | shepherd vendors list [--json] | shepherd config path|validate [--json] | shepherd task new <title> [--description <text>] [--criteria <text>]... [--id <number>] [--json] | task list [--archived] [--json] | task show <id-or-name> [section] [--json] | task plan <id-or-name> [--save] [--json] | task edit <id-or-name> [section] | task path <id-or-name> [--json] | task archive <id-or-name> [--json] | shepherd pattern list [--json] | pattern show <name> [--json] | pattern new <name> --from <template|name> [--global] [--json] | pattern validate <name|--file path> [--json] | pattern delete <name> [--json] | pattern edit <name> | shepherd topic list [--json] | topic create <name> [--partitions <n>] [--json] | topic publish <topic> <content> [--key <key>] [--partition <p>] [--from <from>] [--json] | topic tail <topic> [--partition <p>] [--limit <n>] [--json] | topic replay <topic> [--partition <p>] [--from <offset>] [--limit <n>] [--json] | topic groups [topic] [--json]".into())
 }
 
 #[cfg(test)]
@@ -3211,5 +3620,84 @@ mod tests {
         assert!(err_edit_builtin.to_string().contains("cannot edit built-in"));
 
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn test_topic_cli_lifecycle_and_json() {
+        let _guard = TestEnvGuard::new();
+        let root = std::env::temp_dir().join(format!("shepherd-topic-cli-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+
+        // 1. topic list --json initially empty
+        let out_list_empty = run_with_buf(&root, &["topic", "list", "--json"], None, None).unwrap();
+        let list_empty_val: Value = serde_json::from_str(&out_list_empty).unwrap();
+        assert_eq!(list_empty_val.as_array().unwrap().len(), 0);
+
+        // 2. topic create orders --partitions 3 --json
+        let out_create = run_with_buf(
+            &root,
+            &["topic", "create", "orders", "--partitions", "3", "--json"],
+            None,
+            None,
+        )
+        .unwrap();
+        let create_val: Value = serde_json::from_str(&out_create).unwrap();
+        assert_eq!(create_val["name"], "orders");
+        assert_eq!(create_val["partitions"], 3);
+
+        // 3. topic list --json shows orders
+        let out_list = run_with_buf(&root, &["topic", "list", "--json"], None, None).unwrap();
+        let list_val: Value = serde_json::from_str(&out_list).unwrap();
+        let topics = list_val.as_array().unwrap();
+        assert_eq!(topics.len(), 1);
+        assert_eq!(topics[0]["name"], "orders");
+        assert_eq!(topics[0]["partitions"], 3);
+
+        // 4. topic publish orders "create payment" --key k1 --json
+        let out_pub = run_with_buf(
+            &root,
+            &["topic", "publish", "orders", "create payment", "--key", "k1", "--json"],
+            None,
+            None,
+        )
+        .unwrap();
+        let pub_val: Value = serde_json::from_str(&out_pub).unwrap();
+        assert_eq!(pub_val["topic"], "orders");
+        assert_eq!(pub_val["content"], "create payment");
+        assert_eq!(pub_val["key"], "k1");
+        assert_eq!(pub_val["offset"], 0);
+
+        // 5. topic tail orders --json
+        let out_tail = run_with_buf(&root, &["topic", "tail", "orders", "--json"], None, None).unwrap();
+        let tail_val: Value = serde_json::from_str(&out_tail).unwrap();
+        let msgs = tail_val.as_array().unwrap();
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0]["content"], "create payment");
+
+        // 6. topic replay orders --from 0 --json
+        let out_replay = run_with_buf(
+            &root,
+            &["topic", "replay", "orders", "--from", "0", "--json"],
+            None,
+            None,
+        )
+        .unwrap();
+        let replay_val: Value = serde_json::from_str(&out_replay).unwrap();
+        assert_eq!(replay_val.as_array().unwrap().len(), 1);
+
+        // 7. topic groups orders --json
+        let out_groups = run_with_buf(&root, &["topic", "groups", "orders", "--json"], None, None).unwrap();
+        let groups_val: Value = serde_json::from_str(&out_groups).unwrap();
+        assert!(groups_val.as_array().is_some());
+
+        // 8. Human output smoke tests
+        let out_human_list = run_with_buf(&root, &["topic", "list"], None, None).unwrap();
+        assert!(out_human_list.contains("orders"));
+
+        let out_human_tail = run_with_buf(&root, &["topic", "tail", "orders"], None, None).unwrap();
+        assert!(out_human_tail.contains("create payment"));
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

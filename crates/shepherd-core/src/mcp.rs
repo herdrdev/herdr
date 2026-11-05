@@ -500,6 +500,76 @@ fn tool_list() -> Value {
             "name": "get_workspace_instructions",
             "description": "Return workspace instructions, repo instruction files, effective skills, and detected checks.",
             "inputSchema": {"type": "object", "properties": {}}
+        },
+        {
+            "name": "publish",
+            "description": "Publish a message to a topic. Key hashes to a partition; without key, messages are distributed across partitions.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "topic": {"type": "string"},
+                    "content": {"type": "string"},
+                    "key": {"type": "string"}
+                },
+                "required": ["topic", "content"]
+            }
+        },
+        {
+            "name": "subscribe",
+            "description": "Subscribe to a topic, optionally joining a consumer group (defaults to your own agent ID for pub/sub delivery).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "topic": {"type": "string"},
+                    "group": {"type": "string"}
+                },
+                "required": ["topic"]
+            }
+        },
+        {
+            "name": "poll",
+            "description": "Poll unacknowledged topic messages assigned to this agent in its consumer group.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "topic": {"type": "string"},
+                    "max": {"type": "integer"}
+                },
+                "required": ["topic"]
+            }
+        },
+        {
+            "name": "ack",
+            "description": "Acknowledge (commit) processed messages for a topic and partition up through an offset.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "topic": {"type": "string"},
+                    "partition": {"type": "integer"},
+                    "offset": {"type": "integer"},
+                    "through": {"type": "integer"}
+                },
+                "required": ["topic"]
+            }
+        },
+        {
+            "name": "replay",
+            "description": "Read historical messages from a topic without advancing consumer group offsets.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "topic": {"type": "string"},
+                    "from_offset": {"type": "integer"},
+                    "partition": {"type": "integer"},
+                    "limit": {"type": "integer"}
+                },
+                "required": ["topic", "from_offset"]
+            }
+        },
+        {
+            "name": "list_topics",
+            "description": "List available topics, partition counts, and message volumes.",
+            "inputSchema": {"type": "object", "properties": {}}
         }
     ]})
 }
@@ -584,14 +654,12 @@ fn call_tool(state: &State, agent: &crate::Agent, params: &Value) -> Result<Valu
             save_agent_registry(&state.registry, &registry).map_err(|error| error.to_string())?;
             if !agent.parent_id.is_empty() {
                 if let Ok(bus) = MessageBus::open(&state.bus_path) {
-                    let _ = bus.send(Message {
-                        id: 0,
-                        ts: String::new(),
-                        from: agent.id.clone(),
-                        to: agent.parent_id.clone(),
-                        kind: KIND_RESULT.into(),
-                        content: format!("{} finished: {}", agent.id, summary.trim()),
-                    });
+                    let _ = bus.send(Message::directed(
+                        agent.id.clone(),
+                        agent.parent_id.clone(),
+                        KIND_RESULT,
+                        format!("{} finished: {}", agent.id, summary.trim()),
+                    ));
                 }
             }
             "result recorded".to_owned()
@@ -746,14 +814,12 @@ fn call_tool(state: &State, agent: &crate::Agent, params: &Value) -> Result<Valu
             );
             let bus = MessageBus::open(&state.bus_path).map_err(|e| e.to_string())?;
             let sent = bus
-                .send(Message {
-                    id: 0,
-                    ts: String::new(),
-                    from: agent.id.clone(),
-                    to: docs_id.clone(),
-                    kind: KIND_MESSAGE.into(),
-                    content: prompt_msg.clone(),
-                })
+                .send(Message::directed(
+                    agent.id.clone(),
+                    docs_id.clone(),
+                    KIND_MESSAGE,
+                    prompt_msg.clone(),
+                ))
                 .map_err(|e| e.to_string())?;
             let _ = terminals.prompt_text(&docs_id, &prompt_msg);
 
@@ -832,14 +898,12 @@ fn call_tool(state: &State, agent: &crate::Agent, params: &Value) -> Result<Valu
             };
             let bus = MessageBus::open(&state.bus_path).map_err(|error| error.to_string())?;
             let message = bus
-                .send(Message {
-                    id: 0,
-                    ts: String::new(),
-                    from: agent.id.clone(),
-                    to: recipient.clone(),
-                    kind: KIND_MESSAGE.into(),
-                    content: content.to_owned(),
-                })
+                .send(Message::directed(
+                    agent.id.clone(),
+                    recipient.clone(),
+                    KIND_MESSAGE,
+                    content.to_owned(),
+                ))
                 .map_err(|error| error.to_string())?;
             format!("delivered message {} to {}", message.id, recipient)
         }
@@ -954,6 +1018,100 @@ fn call_tool(state: &State, agent: &crate::Agent, params: &Value) -> Result<Valu
                 "languages": langs
             });
             serde_json::to_string_pretty(&payload).map_err(|e| e.to_string())?
+        }
+        "publish" => {
+            let topic = args
+                .get("topic")
+                .and_then(Value::as_str)
+                .filter(|s| !s.trim().is_empty())
+                .ok_or("topic is required")?;
+            let content = args
+                .get("content")
+                .and_then(Value::as_str)
+                .ok_or("content is required")?;
+            let key = args.get("key").and_then(Value::as_str);
+            let bus = MessageBus::open(&state.bus_path).map_err(|e| e.to_string())?;
+            let msg = bus.publish(topic, content, key, None, &agent.id).map_err(|e| e.to_string())?;
+            serde_json::to_string(&msg).map_err(|e| e.to_string())?
+        }
+        "subscribe" => {
+            let topic = args
+                .get("topic")
+                .and_then(Value::as_str)
+                .filter(|s| !s.trim().is_empty())
+                .ok_or("topic is required")?;
+            let group = args.get("group").and_then(Value::as_str);
+            let bus = MessageBus::open(&state.bus_path).map_err(|e| e.to_string())?;
+            let grp = bus.subscribe(&agent.id, topic, group).map_err(|e| e.to_string())?;
+            serde_json::to_string(&json!({
+                "status": "subscribed",
+                "agent": agent.id,
+                "topic": topic,
+                "group": grp
+            }))
+            .map_err(|e| e.to_string())?
+        }
+        "poll" => {
+            let topic = args
+                .get("topic")
+                .and_then(Value::as_str)
+                .filter(|s| !s.trim().is_empty())
+                .ok_or("topic is required")?;
+            let max = args.get("max").and_then(Value::as_u64).map(|m| m as usize);
+            let registry = load_agent_registry(&state.registry).map_err(|e| e.to_string())?;
+            let active_members: Vec<String> = registry.live().into_iter().map(|a| a.id.clone()).collect();
+            let bus = MessageBus::open(&state.bus_path).map_err(|e| e.to_string())?;
+            let messages = bus
+                .poll_active(&agent.id, topic, max, Some(&active_members))
+                .map_err(|e| e.to_string())?;
+            serde_json::to_string(&json!({
+                "topic": topic,
+                "messages": messages
+            }))
+            .map_err(|e| e.to_string())?
+        }
+        "ack" => {
+            let topic = args
+                .get("topic")
+                .and_then(Value::as_str)
+                .filter(|s| !s.trim().is_empty())
+                .ok_or("topic is required")?;
+            let partition = args.get("partition").and_then(Value::as_u64).map(|p| p as u32);
+            let offset = args.get("offset").or_else(|| args.get("through")).and_then(Value::as_u64);
+            let bus = MessageBus::open(&state.bus_path).map_err(|e| e.to_string())?;
+            let committed = bus.ack(&agent.id, topic, partition, offset).map_err(|e| e.to_string())?;
+            serde_json::to_string(&json!({
+                "status": "ok",
+                "topic": topic,
+                "committed": committed
+            }))
+            .map_err(|e| e.to_string())?
+        }
+        "replay" => {
+            let topic = args
+                .get("topic")
+                .and_then(Value::as_str)
+                .filter(|s| !s.trim().is_empty())
+                .ok_or("topic is required")?;
+            let from_offset = args.get("from_offset").and_then(Value::as_u64).unwrap_or(0);
+            let partition = args.get("partition").and_then(Value::as_u64).map(|p| p as u32);
+            let limit = args.get("limit").and_then(Value::as_u64).map(|l| l as usize);
+            let bus = MessageBus::open(&state.bus_path).map_err(|e| e.to_string())?;
+            let messages = bus.replay(topic, partition, from_offset, limit).map_err(|e| e.to_string())?;
+            serde_json::to_string(&json!({
+                "topic": topic,
+                "from_offset": from_offset,
+                "messages": messages
+            }))
+            .map_err(|e| e.to_string())?
+        }
+        "list_topics" => {
+            let bus = MessageBus::open(&state.bus_path).map_err(|e| e.to_string())?;
+            let topics = bus.list_topics().map_err(|e| e.to_string())?;
+            serde_json::to_string(&json!({
+                "topics": topics
+            }))
+            .map_err(|e| e.to_string())?
         }
         _ => return Err(format!("unknown tool {name:?}")),
     };
@@ -1094,7 +1252,7 @@ mod tests {
             .iter()
             .map(|t| t["name"].as_str().unwrap())
             .collect();
-        assert_eq!(tool_names.len(), 13);
+        assert_eq!(tool_names.len(), 19);
         for expected in [
             "spawn_agent",
             "send_message",
@@ -1109,6 +1267,12 @@ mod tests {
             "get_task_context",
             "update_task_context",
             "get_workspace_instructions",
+            "publish",
+            "subscribe",
+            "poll",
+            "ack",
+            "replay",
+            "list_topics",
         ] {
             assert!(tool_names.contains(&expected), "missing MCP tool {expected}");
         }
@@ -1469,14 +1633,12 @@ mod tests {
         let responder = std::thread::spawn(move || {
             std::thread::sleep(Duration::from_millis(80));
             let bus = MessageBus::open(&bus_path_clone).unwrap();
-            bus.send(Message {
-                id: 0,
-                ts: String::new(),
-                from: "docs-1".into(),
-                to: "brain-1".into(),
-                kind: KIND_MESSAGE.into(),
-                content: "See docs/rust-architecture.md for details.".into(),
-            })
+            bus.send(Message::directed(
+                "docs-1",
+                "brain-1",
+                KIND_MESSAGE,
+                "See docs/rust-architecture.md for details.",
+            ))
             .unwrap();
         });
         let ask_res = call_tool(
@@ -1516,6 +1678,204 @@ mod tests {
         assert!(skill_names.contains(&"implement-task"));
         assert!(skill_names.contains(&"security-review"));
         assert!(!skill_names.contains(&"conventional-commits"));
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn mcp_event_tools_publish_subscribe_poll_ack_replay_and_topics() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("shepherd-mcp-events-{}-{nonce}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+
+        let registry_path = root.join("agents.json");
+
+        let brain = Agent {
+            id: "brain-1".into(),
+            token: "brain-token".into(),
+            role: "brain".into(),
+            state: "working".into(),
+            root: root.display().to_string(),
+            ..Agent::default()
+        };
+        let coder = Agent {
+            id: "coder-1".into(),
+            token: "coder-token".into(),
+            role: "coder".into(),
+            state: "working".into(),
+            root: root.display().to_string(),
+            ..Agent::default()
+        };
+
+        save_agent_registry(
+            &registry_path,
+            &AgentRegistryFile {
+                seq: 2,
+                next: std::collections::HashMap::new(),
+                agents: vec![brain.clone(), coder.clone()],
+            },
+        )
+        .unwrap();
+
+        let state = State::new(registry_path.clone());
+
+        // 1. brain-1 publishes to topic "orders"
+        let pub_reply = rpc(
+            &state,
+            "brain-token",
+            &json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {
+                    "name": "publish",
+                    "arguments": {
+                        "topic": "orders",
+                        "content": "create login form",
+                        "key": "user-auth"
+                    }
+                }
+            }),
+        );
+        let RpcReply::Json(pub_json) = pub_reply else { panic!("expected pub json") };
+        assert_eq!(pub_json["result"]["isError"], false);
+        let pub_data: Value = serde_json::from_str(pub_json["result"]["structuredContent"]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(pub_data["topic"], "orders");
+        assert_eq!(pub_data["from"], "brain-1");
+        assert_eq!(pub_data["offset"], 0);
+
+        // 2. list_topics shows "orders" with 1 message
+        let list_reply = rpc(
+            &state,
+            "brain-token",
+            &json!({
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": {
+                    "name": "list_topics",
+                    "arguments": {}
+                }
+            }),
+        );
+        let RpcReply::Json(list_json) = list_reply else { panic!("expected list json") };
+        assert_eq!(list_json["result"]["isError"], false);
+        let list_data: Value = serde_json::from_str(list_json["result"]["structuredContent"]["text"].as_str().unwrap()).unwrap();
+        let topics = list_data["topics"].as_array().unwrap();
+        assert_eq!(topics.len(), 1);
+        assert_eq!(topics[0]["name"], "orders");
+        assert_eq!(topics[0]["messages_count"], 1);
+
+        // 3. coder-1 subscribes to "orders" in group "workers"
+        let sub_reply = rpc(
+            &state,
+            "coder-token",
+            &json!({
+                "jsonrpc": "2.0",
+                "id": 3,
+                "method": "tools/call",
+                "params": {
+                    "name": "subscribe",
+                    "arguments": {
+                        "topic": "orders",
+                        "group": "workers"
+                    }
+                }
+            }),
+        );
+        let RpcReply::Json(sub_json) = sub_reply else { panic!("expected sub json") };
+        assert_eq!(sub_json["result"]["isError"], false);
+        let sub_data: Value = serde_json::from_str(sub_json["result"]["structuredContent"]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(sub_data["status"], "subscribed");
+        assert_eq!(sub_data["group"], "workers");
+        assert_eq!(sub_data["agent"], "coder-1");
+
+        // 4. coder-1 polls "orders" and receives the message
+        let poll_reply = rpc(
+            &state,
+            "coder-token",
+            &json!({
+                "jsonrpc": "2.0",
+                "id": 4,
+                "method": "tools/call",
+                "params": {
+                    "name": "poll",
+                    "arguments": {
+                        "topic": "orders"
+                    }
+                }
+            }),
+        );
+        let RpcReply::Json(poll_json) = poll_reply else { panic!("expected poll json") };
+        assert_eq!(poll_json["result"]["isError"], false);
+        let poll_data: Value = serde_json::from_str(poll_json["result"]["structuredContent"]["text"].as_str().unwrap()).unwrap();
+        let msgs = poll_data["messages"].as_array().unwrap();
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0]["content"], "create login form");
+
+        // 5. coder-1 acks offset 0
+        let ack_reply = rpc(
+            &state,
+            "coder-token",
+            &json!({
+                "jsonrpc": "2.0",
+                "id": 5,
+                "method": "tools/call",
+                "params": {
+                    "name": "ack",
+                    "arguments": {
+                        "topic": "orders",
+                        "offset": 0
+                    }
+                }
+            }),
+        );
+        let RpcReply::Json(ack_json) = ack_reply else { panic!("expected ack json") };
+        assert_eq!(ack_json["result"]["isError"], false);
+
+        // Next poll returns no messages
+        let poll2_reply = rpc(
+            &state,
+            "coder-token",
+            &json!({
+                "jsonrpc": "2.0",
+                "id": 6,
+                "method": "tools/call",
+                "params": {
+                    "name": "poll",
+                    "arguments": {
+                        "topic": "orders"
+                    }
+                }
+            }),
+        );
+        let RpcReply::Json(poll2_json) = poll2_reply else { panic!("expected poll2 json") };
+        let poll2_data: Value = serde_json::from_str(poll2_json["result"]["structuredContent"]["text"].as_str().unwrap()).unwrap();
+        assert!(poll2_data["messages"].as_array().unwrap().is_empty());
+
+        // 6. replay from offset 0 retrieves historical messages without advancing consumer offsets
+        let replay_reply = rpc(
+            &state,
+            "coder-token",
+            &json!({
+                "jsonrpc": "2.0",
+                "id": 7,
+                "method": "tools/call",
+                "params": {
+                    "name": "replay",
+                    "arguments": {
+                        "topic": "orders",
+                        "from_offset": 0
+                    }
+                }
+            }),
+        );
+        let RpcReply::Json(replay_json) = replay_reply else { panic!("expected replay json") };
+        let replay_data: Value = serde_json::from_str(replay_json["result"]["structuredContent"]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(replay_data["messages"].as_array().unwrap().len(), 1);
 
         std::fs::remove_dir_all(root).unwrap();
     }

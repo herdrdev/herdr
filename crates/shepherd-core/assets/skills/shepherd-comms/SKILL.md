@@ -34,6 +34,10 @@ You run inside a shepherd session. Your id is in `$SHEP_AGENT_ID`. Other agents 
 5. If blocked, `send_message` to the brain (or the user's agent) with the exact question; do not guess.
 6. Never spawn more agents than needed; limits on depth and concurrency are enforced and may require human approval.
 
+## Event-driven collaboration
+
+For topic-based publish/subscribe, partitioning, consumer groups, offsets, ack, and replay across multi-agent patterns, see the `shepherd-events` skill and its tools (`publish`, `subscribe`, `poll`, `ack`, `replay`, `list_topics`).
+
 ## Without MCP
 
 If the shepherd tools are not available, messages arrive in your terminal as `[shep] from <role>#<n>: ...`. Answer in the terminal. When you finish, state your result clearly and stop; shepherd reads it when your status becomes `done`.
