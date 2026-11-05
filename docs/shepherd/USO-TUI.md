@@ -1,6 +1,6 @@
 # Usar Shepherd desde la interfaz (TUI)
 
-Shepherd vive dentro de la terminal de herdr como una **pestaña virtual «Shepherd»**: la primera de la barra de pestañas. Reemplaza el área central y deja visible la barra lateral. Todo se puede hacer con teclado o con ratón (cada botón del panel es clicable); no hay ventanas emergentes.
+Shepherd vive dentro de la terminal de Shepherd como una **pestaña virtual «Shepherd»**: la primera de la barra de pestañas. Reemplaza el área central y deja visible la barra lateral. Todo se puede hacer con teclado o con ratón (cada botón del panel es clicable); no hay ventanas emergentes.
 
 ## 1. Abrir y cerrar
 
@@ -12,7 +12,7 @@ Shepherd vive dentro de la terminal de herdr como una **pestaña virtual «Sheph
 
 Tamaño mínimo: si la terminal es pequeña, Shepherd pide ampliarla; por debajo de 70 columnas muestra solo la lista.
 
-Los agentes se ven en la terminal normal de herdr: en **Agentes**, `Enter` abre la terminal del agente seleccionado.
+Los agentes se ven en la terminal normal de Shepherd: en **Agentes**, `Enter` abre la terminal del agente seleccionado.
 
 ## 2. Las siete secciones
 
