@@ -36,6 +36,8 @@ pub enum ShepherdAgentsAction {
         workspace: Option<String>,
     },
     Refresh,
+    /// Snapshot timeline request (F11c).
+    Snapshots(crate::shepherd::ui::snapshots::ShepherdSnapshotsAction),
 }
 
 /// Sub-modals displayed within the Shepherd agents panel.
@@ -142,6 +144,10 @@ pub struct ShepherdAgentRow {
     pub notice: String,
     pub pane: String,
     pub task_text: String,
+    pub worktree: String,
+    pub root: String,
+    pub snapshots: u32,
+    pub last_snapshot: String,
 }
 
 impl ShepherdAgentRow {
@@ -159,6 +165,10 @@ impl ShepherdAgentRow {
             notice,
             pane: agent.pane.clone(),
             task_text: agent.task_text.clone(),
+            worktree: agent.worktree.clone(),
+            root: agent.root.clone(),
+            snapshots: agent.snapshots,
+            last_snapshot: agent.last_snapshot.clone(),
         }
     }
 }

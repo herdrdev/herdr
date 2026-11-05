@@ -17,6 +17,8 @@ use super::components::{
     list_view::{render_list_view, ListViewHits, ListViewItem},
     split_panes,
 };
+use super::snapshots::ShepherdSnapshotsState;
+use super::snapshots_view::{render_snapshots_section, ShepherdSnapshotsHits};
 use crate::app::state::Palette;
 pub use crate::shepherd::panel::{ShepherdAgentRow, ShepherdAgentsAction};
 
@@ -27,6 +29,7 @@ pub struct ShepherdAgentsHits {
     pub form_hits: Option<InlineFormHits>,
     pub stripe_hits: Option<ConfirmStripeHits>,
     pub empty_hits: Option<EmptyStateHits>,
+    pub snapshots: Option<ShepherdSnapshotsHits>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -41,6 +44,8 @@ pub struct ShepherdAgentsSectionState {
     pub confirm_clean_all: Option<usize>,
     pub last_action: Option<ShepherdAgentsAction>,
     pub error: Option<String>,
+    /// Snapshot timeline (F11c); a sub-view of this tab.
+    pub snapshots: ShepherdSnapshotsState,
 }
 
 impl Default for ShepherdAgentsSectionState {
@@ -56,6 +61,7 @@ impl Default for ShepherdAgentsSectionState {
             confirm_clean_all: None,
             last_action: None,
             error: None,
+            snapshots: ShepherdSnapshotsState::default(),
         }
     }
 }
@@ -73,6 +79,7 @@ impl ShepherdAgentsSectionState {
             confirm_clean_all: None,
             last_action: None,
             error: None,
+            snapshots: ShepherdSnapshotsState::default(),
         }
     }
 
@@ -81,9 +88,36 @@ impl ShepherdAgentsSectionState {
             || self.confirm_kill.is_some()
             || self.confirm_clean.is_some()
             || self.confirm_clean_all.is_some()
+            || (self.snapshots.open && self.snapshots.has_sub_action())
+    }
+
+    /// Open the snapshot timeline of the selected agent (or of finished agents if none).
+    pub fn open_timeline(&mut self) -> Option<ShepherdAgentsAction> {
+        let (id, root) = match self.selected_agent() {
+            Some(a) => (
+                a.id.clone(),
+                Some(if a.worktree.is_empty() {
+                    a.root.clone()
+                } else {
+                    a.worktree.clone()
+                }),
+            ),
+            None => (String::new(), None),
+        };
+        self.spawn_form = None;
+        self.confirm_kill = None;
+        self.confirm_clean = None;
+        self.confirm_clean_all = None;
+        self.error = None;
+        self.snapshots
+            .open_for(&id, root)
+            .map(ShepherdAgentsAction::Snapshots)
     }
 
     pub fn cancel_sub_action(&mut self) -> bool {
+        if self.snapshots.open {
+            return self.snapshots.cancel();
+        }
         if self.has_sub_action() {
             self.spawn_form = None;
             self.confirm_kill = None;
@@ -292,12 +326,24 @@ impl ShepherdAgentsSectionState {
 
     pub fn update_from_agents(&mut self, agents: &[shepherd_core::Agent]) {
         self.agents = agents.iter().map(ShepherdAgentRow::from_agent).collect();
+        self.snapshots.active_agents = self
+            .agents
+            .iter()
+            .filter(|a| !matches!(a.state.as_str(), "exited" | "killed" | "failed" | "done"))
+            .map(|a| a.id.clone())
+            .collect();
         if self.selected >= self.agents.len() {
             self.selected = self.agents.len().saturating_sub(1);
         }
     }
 
     pub fn handle_key(&mut self, key: &KeyEvent) -> (bool, Option<ShepherdAgentsAction>) {
+        // 0. Snapshot timeline owns the keyboard while it is open
+        if self.snapshots.open {
+            let (handled, act) = self.snapshots.handle_key(key);
+            return (handled, act.map(ShepherdAgentsAction::Snapshots));
+        }
+
         // 1. Confirm kill active
         if self.confirm_kill.is_some() {
             match key.code {
@@ -418,6 +464,10 @@ impl ShepherdAgentsSectionState {
                 self.start_clean_all();
                 (true, None)
             }
+            KeyCode::Char('t') => {
+                let act = self.open_timeline();
+                (true, act)
+            }
             KeyCode::Char('r') | KeyCode::Char('R') => (true, Some(ShepherdAgentsAction::Refresh)),
             _ => (false, None),
         }
@@ -432,6 +482,16 @@ pub fn render_agents_section(
 ) -> ShepherdAgentsHits {
     let mut hits = ShepherdAgentsHits::default();
     if area.width < 10 || area.height < 4 {
+        return hits;
+    }
+
+    if state.snapshots.open {
+        hits.snapshots = Some(render_snapshots_section(
+            buffer,
+            area,
+            &state.snapshots,
+            palette,
+        ));
         return hits;
     }
 
@@ -561,7 +621,11 @@ pub fn render_agents_section(
             detail_area,
             "NO HAY AGENTES ACTIVOS",
             "No hay ningún agente en ejecución en esta sesión de Shepherd.\nPuedes lanzar el primer agente con un rol y tarea específicos.",
-            &[("+ Lanzar Primer Agente", Some("s")), ("Refrescar", Some("r"))],
+            &[
+                ("+ Lanzar Primer Agente", Some("s")),
+                ("Refrescar", Some("r")),
+                ("Snapshots", Some("t")),
+            ],
             palette,
         ));
         return hits;
@@ -644,10 +708,22 @@ pub fn render_agents_section(
             },
         ));
 
+        blocks.push(DetailContentBlock::Heading("SNAPSHOTS:".into()));
+        blocks.push(DetailContentBlock::Paragraph(if agent.snapshots == 0 {
+            "Aún no hay snapshots — se toman solos al quedar inactivo; abre la línea de tiempo (t) para capturar uno."
+                .into()
+        } else {
+            format!(
+                "{} snapshot(s); último: {}. Abre la línea de tiempo (t) para ver diffs y restaurar.",
+                agent.snapshots, agent.last_snapshot
+            )
+        }));
+
         let mut bottom_actions = vec![
             ("Ir a Terminal", "Enter", true),
             ("Matar Agente", "K", false),
             ("Limpiar Sesión", "x", false),
+            ("Snapshots", "t", false),
         ];
 
         if state.definitive_count() > 0 {
@@ -699,6 +775,7 @@ mod tests {
                 notice: "".into(),
                 pane: "pane-1".into(),
                 task_text: "Task 1".into(),
+                ..Default::default()
             },
             ShepherdAgentRow {
                 id: "ag-2".into(),
@@ -710,6 +787,7 @@ mod tests {
                 notice: "Awaiting approval".into(),
                 pane: "pane-2".into(),
                 task_text: "Task 2".into(),
+                ..Default::default()
             },
         ]);
 
@@ -732,6 +810,7 @@ mod tests {
             notice: "".into(),
             pane: "pane-1".into(),
             task_text: "Task 1".into(),
+            ..Default::default()
         }]);
 
         // 1. Kill requires confirmation

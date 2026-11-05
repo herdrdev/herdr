@@ -741,6 +741,7 @@ mod tests {
                 notice: "".into(),
                 pane: "pane-1".into(),
                 task_text: "implement something".into(),
+                ..Default::default()
             },
             ShepherdAgentRow {
                 id: "coder-2".into(),
@@ -752,6 +753,7 @@ mod tests {
                 notice: "waiting for human".into(),
                 pane: "pane-2".into(),
                 task_text: "reviewing".into(),
+                ..Default::default()
             },
         ];
 

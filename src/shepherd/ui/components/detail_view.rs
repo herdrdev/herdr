@@ -29,6 +29,8 @@ pub enum DetailContentBlock {
     },
     /// Lines drawn verbatim (diagrams): no wrapping, clipped at the edge.
     Preformatted(Vec<String>),
+    /// Unified-diff lines: no wrapping, coloured by prefix (`+`, `-`, `@@`).
+    Diff(Vec<String>),
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -146,8 +148,30 @@ pub fn render_detail_view(
         current_y += 1;
     }
 
-    // Reserve bottom space for bottom actions
-    let bottom_height: u16 = if !bottom_actions.is_empty() { 2 } else { 0 };
+    // Bottom actions wrap into as many rows as needed (one blank row above them).
+    let button_texts: Vec<String> = bottom_actions
+        .iter()
+        .map(|&(label, shortcut, _)| format!("[ {label} ({shortcut}) ]"))
+        .collect();
+    let mut button_rows: Vec<Vec<usize>> = vec![Vec::new()];
+    let mut row_w: u16 = 0;
+    for (i, text) in button_texts.iter().enumerate() {
+        let w = text_width(text);
+        let last = button_rows.last().map_or(0, Vec::len);
+        if last > 0 && row_w + 2 + w > area.width {
+            button_rows.push(Vec::new());
+            row_w = 0;
+        }
+        row_w = if row_w == 0 { w } else { row_w + 2 + w };
+        if let Some(r) = button_rows.last_mut() {
+            r.push(i);
+        }
+    }
+    let bottom_height: u16 = if bottom_actions.is_empty() {
+        0
+    } else {
+        (button_rows.len() as u16 + 1).min(area.height / 2).max(2)
+    };
     let content_bottom = area.bottom().saturating_sub(bottom_height);
     let visible_content_h = content_bottom.saturating_sub(current_y) as usize;
 
@@ -190,6 +214,28 @@ pub fn render_detail_view(
             DetailContentBlock::Preformatted(rows) => {
                 for r in rows {
                     lines.push((r.clone(), Style::default().fg(palette.text)));
+                }
+            }
+            DetailContentBlock::Diff(rows) => {
+                for r in rows {
+                    let color = if r.starts_with("+++") || r.starts_with("---") {
+                        palette.text
+                    } else if r.starts_with('+') {
+                        palette.green
+                    } else if r.starts_with('-') {
+                        palette.red
+                    } else if r.starts_with("@@") {
+                        palette.accent
+                    } else if r.starts_with("diff ") || r.starts_with("index ") {
+                        palette.overlay0
+                    } else {
+                        palette.text
+                    };
+                    let mut style = Style::default().fg(color);
+                    if r.starts_with("diff ") || r.starts_with("+++") || r.starts_with("---") {
+                        style = style.add_modifier(Modifier::BOLD);
+                    }
+                    lines.push((r.clone(), style));
                 }
             }
             DetailContentBlock::BulletList(items) => {
@@ -262,23 +308,28 @@ pub fn render_detail_view(
 
     // 3. Bottom actions
     if !bottom_actions.is_empty() && content_bottom < area.bottom() {
-        let act_y = content_bottom + 1;
-        let mut act_x = area.x;
-        for (i, &(label, shortcut, primary)) in bottom_actions.iter().enumerate() {
-            let text = format!("[ {label} ({shortcut}) ]");
-            let w = text_width(&text);
-            if act_x + w <= area.right() {
-                let rect = Rect::new(act_x, act_y, w, 1);
-                hits.bottom_actions.push((rect, i));
-                let style = if primary {
-                    Style::default()
-                        .fg(palette.accent)
-                        .add_modifier(Modifier::BOLD)
-                } else {
-                    Style::default().fg(palette.overlay0)
-                };
-                put_str(buffer, act_x, act_y, w, &text, style);
-                act_x += w + 2;
+        for (row, idxs) in button_rows.iter().enumerate() {
+            let act_y = content_bottom + 1 + row as u16;
+            if act_y >= area.bottom() {
+                break;
+            }
+            let mut act_x = area.x;
+            for &i in idxs {
+                let (_, _, primary) = bottom_actions[i];
+                let text = &button_texts[i];
+                let w = text_width(text);
+                if act_x + w <= area.right() {
+                    hits.bottom_actions.push((Rect::new(act_x, act_y, w, 1), i));
+                    let style = if primary {
+                        Style::default()
+                            .fg(palette.accent)
+                            .add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default().fg(palette.overlay0)
+                    };
+                    put_str(buffer, act_x, act_y, w, text, style);
+                    act_x += w + 2;
+                }
             }
         }
     }

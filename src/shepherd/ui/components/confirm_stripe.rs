@@ -73,18 +73,29 @@ pub fn render_confirm_stripe(
             .bg(palette.surface0)
             .add_modifier(Modifier::BOLD)
     };
-    put_str(
-        buffer,
-        area.x + 2,
-        content_y,
-        area.width.saturating_sub(4),
-        &full_warn,
-        warn_style,
-    );
+    // The warning wraps over as many rows as the stripe has (so long messages stay readable).
+    let text_w = area.width.saturating_sub(4);
+    let max_lines = if area.height >= 4 {
+        (area.height - 3) as usize
+    } else {
+        1
+    };
+    let wrapped = super::list_view::wrap_text(&full_warn, text_w);
+    let n_lines = wrapped.len().min(max_lines).max(1);
+    for (i, line) in wrapped.iter().take(n_lines).enumerate() {
+        put_str(
+            buffer,
+            area.x + 2,
+            content_y + i as u16,
+            text_w,
+            line,
+            warn_style,
+        );
+    }
 
     // Buttons line (either same line or line below if height allows)
     let btn_y = if area.height >= 3 {
-        content_y + 1
+        content_y + n_lines as u16
     } else {
         content_y
     };

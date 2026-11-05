@@ -16,6 +16,7 @@ use super::components::{
 };
 use crate::app::state::Palette;
 pub use crate::shepherd::git::{GitRepoStatus, ShepherdGitAction, ShepherdGitRow};
+use crate::shepherd::panel::ShepherdAgentRow;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ShepherdGitHits {
@@ -24,6 +25,8 @@ pub struct ShepherdGitHits {
     pub form_hits: Option<InlineFormHits>,
     pub stripe_hits: Option<ConfirmStripeHits>,
     pub empty_hits: Option<EmptyStateHits>,
+    /// `[ Snapshots (t) ]` of the selected worktree (opens the agent's timeline).
+    pub timeline_button: Option<Rect>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -404,10 +407,36 @@ impl ShepherdGitSectionState {
     }
 }
 
+/// The agent working in `path` (by linked id, else by worktree path).
+pub fn agent_for_worktree<'a>(
+    agents: &'a [ShepherdAgentRow],
+    row: &ShepherdGitRow,
+) -> Option<&'a ShepherdAgentRow> {
+    let norm = |p: &str| p.trim_end_matches('/').to_string();
+    agents
+        .iter()
+        .find(|a| row.agent_id.as_deref() == Some(a.id.as_str()))
+        .or_else(|| {
+            agents
+                .iter()
+                .find(|a| !a.worktree.is_empty() && norm(&a.worktree) == norm(&row.path))
+        })
+}
+
 pub fn render_git_section(
     buffer: &mut Buffer,
     area: Rect,
     state: &ShepherdGitSectionState,
+    palette: &Palette,
+) -> ShepherdGitHits {
+    render_git_section_with_agents(buffer, area, state, &[], palette)
+}
+
+pub fn render_git_section_with_agents(
+    buffer: &mut Buffer,
+    area: Rect,
+    state: &ShepherdGitSectionState,
+    agents: &[ShepherdAgentRow],
     palette: &Palette,
 ) -> ShepherdGitHits {
     let mut hits = ShepherdGitHits::default();
@@ -610,6 +639,23 @@ pub fn render_git_section(
             });
         }
 
+        // Snapshots of the agent working here; the list itself lives in the Agents tab.
+        blocks.push(DetailContentBlock::Heading("SNAPSHOTS:".into()));
+        blocks.push(DetailContentBlock::Paragraph(
+            match agent_for_worktree(agents, row) {
+                Some(a) if a.snapshots > 0 => format!(
+                    "Agente {}: {} snapshot(s); último {}. Pulsa Snapshots (t) para abrir su línea de tiempo.",
+                    a.id, a.snapshots, a.last_snapshot
+                ),
+                Some(a) => format!(
+                    "Agente {}: aún no hay snapshots. Pulsa Snapshots (t) para abrir su línea de tiempo.",
+                    a.id
+                ),
+                None => "Sin agente activo aquí. Pulsa Snapshots (t) para ver los de agentes finalizados."
+                    .to_string(),
+            },
+        ));
+
         let mut bottom_actions = vec![
             ("Nueva Rama", "b", true),
             ("Publicar Rama", "p", false),
@@ -620,8 +666,10 @@ pub fn render_git_section(
         if !row.is_main {
             bottom_actions.push(("Eliminar Worktree", "x", false));
         }
+        bottom_actions.push(("Snapshots", "t", false));
+        let timeline_idx = bottom_actions.len() - 1;
 
-        hits.detail_hits = Some(render_detail_view(
+        let dh = render_detail_view(
             buffer,
             detail_area,
             &header,
@@ -629,7 +677,13 @@ pub fn render_git_section(
             state.detail_scroll,
             &bottom_actions,
             palette,
-        ));
+        );
+        hits.timeline_button = dh
+            .bottom_actions
+            .iter()
+            .find(|(_, i)| *i == timeline_idx)
+            .map(|(r, _)| *r);
+        hits.detail_hits = Some(dh);
     }
 
     hits

@@ -8,6 +8,13 @@ pub mod mouse;
 pub mod patterns;
 pub mod runs;
 pub mod skills;
+pub mod snapshots;
+mod snapshots_mouse;
+#[cfg(test)]
+mod snapshots_links_tests;
+#[cfg(test)]
+mod snapshots_tests;
+pub mod snapshots_view;
 pub mod state;
 pub mod tasks;
 
@@ -219,10 +226,11 @@ pub fn render_shepherd_section(
             ));
         }
         ShepherdSectionTab::Git => {
-            hits.git_hits = Some(git::render_git_section(
+            hits.git_hits = Some(git::render_git_section_with_agents(
                 buffer,
                 content_area,
                 &state.git,
+                &state.agents.agents,
                 palette,
             ));
         }
@@ -249,8 +257,24 @@ pub fn render_shepherd_section(
             } else {
                 format!("{total} agentes registrados")
             };
-            let help = "↑/↓: lista | Enter: terminal | s: nuevo | K: matar | x: limpiar | r: refrescar | Esc: salir";
-            (sum, help)
+            if state.agents.snapshots.open {
+                let snaps = &state.agents.snapshots;
+                let sum = match snaps.source {
+                    snapshots::SnapshotSource::Agent => format!(
+                        "Snapshots de {} ({})",
+                        snaps.agent_id,
+                        snaps.agent_snaps.len()
+                    ),
+                    snapshots::SnapshotSource::Finished => {
+                        format!("Snapshots de agentes finalizados ({})", snaps.finished_snaps.len())
+                    }
+                };
+                let help = "↑/↓: lista | c: capturar | d/D: diff | f: archivo | R: todo | x: borrar | p: podar | Tab: finalizados | Esc: volver";
+                (sum, help)
+            } else {
+                let help = "↑/↓: lista | Enter: terminal | s: nuevo | t: snapshots | K: matar | x: limpiar | r: refrescar | Esc: salir";
+                (sum, help)
+            }
         }
         ShepherdSectionTab::Tasks => {
             let total = state.tasks.tasks.len();
@@ -299,7 +323,7 @@ pub fn render_shepherd_section(
             let total = state.git.rows.len();
             let dirty = state.git.rows.iter().filter(|r| !r.is_clean).count();
             let sum = format!("{total} worktrees ({dirty} modificados)");
-            let help = "↑/↓: lista | w: nuevo worktree | b: nueva rama | p: publicar | x: eliminar | c: copiar ruta | Esc: salir";
+            let help = "↑/↓: lista | w: nuevo worktree | b: nueva rama | p: publicar | t: snapshots | x: eliminar | c: copiar ruta | Esc: salir";
             (sum, help)
         }
         ShepherdSectionTab::Events => {

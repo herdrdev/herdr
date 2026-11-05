@@ -5460,3 +5460,276 @@ Nota: en la primera pasada completa, `config::io::tests::config_diagnostic_summa
 - La acción «eliminar worktree» de la pestaña Git (`remove_worktree`) no tiene implementación en el núcleo, así que no hay `pre-clean` ahí; solo en `clean`.
 - Las capturas disparadas solo ocurren cuando corre la reconciliación (eventos de herdr + respaldo de 10 s): `interval_secs` tiene esa resolución.
 - Sin timeouts dentro de las llamadas a git (el timeout es del llamador; un git colgado deja un hilo huérfano).
+
+## Estado F11c — línea de tiempo de snapshots en la UI (2026-11-05)
+
+Fase F11c según `SHEPHERD-F11C-BRIEF.md`. Solo interfaz: **ninguna lógica nueva en el núcleo**; todo va por los métodos tipados `shepherd.snapshot.*` de F11a. Sin commits, sin agentes reales, sin red, todo en `src/shepherd/**` salvo **una línea** en un archivo de herdr (`src/client/shell.rs`: `mod shepherd_snapshots;`).
+
+### 1. Qué hay
+
+- **Línea de tiempo = subvista de la pestaña Agentes** (`t` o botón `[ Snapshots (t) ]` del detalle del agente; Esc vuelve). El detalle del agente gana una sección «SNAPSHOTS» (cantidad y último, de los contadores de F11b). Lista a la izquierda (`#n`, hora relativa, motivo coloreado, `N f +a −r`), detalle a la derecha: resumen (archivos cambiados con `A/M/D`, `+/−`, omitidos por tamaño), diff completo bajo demanda con scroll (PgUp/PgDn, rueda, scrollbar) y coloreado `+` verde / `−` rojo / `@@` acento.
+- **Botones visibles** (todos clicables, con atajo en la etiqueta): `[ Capturar ahora (c) ]` (cabecera de la lista y del detalle), `[ Ver diff vs anterior (d) ]`, `[ Ver diff vs actual (D) ]` (el «elegible» del brief), `[ Restaurar archivo… (f) ]`, `[ Restaurar todo (R) ]`, `[ Borrar (x) ]`, `[ Podar… (p) ]`, `[ Volver (Esc) ]`. Los botones del detalle ahora **envuelven en varias filas** si no caben (`render_detail_view`, cambio común que también ayuda a otras pestañas; 1 fila = comportamiento anterior).
+- **Restaurar archivos sueltos**: selector en línea con casillas (`[ ]/[x]`, `Espacio`, `↑/↓`, `a` todos/ninguno, clic en fila o botones). Solo ofrece los archivos que **difieren del estado actual y están en el snapshot** (el diff snapshot→actual menos los `added`, que `restore --path` rechazaría); avisa de cuántos archivos nuevos no se restauran. `Enter` → franja de confirmación.
+- **Franjas de confirmación** (restaurar archivos, restaurar todo, borrar) con el aviso de que antes se guarda un `pre-restore`. `restaurar todo` nunca borra extras (conserva los archivos que no están en el snapshot; sin `--delete-extra` en la UI). **Podar** = formulario en línea con `keep` (≥ 1, por defecto 10).
+- **Finalizados**: segunda pestaña de la lista («Del agente» / «Finalizados», `Tab`). Pide `list --all` y deja los snapshots de agentes que ya no están vivos (`exited/killed/failed/done` o fuera del registro, p. ej. tras `clean`). Con la lista de agentes vacía, el estado vacío ofrece `[ Snapshots (t) ]`.
+- **Pestaña Git**: el detalle de un worktree resume los snapshots del agente asociado (cantidad, último) y `[ Snapshots (t) ]`/`t` abre su línea de tiempo en Agentes (sin duplicar la lista). Un worktree sin agente abre «Finalizados» con la raíz de ese worktree.
+- **Refresco y operaciones lentas**: todo asíncrono (`push_endpoint_method_with_kind`, la UI nunca espera a git). La lista se refresca con el temporizador de 1,5 s de la sección (el de F8e) **solo mientras la subvista está abierta** y no hay una operación lenta en curso; el resumen del seleccionado se pide una vez (en vuelo / fallo silencioso si el snapshot desapareció). Operaciones lentas muestran «⏳ Trabajando… (cargando diff…)» y bloquean repetir otra lenta; **errores** (`git`, restore, rutas inválidas) salen como aviso dentro del panel, nunca en diálogo ni en la barra global.
+- **Compacto (<70 columnas, p. ej. 80x24 con barra lateral)**: la lista a ancho completo; `Enter`/clic en fila abre el detalle a ancho completo, `Esc` vuelve (usa `CompactPanel::Replace` de F10d).
+- Tras capturar o restaurar se selecciona el snapshot nuevo (la captura, o el `pre-restore`). Mensajes: «Sin cambios desde coder-1/4: no se creó snapshot», «el estado anterior ya estaba guardado como …» (idempotencia de F11a), «se conservan N archivo(s) extra».
+
+Archivos nuevos: `ui/snapshots.rs` (estado, teclas, 937 líneas), `ui/snapshots_view.rs` (render, 584), `ui/snapshots_mouse.rs` (167), `client/shell/shepherd_snapshots.rs` (enlace con el cliente + 3 tests, 553), `ui/snapshots_tests.rs` (755) y `ui/snapshots_links_tests.rs` (413). Ninguno supera 1000 líneas.
+
+### 2. Capturas reales (`./scripts/shepherd-iso.sh`, repo temporal `/tmp/shfiso/repo`, agentes sembrados, `interval_secs = 0`)
+
+Antes (F11b: solo contadores en el detalle del agente, sin interfaz) → después:
+
+**Detalle del agente (entrada)**
+```text
+GENTE: coder (ID: coder-1) [IDLE] [coder]                               [ Ir a Terminal (Enter) ] [ + Nuevo (s) ]
+endor: claude | Modelo: default | Terminal Pane: ninguno
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+AREA ASIGNADA:
+emo F11c
+
+NAPSHOTS:
+ snapshot(s); último: coder-1/4. Abre la línea de tiempo (t) para ver diffs y restaurar.
+```
+
+**Línea de tiempo + resumen** (200x50)
+```text
+│                                            [ Capturar ahora (c) ]│SNAPSHOT: coder-1/4 [periodic]                                                       [ Capturar ahora (c) ]
+│[✓ De coder-1] [Finalizados]                                      │2026-11-05 18:24:58 UTC (hace 23s) | Anterior: coder-1/3 | 2 arch. +4 −1
+│──────────────────────────────────────────────────────────────────│───────────────────────────────────────────────────────────────────────────────────────────────────────────
+│▸ [periodic] #4   hace 23s                                        │
+│  [done] #3   hace 23s                                            │RESUMEN (cambios sobre el snapshot anterior):
+│  [idle] #2   hace 23s                                            │2 archivo(s) cambiado(s): +4 −1
+│  [manual] #1   hace 23s                                          │• M b.txt +3 −1
+│                                                                  │• A c.txt +1 −0
+│                                                                  │
+│                                                                  │DIFF:
+```
+
+**Diff contra el anterior** (coloreado en pantalla; aquí sin color)
+```text
+a (c) ]│SNAPSHOT: coder-1/3 [done]                                                           [ Capturar ahora (c) ]
+       │2026-11-05 18:24:58 UTC (hace 35s) | Anterior: coder-1/2 | 2 arch. +1 −2
+───────│───────────────────────────────────────────────────────────────────────────────────────────────────────────
+       │
+       │RESUMEN (cambios sobre el snapshot anterior):
+       │2 archivo(s) cambiado(s): +1 −2
+       │• D a.txt +0 −2
+       │• M src/main.rs +1 −0
+       │
+       │DIFF vs anterior: 2 archivo(s), +1 −2
+       │diff --git a/a.txt b/a.txt
+       │deleted file mode 100644
+       │index 1ec8869..0000000
+       │--- a/a.txt
+       │+++ /dev/null
+       │@@ -1,2 +0,0 @@
+       │-uno
+       │-dos
+       │diff --git a/src/main.rs b/src/main.rs
+       │index 651440f..e1f74fb 100644
+       │--- a/src/main.rs
+       │+++ b/src/main.rs
+       │@@ -1 +1,2 @@
+```
+
+**Restaurar archivo: selector en línea → franja (Esc la cancela sin efectos; `b.txt` intacto y 4 refs antes y después)**
+```text
+a (c) ]│RESTAURAR ARCHIVOS DE coder-1/2
+       │───────────────────────────────────────────────────────────────────────────────────────────────────────────
+───────│▸ [ ] D a.txt  +0 −2
+       │  [ ] M b.txt  +3 −1
+       │  [ ] M src/main.rs  +1 −0
+```
+
+```text
+a (c) ]│┌─ CONFIRMACIÓN ──────────────────────────────────────────────────────────────────────────────────────────
+       │  ⚠ ¿Restaurar 2 archivo(s) desde coder-1/2? Antes se guardará el estado actual como snapshot
+───────│  «pre-restore».
+       │  [ Confirmar Restaurar ]  [ Cancelar ]
+```
+
+**Restaurar un archivo / todo con confirmación** (`a.txt` restaurado; en «todo» se creó `coder-1/5 pre-restore` y se conservaron 2 extras)
+```text
+│                                            [ Capturar ahora (c) ]│SNAPSHOT: coder-1/4 [periodic]                                                       [ Capturar ahora (c) ]
+│[✓ De coder-1] [Finalizados]                                      │2026-11-05 18:24:58 UTC (hace 1m) | Anterior: coder-1/3 | 2 arch. +4 −1
+│──────────────────────────────────────────────────────────────────│───────────────────────────────────────────────────────────────────────────────────────────────────────────
+│▸ [periodic] #4   hace 1m                                         │ℹ Restaurado coder-1/2 (1 archivo(s))
+│  [done] #3   hace 1m                                             │
+```
+
+```text
+a (c) ]│┌─ CONFIRMACIÓN ──────────────────────────────────────────────────────────────────────────────────────────
+       │  ⚠ ¿Restaurar TODO el worktree desde coder-1/1? Se sobrescriben los cambios locales; los archivos que no
+───────│  están en el snapshot se conservan. Antes se guardará el estado actual como «pre-restore».
+       │  [ Confirmar Restaurar Todo ]  [ Cancelar ]
+```
+
+```text
+│                                            [ Capturar ahora (c) ]│SNAPSHOT: coder-1/4 [periodic]                                                       [ Capturar ahora (c) ]
+│[✓ De coder-1] [Finalizados]                                      │2026-11-05 18:24:58 UTC (hace 1m) | Anterior: coder-1/3 | 2 arch. +4 −1
+│──────────────────────────────────────────────────────────────────│───────────────────────────────────────────────────────────────────────────────────────────────────────────
+│  [pre-restore] #5   ahora                                        │ℹ Restaurado coder-1/1 (4 archivo(s)); estado anterior guardado como coder-1/5; se conservan 2 archivo(s)
+│▸ [periodic] #4   hace 1m                                         │extra
+```
+
+**Borrar (franja) y Podar (formulario en línea con `keep`)**
+```text
+a (c) ]│┌─ CONFIRMACIÓN ──────────────────────────────────────────────────────────────────────────────────────────
+       │  ⚠ ¿Borrar el snapshot coder-1/5? No se puede deshacer (los demás snapshots no cambian).
+───────│  [ Confirmar Borrar ]  [ Cancelar ]
+```
+
+```text
+a (c) ]│PODAR SNAPSHOTS DE coder-1
+       │───────────────────────────────────────────────────────────────────────────────────────────────────────────
+───────│
+       │Conservar los últimos N snapshots (keep)
+       │[ 10█                                                                                                   ]
+```
+
+```text
+│                                            [ Capturar ahora (c) ]│SNAPSHOT: coder-1/5 [manual]                                                         [ Capturar ahora (c) ]
+│[✓ De coder-1] [Finalizados]                                      │2026-11-05 18:28:54 UTC (hace 7s) | Anterior: coder-1/4 | 2 arch. +1 −1
+│──────────────────────────────────────────────────────────────────│───────────────────────────────────────────────────────────────────────────────────────────────────────────
+│▸ [manual] #5   hace 7s                                           │ℹ Podados 3 snapshot(s); quedan 2
+│  [periodic] #4   hace 4m                                         │
+```
+
+**Estado vacío y «Finalizados»**
+```text
+│                                            [ Capturar ahora (c) ]│
+│[✓ De coder-2] [Finalizados]                                      │
+│──────────────────────────────────────────────────────────────────│
+│                                                                  │
+│                                                                  │
+│                                                                  │
+│                                                                  │
+│                                                                  │
+│                                                                  │
+│                                                                  │
+│                                                                  │
+│                                                                  │                                           AÚN NO HAY SNAPSHOTS
+│                                                                  │
+│                                                                  │             Aún no hay snapshots — se toman solos al quedar inactivo, o pulsa Capturar ahora.
+│                                                                  │
+│                                                                  │                                [ Capturar ahora (c) ]  [ Volver (Esc) ]
+```
+
+```text
+│                                            [ Capturar ahora (c) ]│SNAPSHOT: gone-7/1 [done]                                                            [ Capturar ahora (c) ]
+│[De coder-2] [✓ Finalizados]                                      │2026-11-05 18:29:11 UTC (hace 32s) | Anterior: — | 6 arch. +8 −0
+│──────────────────────────────────────────────────────────────────│───────────────────────────────────────────────────────────────────────────────────────────────────────────
+│▸ [done] gone-7/1 hace 32s                                        │
+│  [manual] coder-1/5 hace 49s                                     │RESUMEN (cambios sobre el snapshot anterior):
+│  [periodic] coder-1/4 hace 4m                                    │6 archivo(s) cambiado(s): +8 −0
+│                                                                  │• A a.txt +1 −0
+│                                                                  │• A b.txt +3 −0
+│                                                                  │• A c.txt +1 −0
+│                                                                  │• A src/main.rs +1 −0
+│                                                                  │• A un-nombre-de-archivo-extremadamente-largo-para-probar-el-recorte-de-columnas-en-la-interfaz.rs +1 −0
+```
+
+**80x24 (55 columnas útiles con la barra lateral): lista y detalle con botones envueltos**
+```text
+│  Shepherd      1      +
+│ Shepherd  [1] [2] [3] [4] [5] [6] [7]             [×]
+│──────────────────────────────────────────────────────
+│                                [ Capturar ahora (c) ]
+│[✓ De coder-1] [Finalizados]
+│──────────────────────────────────────────────────────
+│▸ [manual] #5   hace 1m
+│  [periodic] #4   hace 5m
+```
+
+```text
+│  Shepherd      1      +
+│ Shepherd  [1] [2] [3] [4] [5] [6] [7]             [×]
+│──────────────────────────────────────────────────────
+│SNAPSHOT: coder-1/5 [manual]    [ Capturar ahora (c) ]
+│2026-11-05 18:28:54 UTC (hace 1m) | Anterior: coder-1/
+│──────────────────────────────────────────────────────
+│
+│RESUMEN (cambios sobre el snapshot anterior):
+│2 archivo(s) cambiado(s): +1 −1
+│• A a.txt +1 −0
+│• M src/main.rs +0 −1
+│
+│DIFF:
+│Pulsa «Ver diff vs anterior» (d) o «Ver diff vs
+│actual» (D) para ver el patch.
+│
+│
+│
+│
+│[ Ver diff vs anterior (d) ]
+│[ Ver diff vs actual (D) ]  [ Restaurar archivo… (f) ]
+│[ Restaurar todo (R) ]  [ Borrar (x) ]  [ Podar… (p) ]
+│[ Volver (Esc) ]
+│ Snapshots de coder-1 (2) | ↑/↓: lista | Esc: volver
+```
+
+**Pestaña Git → línea de tiempo**
+```text
+ ]│WORKTREE: /tmp/shfiso/repo [main] [dirty 4]                                      [ + Worktree (w) ] [ + Rama (b) ]
+──│Rama: master | Ahead: 0 | Behind: 0 | Agente: coder-1
+  │──────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  │
+  │ESTADO DEL WORKTREE:
+  │Directorio: /tmp/shfiso/repo
+  │Rama activa: master
+  │Upstream: ninguno configurado
+  │ℹ AGENTE VINCULADO:
+  │Agente activo 'coder-1' asignado a este worktree.
+  │
+  │SNAPSHOTS:
+  │Agente coder-1: 2 snapshot(s); último coder-1/5. Pulsa Snapshots (t) para abrir su línea de tiempo.
+```
+
+```text
+│                                            [ Capturar ahora (c) ]│SNAPSHOT: coder-1/5 [manual]                                                         [ Capturar ahora (c) ]
+│[✓ De coder-1] [Finalizados]                                      │2026-11-05 18:28:54 UTC (hace 1m) | Anterior: coder-1/4 | 2 arch. +1 −1
+│──────────────────────────────────────────────────────────────────│───────────────────────────────────────────────────────────────────────────────────────────────────────────
+│▸ [manual] #5   hace 1m                                           │
+│  [periodic] #4   hace 5m                                         │RESUMEN (cambios sobre el snapshot anterior):
+│                                                                  │2 archivo(s) cambiado(s): +1 −1
+```
+
+
+Hallazgos de la verificación real, ya corregidos: (a) tras borrar, el resumen en vuelo del snapshot borrado devolvía «snapshot not found» y se veía como error → los fallos del resumen de fondo son silenciosos y no se reintentan hasta cambiar de selección; (b) tras capturar/restaurar la selección se quedaba en el snapshot viejo → ahora salta al nuevo; (c) el texto de las franjas se cortaba en una línea y perdía el aviso de `pre-restore` → `render_confirm_stripe` ajusta por palabras (cambio común, 1 línea = igual que antes); (d) un agente sembrado con un worktree inexistente muestra el error del servidor dentro del panel («not a directory: …»).
+
+### 3. Tabla «Desviaciones de UI respecto a herdr»
+Sin cambios: F11c no añade desviaciones (todo vive en la pestaña virtual de Shepherd ya existente, sin ventanas emergentes). Métrica de fusión: **1 línea** en un archivo de herdr (`src/client/shell.rs`, `mod shepherd_snapshots;`); `src/client/shell/shepherd.rs` (código propio de Shepherd en una ruta de herdr) +12 líneas de enrutado. `git status`: solo `src/shepherd/**`, `src/client/shell.rs` y `src/client/shell/shepherd*.rs`.
+
+### 4. Resultados reales de los tests (tras `rustfmt --edition 2021 --check` limpio sobre los archivos propios; nunca `cargo fmt --all`)
+
+| Área | Pasados | Fallados | Ignorados |
+|---|---|---|---|
+| `-p shepherd-core` | **329** = 173 unit + 155 caracterización + 1 `snapshot_golden` (igual que F11b) | 0 | 0 |
+| `shepherd::` | **125** (94 + 31 nuevos de la línea de tiempo) | 0 | 0 |
+| `client::shell` | **406** (403 + 3 nuevos en `shepherd_snapshots`) | 0 | 2 |
+| `protocol::` | **159** = 156 + 3 | 0 | 0 |
+| `api::` (`--test-threads=1`) | **319** | 0 | 1 |
+| `server::` | **318** | 0 | 5 |
+| `config::` | **185** | 0 (ver nota) | 0 |
+| contratos v1 (`client_commands`) | 5 | 0 | 0 |
+| `shepherd_bindings` | 9 | 0 | 0 |
+| `scripts.test_config_reference_check` | 14 | 0 | 0 |
+| `rename-from-herdr.sh --check` | `[OK] No unexcluded occurrences` | – | – |
+
+Nota: `config::io::tests::config_diagnostic_summary_*` (intermitente conocido) falló en 2 de las 4 ejecuciones de `config::` (1 test y 2 tests) y pasó 185/185 en las otras 2, incluida la final; no toqué `config/io.rs`. Golden existentes: `git diff -- tests crates` vacío. `grep -c testRepo|araquesebastian` en lo nuevo = 0.
+
+Cobertura de los tests nuevos: render por celdas de lista/detalle/estados vacíos/franjas/formulario/selector/diff (colores de motivo y de `+/−`) en 200x50, 120x40, 80x24 y 55x20; hit-testing de **todos** los botones, filas, pestañas de origen, franja, formulario, selector y botón de Git; máquina de estado (selección y petición única del resumen, `busy` impide repetir lentas, confirmar/cancelar sin efectos, selector de archivos, validación de `keep`, jerarquía de Esc, origen Agente/Finalizados, listas obsoletas ignoradas); datos extremos (200 snapshots con la selección al final, 600 archivos con Unicode ancho, diff de 5 000 líneas truncado a 3 000 con aviso, tamaños 0x0 a 200x50). En el cliente, un **extremo a extremo con un repo temporal y el servicio real** (`execute_shepherd_method` + `InMemoryTerminals`): abrir, capturar (idempotente), listar, resumen, diff vs anterior/actual, selector → restaurar un archivo, restaurar todo, error de ruta inválida, borrar, podar y «Finalizados».
+
+### 5. Qué NO queda / límites conocidos
+- **Verificación con claude y codex reales: pendiente** (la haces tú); la real aquí fue con agentes sembrados sobre un repo temporal. La captura «al quedar inactivo» solo se vio en F11b.
+- `restaurar todo` no ofrece `--delete-extra` desde la UI (por seguridad; solo por CLI).
+- El servidor atiende las llamadas `shepherd.*` en un único hilo: un diff o restore enormes retrasan los refrescos de las demás pestañas (la interfaz no se bloquea, pero los datos llegan tarde). Los `git` del núcleo siguen sin timeout propio.
+- El diff se trunca a 3 000 líneas de 400 caracteres en la UI (el resto con `shepherd snapshot diff <id> --full`); el servidor sigue devolviendo el patch entero.
+- «Finalizados» agrupa todo lo que no está vivo: no distingue «terminó bien» de «matado», y los snapshots de un worktree borrado se listan pero no se pueden restaurar allí (el error sale en el panel).
+- La lista no pagina: hasta `max_per_agent` (50) snapshots por agente, más los de otros agentes en «Finalizados».
+- Sin documentación de usuario en `docs/next` (no se pidió).

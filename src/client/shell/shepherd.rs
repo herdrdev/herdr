@@ -530,6 +530,9 @@ impl ClientShellState {
             ShepherdAgentsAction::Refresh => {
                 self.refresh_shepherd_views(outcome);
             }
+            ShepherdAgentsAction::Snapshots(action) => {
+                self.dispatch_shepherd_snapshots_action(action, outcome);
+            }
         }
     }
 
@@ -1206,6 +1209,8 @@ impl ClientShellState {
             },
             outcome,
         );
+        // Snapshot timeline (only when open on the Agents tab)
+        self.refresh_shepherd_snapshots(outcome);
     }
 
     pub(super) fn handle_shepherd_endpoint_result(
@@ -1223,6 +1228,13 @@ impl ClientShellState {
                 if let Some(ref mut section) = self.shepherd_section {
                     section.agents.update_from_agents(&agents);
                 }
+                outcome.repaint = true;
+            }
+            Ok(result) if Self::is_snapshot_result(&result) => {
+                self.handle_shepherd_snapshot_result(op, result, outcome);
+            }
+            Err(err) if op.starts_with("snapshot_") => {
+                self.handle_shepherd_snapshot_error(op, &err.message);
                 outcome.repaint = true;
             }
             Ok(crate::api::schema::ResponseResult::ShepherdTaskList { tasks }) => {

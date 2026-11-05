@@ -45,6 +45,7 @@ fn agent(i: usize) -> ShepherdAgentRow {
         notice: "avisó\nvarias líneas\n日本語".into(),
         pane: "p1".into(),
         task_text: "tarea\nmultilínea".repeat(5),
+        ..Default::default()
     }
 }
 

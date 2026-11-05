@@ -30,6 +30,16 @@ pub fn handle_shepherd_section_mouse(
         match state.active_tab {
             ShepherdSectionTab::Agents => {
                 if let Some(ref agent_hits) = hits.agents_hits {
+                    // Snapshot timeline owns every click while it is open
+                    if state.agents.snapshots.open {
+                        if let Some(ref sh) = agent_hits.snapshots {
+                            if let Some(o) = snapshots_mouse::click(state, sh, point) {
+                                return o;
+                            }
+                        }
+                        return ShepherdSectionOutcome::Ignored;
+                    }
+
                     // Header action (+ Nuevo)
                     if let Some(btn_rect) = agent_hits.list_hits.action_button {
                         if contains_point(btn_rect, point) {
@@ -117,7 +127,14 @@ pub fn handle_shepherd_section_mouse(
                                     }
                                     1 => state.agents.start_kill(),
                                     2 => state.agents.start_clean(),
-                                    3 => state.agents.start_clean_all(),
+                                    3 => {
+                                        if let Some(act) = state.agents.open_timeline() {
+                                            return ShepherdSectionOutcome::Action(
+                                                ShepherdSectionAction::Agents(act),
+                                            );
+                                        }
+                                    }
+                                    4 => state.agents.start_clean_all(),
                                     _ => {}
                                 }
                                 return ShepherdSectionOutcome::Handled;
@@ -141,9 +158,25 @@ pub fn handle_shepherd_section_mouse(
 
                     // Empty state CTA
                     if let Some(ref empty_hits) = agent_hits.empty_hits {
-                        for &(btn_rect, _) in &empty_hits.actions {
+                        for &(btn_rect, idx) in &empty_hits.actions {
                             if contains_point(btn_rect, point) {
-                                state.agents.start_spawn();
+                                match idx {
+                                    1 => {
+                                        return ShepherdSectionOutcome::Action(
+                                            ShepherdSectionAction::Agents(
+                                                ShepherdAgentsAction::Refresh,
+                                            ),
+                                        )
+                                    }
+                                    2 => {
+                                        if let Some(act) = state.agents.open_timeline() {
+                                            return ShepherdSectionOutcome::Action(
+                                                ShepherdSectionAction::Agents(act),
+                                            );
+                                        }
+                                    }
+                                    _ => state.agents.start_spawn(),
+                                }
                                 return ShepherdSectionOutcome::Handled;
                             }
                         }
@@ -554,6 +587,12 @@ pub fn handle_shepherd_section_mouse(
             }
             ShepherdSectionTab::Git => {
                 if let Some(ref git_hits) = hits.git_hits {
+                    if git_hits
+                        .timeline_button
+                        .is_some_and(|r| contains_point(r, point))
+                    {
+                        return state.open_timeline_from_git();
+                    }
                     // Header action (+ Worktree)
                     if let Some(btn_rect) = git_hits.list_hits.action_button {
                         if contains_point(btn_rect, point) {
@@ -806,6 +845,24 @@ pub fn handle_shepherd_section_mouse(
                 }
             }
         }
+    }
+
+    // Snapshot timeline: wheel scrolls the diff over the detail, else moves the selection.
+    if matches!(
+        mouse.kind,
+        MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
+    ) && state.active_tab == ShepherdSectionTab::Agents
+        && state.agents.snapshots.open
+    {
+        if let Some(sh) = hits.agents_hits.as_ref().and_then(|h| h.snapshots.as_ref()) {
+            return snapshots_mouse::wheel(
+                state,
+                sh,
+                point,
+                mouse.kind == MouseEventKind::ScrollUp,
+            );
+        }
+        return ShepherdSectionOutcome::Ignored;
     }
 
     // Wheel over the event message table scrolls the stream, not the topic list.

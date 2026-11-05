@@ -204,6 +204,34 @@ impl ShepherdSectionState {
         }
     }
 
+    /// Git tab → snapshot timeline of the agent working in the selected worktree
+    /// (or the finished agents' timeline when none is).
+    pub fn open_timeline_from_git(&mut self) -> ShepherdSectionOutcome {
+        let Some(row) = self.git.selected_row().cloned() else {
+            self.status_message = Some("No hay worktree seleccionado".into());
+            return ShepherdSectionOutcome::Handled;
+        };
+        let linked = super::git::agent_for_worktree(&self.agents.agents, &row)
+            .and_then(|a| self.agents.agents.iter().position(|x| x.id == a.id));
+        self.select_tab(ShepherdSectionTab::Agents);
+        let act = match linked {
+            Some(idx) => {
+                self.agents.selected = idx;
+                self.agents.detail_scroll = 0;
+                self.agents.open_timeline()
+            }
+            None => self
+                .agents
+                .snapshots
+                .open_for("", Some(row.path.clone()))
+                .map(ShepherdAgentsAction::Snapshots),
+        };
+        match act {
+            Some(a) => ShepherdSectionOutcome::Action(ShepherdSectionAction::Agents(a)),
+            None => ShepherdSectionOutcome::Handled,
+        }
+    }
+
     pub fn handle_key(&mut self, key: &KeyEvent) -> ShepherdSectionOutcome {
         // Esc: if sub-modal or stripe active, cancel it. Otherwise close section.
         if key.code == KeyCode::Esc {
@@ -254,6 +282,13 @@ impl ShepherdSectionState {
                 }
                 _ => {}
             }
+        }
+
+        if self.active_tab == ShepherdSectionTab::Git
+            && key.code == KeyCode::Char('t')
+            && !self.git.has_sub_action()
+        {
+            return self.open_timeline_from_git();
         }
 
         // Forward to active tab
