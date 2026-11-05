@@ -107,7 +107,7 @@ impl OrchestrationService {
                 ));
             }
         }
-        let live_count = registry.live().len();
+        let live_count = self.active_agent_count(&registry);
         if live_count >= project_cfg.limits.max_concurrent_agents && !req.confirm_over_limit {
             return Err(format!(
                 "confirmation_required: max_concurrent_agents ({}) reached ({live_count} live); pass confirm_over_limit to proceed",
@@ -261,28 +261,37 @@ impl OrchestrationService {
                 .flatten()
                 .map(|t| task_context(&t, 8000))
                 .unwrap_or_default();
-            let mut full_prompt = role_prompt(&root_path, &req.role, &role_cfg);
-            full_prompt.push_str(&format!(
-                "\n\nYour agent id is {} (role {}).",
-                agent.id, agent.role
-            ));
-            if !agent.parent_id.is_empty() {
-                full_prompt.push_str(&format!(" You were started by {}.", agent.parent_id));
-            }
-            if !agent.mcp {
-                full_prompt.push_str(" The Shepherd MCP tools are not available yet; report your result in this terminal when finished.\n");
-            } else {
-                full_prompt.push('\n');
-            }
+            let mut full_prompt = match &req.pattern_prompt {
+                // Pattern mode: the pattern prompt replaces the role script and task section.
+                Some(pp) => pp.replace(super::pattern_prompt::AGENT_ID_PLACEHOLDER, &agent.id),
+                None => {
+                    let mut p = role_prompt(&root_path, &req.role, &role_cfg);
+                    p.push_str(&format!(
+                        "\n\nYour agent id is {} (role {}).",
+                        agent.id, agent.role
+                    ));
+                    if !agent.parent_id.is_empty() {
+                        p.push_str(&format!(" You were started by {}.", agent.parent_id));
+                    }
+                    if !agent.mcp {
+                        p.push_str(" The Shepherd MCP tools are not available yet; report your result in this terminal when finished.\n");
+                    } else {
+                        p.push('\n');
+                    }
+                    p
+                }
+            };
             if !skill_launch.prompt.is_empty() {
                 full_prompt.push_str("\n\n");
                 full_prompt.push_str(&skill_launch.prompt);
             }
-            if !task_ctx.is_empty() {
-                full_prompt.push_str("\n\n");
-                full_prompt.push_str(&task_ctx);
+            if req.pattern_prompt.is_none() {
+                if !task_ctx.is_empty() {
+                    full_prompt.push_str("\n\n");
+                    full_prompt.push_str(&task_ctx);
+                }
+                full_prompt.push_str(&format!("\n\n## Your task\n\n{}\n", req.task.trim()));
             }
-            full_prompt.push_str(&format!("\n\n## Your task\n\n{}\n", req.task.trim()));
             if !agent.mcp {
                 full_prompt.push('\n');
                 full_prompt.push_str(RUNTIME_CONSTRAINTS);

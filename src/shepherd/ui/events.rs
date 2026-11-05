@@ -834,6 +834,7 @@ fn render_pattern_runs_view(
                 PatternRunState::Failed => (palette.red, "FAILED"),
                 PatternRunState::Done => (palette.blue, "DONE"),
                 PatternRunState::Degraded => (palette.yellow, "DEGRADED"),
+                PatternRunState::Stalled => (palette.yellow, "STALLED"),
             };
             ListViewItem {
                 title: r.pattern.clone(),
@@ -867,6 +868,10 @@ fn render_pattern_runs_view(
             ),
             PatternRunState::Done => (palette.blue, "✓ COMPLETADA"),
             PatternRunState::Degraded => (palette.yellow, "⚠ DEGRADADA"),
+            PatternRunState::Stalled => (
+                palette.yellow,
+                "⚠ ATASCADA (stalled; despierta con mensaje nuevo)",
+            ),
         };
 
         let header = DetailHeader {
@@ -909,6 +914,12 @@ fn render_pattern_runs_view(
         if let Some(ref err) = detail.error {
             blocks.push(DetailContentBlock::Notice {
                 text: format!("Fallo: {err}"),
+                level: AlertLevel::Warning,
+            });
+        }
+        if let Some(ref why) = detail.stalled_reason {
+            blocks.push(DetailContentBlock::Notice {
+                text: format!("Atascada: {why}"),
                 level: AlertLevel::Warning,
             });
         }
@@ -1097,6 +1108,7 @@ mod tests {
             finished_at: None,
             error: None,
             quiesced: false,
+            stalled_reason: None,
         });
 
         let area = Rect::new(0, 0, 100, 30);

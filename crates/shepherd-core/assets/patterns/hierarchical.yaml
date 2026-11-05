@@ -1,6 +1,6 @@
 name: hierarchical
 kind: hierarchical
-description: Multi-tier command hierarchy where managers supervise specialized worker teams.
+description: 'Multi-tier command hierarchy where managers supervise specialized worker teams. Starts: director (level 0; publishes directives to `root-orders`). Managers wait for `root-orders`, publish assignments to `team-orders` and report to `root-results`; specialists wait for `team-orders` and publish to `team-results`.'
 topics:
   - name: root-orders
     partitions: 2
@@ -17,7 +17,8 @@ agents:
     role: brain
     level: 0
     count: 1
-    prompt: You are the director. Decompose system epics into milestone directives and review synthesized outcomes from engineering managers.
+    start: true
+    prompt: You are the director. Turn the run objective into one clear directive and publish it to root-orders, then end your turn; when managers report on root-results, review the outcome.
     publishes:
       - root-orders
     consumes:
@@ -27,7 +28,7 @@ agents:
     level: 1
     count: 2
     group: managers
-    prompt: You are an engineering manager. Convert directives into team assignments, guide specialist workers, and report completed milestones upward.
+    prompt: You are an engineering manager. When a directive arrives on root-orders, split it into assignments and publish them to team-orders; when specialists answer on team-results, summarize and publish the milestone to root-results.
     consumes:
       - root-orders
       - team-results
@@ -39,7 +40,7 @@ agents:
     level: 2
     count: 4
     group: specialists
-    prompt: You are a specialist engineer. Implement assigned technical tasks thoroughly and publish results to the team results topic.
+    prompt: You are a specialist engineer. When an assignment arrives on team-orders, carry it out and publish the result to team-results.
     consumes:
       - team-orders
     publishes:

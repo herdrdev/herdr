@@ -336,11 +336,11 @@ mod tests {
         );
         assert_eq!(
             actual.remove("shepherd.pattern.save").as_deref(),
-            Some("bf7b742c475ce0e560177e8ddd0b3a9df21f85ce3267509eec8910a779e2745b")
+            Some("9658373204a35b08382ed9215e8b50c0f0cefea059838a710bee2fab1d341232")
         );
         assert_eq!(
             actual.remove("shepherd.pattern.validate").as_deref(),
-            Some("acae7d7b5598828187644aa8bf77bbd509f407fb8e6d2e5cfc57b95e26772504")
+            Some("4e2df85cce9ad128479fa01c86ceb37a61e083538d657557cce6a0f5aac338b3")
         );
         assert_eq!(
             actual.remove("shepherd.topic.create").as_deref(),

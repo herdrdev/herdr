@@ -145,6 +145,10 @@ pub struct PatternAgent {
     pub consumes: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub group: Option<String>,
+    /// F12: this agent starts the run (receives the objective as its kick-off order). When no
+    /// agent sets it, `Pattern::starter_ids` picks the topology default.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub start: bool,
 }
 
 impl Default for PatternAgent {
@@ -160,6 +164,7 @@ impl Default for PatternAgent {
             publishes: Vec::new(),
             consumes: Vec::new(),
             group: None,
+            start: false,
         }
     }
 }
@@ -174,6 +179,47 @@ pub struct Pattern {
     pub topics: Vec<Topic>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub agents: Vec<PatternAgent>,
+}
+
+impl Pattern {
+    /// F12: ids of the agent definitions that start the run. Explicit `start: true` wins;
+    /// otherwise the topology default: orchestrator-worker → the orchestrator (the agent that
+    /// is not in a consumer group), hierarchical → level 0, blackboard → first agent,
+    /// market → requesters (publish `ask` without consuming it). Never empty if there are agents.
+    pub fn starter_ids(&self) -> Vec<String> {
+        let explicit: Vec<String> = self
+            .agents
+            .iter()
+            .filter(|a| a.start)
+            .map(|a| a.id.clone())
+            .collect();
+        if !explicit.is_empty() || self.agents.is_empty() {
+            return explicit;
+        }
+        let pick = |f: &dyn Fn(&PatternAgent) -> bool| -> Vec<String> {
+            self.agents
+                .iter()
+                .filter(|a| f(a))
+                .map(|a| a.id.clone())
+                .collect()
+        };
+        let found = match self.kind {
+            PatternKind::OrchestratorWorker => pick(&|a| a.group.is_none()),
+            PatternKind::Hierarchical => {
+                let min = self.agents.iter().map(|a| a.level.unwrap_or(0)).min();
+                pick(&|a| Some(a.level.unwrap_or(0)) == min)
+            }
+            PatternKind::Blackboard => Vec::new(),
+            PatternKind::Market => pick(&|a| {
+                a.publishes.iter().any(|t| t == "ask") && !a.consumes.iter().any(|t| t == "ask")
+            }),
+        };
+        if found.is_empty() {
+            vec![self.agents[0].id.clone()]
+        } else {
+            found
+        }
+    }
 }
 
 // --- Storage Metadata & Enums ---

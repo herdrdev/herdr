@@ -532,8 +532,10 @@ impl ShepherdPatternsSectionState {
                         return (true, None);
                     }
                     KeyCode::Char(' ')
-                        if editor.active_section == EditorSection::Metadata
-                            && (editor.active_field == 1 || editor.active_field == 2) =>
+                        if (editor.active_section == EditorSection::Metadata
+                            && (editor.active_field == 1 || editor.active_field == 2))
+                            || (editor.active_section == EditorSection::Agents
+                                && editor.active_field == 10) =>
                     {
                         editor.toggle_active_choice();
                         return (true, None);
@@ -804,6 +806,10 @@ impl ShepherdPatternsSectionState {
                 if rect.contains(ratatui::layout::Position { x: col, y: row }) {
                     if let Some(PatternSubAction::Edit(ref mut ed)) = self.sub_action {
                         ed.active_field = *idx;
+                        // The start checkbox flips on click (like the Kind/Target choices).
+                        if ed.active_section == EditorSection::Agents && *idx == 10 {
+                            ed.toggle_active_choice();
+                        }
                         return (true, None);
                     }
                 }

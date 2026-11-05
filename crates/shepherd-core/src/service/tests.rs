@@ -1475,7 +1475,7 @@ fn test_handle_call_pattern_operations() {
 #[test]
 fn test_pattern_run_executor_all_four_topologies_and_lifecycle() {
     let tmp = TestDir::new("test-pat-run-exec");
-    let (service, _terminals, _clock) = test_service(tmp.path());
+    let (service, terminals, _clock) = test_service(tmp.path());
     let root = tmp.path();
     let root_str = root.display().to_string();
 
@@ -1514,8 +1514,14 @@ fn test_pattern_run_executor_all_four_topologies_and_lifecycle() {
     let reg = service.load_registry().unwrap();
     assert_eq!(reg.agents.len(), 4);
     for ag in &reg.agents {
-        assert!(ag.task_text.contains("shepherd-events"));
-        assert!(ag.task_text.contains("orchestrator-worker"));
+        assert!(!ag.task_text.is_empty());
+    }
+    // F12: the first prompt is the pattern prompt (not the role script) and names the pattern.
+    let prompts = terminals.prompts();
+    assert_eq!(prompts.len(), 4);
+    for (_, p) in &prompts {
+        assert!(p.contains("shepherd-events"), "{p}");
+        assert!(p.contains("`orchestrator-worker`"), "{p}");
     }
 
     // 2. Pause the pattern run

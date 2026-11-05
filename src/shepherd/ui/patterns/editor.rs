@@ -123,6 +123,7 @@ impl PatternEditorState {
                 publishes: vec!["events".into()],
                 consumes: vec![],
                 group: None,
+                start: false,
             }],
         });
 
@@ -193,7 +194,7 @@ impl PatternEditorState {
     pub fn field_count_for_section(&self) -> usize {
         match self.active_section {
             EditorSection::Metadata => 4, // 0: Name, 1: Kind, 2: Target, 3: Description
-            EditorSection::Agents => 10, // 0: id, 1: role, 2: vendor, 3: model, 4: count, 5: level, 6: group, 7: pub, 8: sub, 9: prompt
+            EditorSection::Agents => 11, // 0: id, 1: role, 2: vendor, 3: model, 4: count, 5: level, 6: group, 7: pub, 8: sub, 9: prompt, 10: start
             EditorSection::Topics => 4,  // 0: name, 1: partitions, 2: key, 3: filter
             EditorSection::Topology => 0,
         }
@@ -436,6 +437,13 @@ impl PatternEditorState {
     }
 
     pub fn toggle_active_choice(&mut self) {
+        if self.active_section == EditorSection::Agents && self.active_field == 10 {
+            if let Some(agent) = self.agents.get_mut(self.selected_agent) {
+                agent.start = !agent.start;
+                self.revalidate();
+            }
+            return;
+        }
         if self.active_section == EditorSection::Metadata {
             match self.active_field {
                 1 => {
@@ -478,6 +486,7 @@ impl PatternEditorState {
             publishes: vec![first_topic],
             consumes: vec![],
             group: None,
+            start: false,
         });
         self.selected_agent = self.agents.len() - 1;
         self.revalidate();
@@ -766,6 +775,10 @@ pub fn render_pattern_editor(
                         "Prompt / Persona (personalidad en lenguaje natural):",
                         agent.prompt.as_deref().unwrap_or(""),
                     ),
+                    (
+                        "Inicia el patrón (start; Espacio alterna):",
+                        if agent.start { "sí" } else { "no" },
+                    ),
                 ];
 
                 for (i, (label, val)) in fields_agent.iter().enumerate() {
@@ -786,6 +799,7 @@ pub fn render_pattern_editor(
                             6 => "group",
                             7 => "publishes",
                             8 => "consumes",
+                            10 => "start",
                             _ => "prompt",
                         }
                     );

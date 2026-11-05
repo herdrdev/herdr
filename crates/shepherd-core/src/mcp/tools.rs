@@ -505,6 +505,16 @@ pub(crate) fn call_tool(
             if agent.task_id.is_empty() {
                 return Err("this agent has no task context".into());
             }
+            if let Some(ctx) = state.registry.parent().and_then(|dir| {
+                crate::service::patterns_run::pattern_run_context(
+                    dir,
+                    std::path::Path::new(&agent.root),
+                    &agent.task_id,
+                    &agent.id,
+                )
+            }) {
+                return Ok(tool_ok(ctx));
+            }
             let task = find_task(&agent.root, &agent.task_id).map_err(|error| error.to_string())?;
             match args
                 .get("section")

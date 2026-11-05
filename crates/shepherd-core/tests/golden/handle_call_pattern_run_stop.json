@@ -6,10 +6,12 @@
       ],
       "id": "brain-1",
       "model": "opus",
+      "prompt": "You are the lead orchestrator. Split the run objective into independent tasks and publish each to orders; when workers answer on results, aggregate them into the final deliverable.",
       "publishes": [
         "orders"
       ],
       "role": "brain",
+      "start": true,
       "state": "<STATE_DIR_PATH>",
       "vendor": "claude"
     },
@@ -19,6 +21,7 @@
       ],
       "id": "coder-1",
       "model": "",
+      "prompt": "You are an autonomous task worker. When a task arrives on orders, execute it cleanly and publish the verified result to results.",
       "publishes": [
         "results"
       ],
@@ -32,6 +35,7 @@
       ],
       "id": "coder-2",
       "model": "",
+      "prompt": "You are an autonomous task worker. When a task arrives on orders, execute it cleanly and publish the verified result to results.",
       "publishes": [
         "results"
       ],
@@ -45,6 +49,7 @@
       ],
       "id": "coder-3",
       "model": "",
+      "prompt": "You are an autonomous task worker. When a task arrives on orders, execute it cleanly and publish the verified result to results.",
       "publishes": [
         "results"
       ],

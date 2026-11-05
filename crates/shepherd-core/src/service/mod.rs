@@ -238,6 +238,10 @@ pub struct ServiceSpawnRequest {
     pub confirm_over_limit: bool,
     #[serde(default = "default_true")]
     pub deliver_prompt: bool,
+    /// F12: pattern-mode startup prompt (with `{{agent_id}}` placeholder). When set it replaces
+    /// the role's workflow script and the `## Your task` section of the first prompt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pattern_prompt: Option<String>,
 }
 
 impl Default for ServiceSpawnRequest {
@@ -255,6 +259,7 @@ impl Default for ServiceSpawnRequest {
             mcp_url: None,
             confirm_over_limit: false,
             deliver_prompt: true,
+            pattern_prompt: None,
         }
     }
 }
@@ -1168,6 +1173,7 @@ impl OrchestrationService {
 
 pub mod delivery;
 pub mod gates;
+pub(crate) mod pattern_prompt;
 pub mod patterns_run;
 pub mod reconcile;
 pub mod registry;
@@ -1183,10 +1189,12 @@ pub use registry::{
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
+mod tests_f11b;
+#[cfg(test)]
+mod tests_f12;
+#[cfg(test)]
 mod tests_f8f;
 #[cfg(test)]
 mod tests_f8g;
 #[cfg(test)]
 mod tests_f8h;
-#[cfg(test)]
-mod tests_f11b;

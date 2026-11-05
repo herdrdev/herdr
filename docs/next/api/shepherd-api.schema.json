@@ -3485,6 +3485,10 @@
             "role": {
               "type": "string"
             },
+            "start": {
+              "description": "F12: this agent starts the run (receives the objective as its kick-off order). When no\nagent sets it, `Pattern::starter_ids` picks the topology default.",
+              "type": "boolean"
+            },
             "vendor": {
               "type": [
                 "string",
@@ -10763,6 +10767,10 @@
             "role": {
               "type": "string"
             },
+            "start": {
+              "description": "F12: this agent starts the run (receives the objective as its kick-off order). When no\nagent sets it, `Pattern::starter_ids` picks the topology default.",
+              "type": "boolean"
+            },
             "vendor": {
               "type": [
                 "string",
@@ -10869,6 +10877,13 @@
               "description": "`done` reached by quiescence (agents idle, nothing published for T seconds); a new message revives it.",
               "type": "boolean"
             },
+            "stalled_reason": {
+              "description": "F12: why the run is `stalled` (blocked agent / no activity).",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "state": {
               "$ref": "#/schemas/success_response/$defs/PatternRunState"
             },
@@ -10927,6 +10942,13 @@
                 "null"
               ]
             },
+            "prompt": {
+              "description": "F12: persona prompt of the pattern definition (served by `get_task_context`).",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "publishes": {
               "items": {
                 "type": "string"
@@ -10935,6 +10957,10 @@
             },
             "role": {
               "type": "string"
+            },
+            "start": {
+              "description": "F12: this agent starts the run (receives the objective as its kick-off order).",
+              "type": "boolean"
             },
             "state": {
               "type": "string"
@@ -10954,15 +10980,24 @@
           "type": "object"
         },
         "PatternRunState": {
-          "enum": [
-            "running",
-            "paused",
-            "stopped",
-            "failed",
-            "done",
-            "degraded"
-          ],
-          "type": "string"
+          "oneOf": [
+            {
+              "enum": [
+                "running",
+                "paused",
+                "stopped",
+                "failed",
+                "done",
+                "degraded"
+              ],
+              "type": "string"
+            },
+            {
+              "const": "stalled",
+              "description": "F12: agents are idle/blocked but the run did not finish healthily (blocked agent or no\nmessage ever published). A new message returns it to `running`.",
+              "type": "string"
+            }
+          ]
         },
         "PatternRunSummary": {
           "properties": {

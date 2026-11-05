@@ -570,6 +570,9 @@ fn print_human_api_response(
             writeln!(writer, "Pattern:  {pattern}")?;
             writeln!(writer, "Kind:     {kind}")?;
             writeln!(writer, "State:    {state}")?;
+            if let Some(why) = run.get("stalled_reason").and_then(Value::as_str) {
+                writeln!(writer, "Stalled:  {why}")?;
+            }
             writeln!(writer, "Task:     {task}")?;
             if let Some(agents) = run.get("agents").and_then(Value::as_array) {
                 writeln!(writer, "\nAgents ({}):", agents.len())?;
@@ -577,7 +580,12 @@ fn print_human_api_response(
                     let aid = a.get("id").and_then(Value::as_str).unwrap_or("-");
                     let role = a.get("role").and_then(Value::as_str).unwrap_or("-");
                     let astate = a.get("state").and_then(Value::as_str).unwrap_or("-");
-                    writeln!(writer, "  - {aid} ({role}) [{astate}]")?;
+                    let starts = if a.get("start").and_then(Value::as_bool) == Some(true) {
+                        " starts"
+                    } else {
+                        ""
+                    };
+                    writeln!(writer, "  - {aid} ({role}) [{astate}]{starts}")?;
                 }
             }
         }

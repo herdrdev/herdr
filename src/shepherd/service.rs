@@ -64,6 +64,7 @@ fn spawn_params_to_request(
         mcp_url: params.mcp_url,
         confirm_over_limit: params.confirm_over_limit,
         deliver_prompt: params.deliver_prompt,
+        pattern_prompt: None,
     }
 }
 

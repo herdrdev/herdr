@@ -14,6 +14,12 @@ pub struct PatternRunAgent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub level: Option<u32>,
     pub state: String,
+    /// F12: persona prompt of the pattern definition (served by `get_task_context`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
+    /// F12: this agent starts the run (receives the objective as its kick-off order).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub start: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub publishes: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -30,6 +36,9 @@ pub enum PatternRunState {
     #[serde(alias = "completed")]
     Done,
     Degraded,
+    /// F12: agents are idle/blocked but the run did not finish healthily (blocked agent or no
+    /// message ever published). A new message returns it to `running`.
+    Stalled,
 }
 
 impl std::fmt::Display for PatternRunState {
@@ -41,6 +50,7 @@ impl std::fmt::Display for PatternRunState {
             Self::Failed => write!(f, "failed"),
             Self::Done => write!(f, "done"),
             Self::Degraded => write!(f, "degraded"),
+            Self::Stalled => write!(f, "stalled"),
         }
     }
 }
@@ -67,6 +77,9 @@ pub struct PatternRun {
     /// `done` reached by quiescence (agents idle, nothing published for T seconds); a new message revives it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub quiesced: bool,
+    /// F12: why the run is `stalled` (blocked agent / no activity).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stalled_reason: Option<String>,
 }
 
 impl PatternRun {
@@ -98,7 +111,7 @@ pub struct PatternRunSummary {
     pub updated_at: String,
 }
 
-/// F8g: a publish on a topic of a quiesced `done` run reopens it (event-driven, so a fast agent
+/// F8g: a publish on a topic of a quiesced `done` (or F12 `stalled`) run reopens it (event-driven, so a fast agent
 /// that is idle and acked again before the next reconcile cannot miss it). The quiet timer is
 /// already cleared at `done`, so the run returns to `done` only once it calms down again.
 /// Free function: MCP agent publishes reach the bus without an `OrchestrationService`.
@@ -122,12 +135,12 @@ pub(crate) fn reopen_quiesced_runs(
         };
         let mut dirty = false;
         for run in &mut runs {
-            if run.state == PatternRunState::Done
-                && run.quiesced
-                && run.topics.iter().any(|t| t == topic)
-            {
+            let revivable = (run.state == PatternRunState::Done && run.quiesced)
+                || run.state == PatternRunState::Stalled;
+            if revivable && run.topics.iter().any(|t| t == topic) {
                 run.state = PatternRunState::Running;
                 run.quiesced = false;
+                run.stalled_reason = None;
                 run.finished_at = None;
                 run.updated_at = now.to_string();
                 dirty = true;
@@ -138,6 +151,28 @@ pub(crate) fn reopen_quiesced_runs(
         }
     }
     Ok(())
+}
+
+/// F12: `get_task_context` of an agent whose `task_id` is a pattern run id: objective, topology
+/// and the agent's persona instead of a "no task" error. `None` when `run_id` is not a run.
+pub(crate) fn pattern_run_context(
+    state_dir: &Path,
+    root: &Path,
+    run_id: &str,
+    agent_id: &str,
+) -> Option<String> {
+    for path in [
+        pattern_runs_path(root, state_dir),
+        pattern_runs_path(state_dir, state_dir),
+    ] {
+        if let Some(run) = load_pattern_runs(&path)
+            .ok()
+            .and_then(|runs| runs.into_iter().find(|r| r.id == run_id))
+        {
+            return Some(super::pattern_prompt::run_context(&run, agent_id));
+        }
+    }
+    None
 }
 
 /// Determine location for pattern runs storage.
@@ -245,10 +280,10 @@ impl OrchestrationService {
         // Limits check: max concurrent agents
         let total_new: usize = pattern.agents.iter().map(|a| a.count.max(1) as usize).sum();
         let registry = self.load_registry()?;
-        let live_count = registry.live().len();
+        let live_count = self.active_agent_count(&registry);
         if live_count + total_new > config.limits.max_concurrent_agents && !confirm_over_limit {
             return Err(format!(
-                "confirmation_required: max_concurrent_agents ({}) reached ({} live + {} new); pass confirm_over_limit to proceed",
+                "confirmation_required: max_concurrent_agents ({}) reached ({} active + {} new); pass confirm_over_limit to proceed",
                 config.limits.max_concurrent_agents, live_count, total_new
             ));
         }
@@ -270,6 +305,7 @@ impl OrchestrationService {
                 .unwrap_or_else(|_| std::env::current_dir().unwrap_or_default().join(root))
         };
 
+        let starters = pattern.starter_ids();
         let mut run_agents = Vec::new();
         for agent_def in &pattern.agents {
             let count = agent_def.count.max(1);
@@ -280,18 +316,18 @@ impl OrchestrationService {
                     format!("{}-{}", agent_def.id, idx + 1)
                 };
 
-                let mut prompt = format!(
-                    "You are operating as role '{}' in Shepherd multi-agent pattern '{}' (topology: {}).\nTask: {}\nPublishes to topics: {:?}\nConsumes from topics: {:?}\nUse the 'shepherd-events' skill or MCP event tools (publish, poll, subscribe, ack) to collaborate with other agents.\n",
-                    agent_def.role, pattern.name, pattern.kind, task_desc, agent_def.publishes, agent_def.consumes
+                let prompt = super::pattern_prompt::startup_prompt(
+                    &pattern,
+                    agent_def,
+                    &task_desc,
+                    starters.contains(&agent_def.id),
                 );
-                if let Some(ref custom_prompt) = agent_def.prompt {
-                    prompt.push_str(&format!("\nPersona instructions:\n{}\n", custom_prompt));
-                }
 
                 let spawn_req = crate::service::ServiceSpawnRequest {
                     root: abs_root.clone(),
                     role: agent_def.role.clone(),
-                    task: prompt,
+                    task: task_desc.clone(),
+                    pattern_prompt: Some(prompt),
                     task_id: Some(run_id.clone()),
                     vendor: agent_def.vendor.clone(),
                     model: agent_def.model.clone(),
@@ -320,6 +356,7 @@ impl OrchestrationService {
                             finished_at: Some(now),
                             error: Some(e.clone()),
                             quiesced: false,
+                            stalled_reason: None,
                         };
                         let runs_file = pattern_runs_path(root, &self.service_config.state_dir);
                         let mut existing = load_pattern_runs(&runs_file).unwrap_or_default();
@@ -341,6 +378,8 @@ impl OrchestrationService {
                     model: Some(spawned.model.clone()),
                     level: agent_def.level,
                     state: spawned.state.clone(),
+                    prompt: agent_def.prompt.clone(),
+                    start: starters.contains(&agent_def.id),
                     publishes: agent_def.publishes.clone(),
                     consumes: agent_def.consumes.clone(),
                 });
@@ -361,6 +400,7 @@ impl OrchestrationService {
             finished_at: None,
             error: None,
             quiesced: false,
+            stalled_reason: None,
         };
 
         let runs_file = pattern_runs_path(root, &self.service_config.state_dir);
@@ -368,6 +408,41 @@ impl OrchestrationService {
         existing.push(run.clone());
         save_pattern_runs(&runs_file, &existing)?;
         Ok(run)
+    }
+
+    /// F12: live agents that count for `max_concurrent_agents`: the `idle`/`done` agents of runs
+    /// that are `done`/`stopped`/`stalled` are inactive and do not count.
+    pub(crate) fn active_agent_count(&self, registry: &crate::AgentRegistryFile) -> usize {
+        let mut paths = vec![pattern_runs_path(
+            &self.service_config.state_dir,
+            &self.service_config.state_dir,
+        )];
+        for ag in &registry.agents {
+            if !ag.root.is_empty() {
+                paths.push(pattern_runs_path(
+                    Path::new(&ag.root),
+                    &self.service_config.state_dir,
+                ));
+            }
+        }
+        paths.sort();
+        paths.dedup();
+        let mut inactive = std::collections::HashSet::new();
+        for path in paths {
+            for run in load_pattern_runs(&path).unwrap_or_default() {
+                if matches!(
+                    run.state,
+                    PatternRunState::Done | PatternRunState::Stopped | PatternRunState::Stalled
+                ) {
+                    inactive.extend(run.agents.into_iter().map(|a| a.id));
+                }
+            }
+        }
+        registry
+            .live()
+            .into_iter()
+            .filter(|a| !(inactive.contains(&a.id) && matches!(a.state.as_str(), "idle" | "done")))
+            .count()
     }
 
     /// F8h: total messages ever published on the run's topics. Lag/acks are ignored on purpose:
@@ -420,7 +495,8 @@ impl OrchestrationService {
             let mut dirty = false;
 
             for run in &mut runs {
-                let revivable = run.state == PatternRunState::Done && run.quiesced;
+                let revivable = (run.state == PatternRunState::Done && run.quiesced)
+                    || run.state == PatternRunState::Stalled;
                 if run.state != PatternRunState::Running
                     && run.state != PatternRunState::Paused
                     && !revivable
@@ -446,12 +522,27 @@ impl OrchestrationService {
                 let busy = run
                     .agents
                     .iter()
-                    .any(|a| matches!(a.state.as_str(), "working" | "blocked" | "starting"));
+                    .any(|a| matches!(a.state.as_str(), "working" | "starting"));
+                // F12: blocked agents (or agents that reported an error) do not keep the run
+                // alive forever; once it calms down the run is `stalled`, not `done`.
+                let blocked: Vec<String> = run
+                    .agents
+                    .iter()
+                    .filter(|a| {
+                        a.state == "blocked"
+                            || registry
+                                .agents
+                                .iter()
+                                .any(|r| r.id == a.id && !r.error.is_empty() && !r.terminal())
+                    })
+                    .map(|a| a.id.clone())
+                    .collect();
 
                 if revivable {
                     if busy {
                         run.state = PatternRunState::Running;
                         run.quiesced = false;
+                        run.stalled_reason = None;
                         run.finished_at = None;
                         run.updated_at = now.clone();
                         dirty = true;
@@ -499,9 +590,19 @@ impl OrchestrationService {
                         if now_ms.saturating_sub(entry.0) >= period_ms {
                             quiet.remove(&run.id);
                             drop(quiet);
-                            run.state = PatternRunState::Done;
-                            run.quiesced = true;
-                            run.finished_at = Some(now.clone());
+                            if !blocked.is_empty() || published == 0 {
+                                run.state = PatternRunState::Stalled;
+                                run.stalled_reason = Some(if blocked.is_empty() {
+                                    "sin actividad: ningún mensaje publicado en los tópicos del run"
+                                        .to_owned()
+                                } else {
+                                    format!("agente bloqueado: {}", blocked.join(", "))
+                                });
+                            } else {
+                                run.state = PatternRunState::Done;
+                                run.quiesced = true;
+                                run.finished_at = Some(now.clone());
+                            }
                             run.updated_at = now.clone();
                             dirty = true;
                         }

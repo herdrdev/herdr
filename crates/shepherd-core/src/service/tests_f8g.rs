@@ -22,6 +22,12 @@ fn quiesced_run(
             true,
         )
         .unwrap();
+    // F12: a run where nothing was ever published is `stalled`, not `done`.
+    service
+        .publish_topic("orders", "go", None, Some(0), "human")
+        .unwrap();
+    set_idle(service, terminals);
+    service.reconcile_once().unwrap(); // wakes the unread consumers
     set_idle(service, terminals);
     service.reconcile_once().unwrap();
     clock.advance(Duration::from_secs(31));

@@ -308,6 +308,7 @@ fn events_with_run() -> ShepherdSectionState {
         finished_at: None,
         error: None,
         quiesced: false,
+        stalled_reason: None,
     });
     state
 }

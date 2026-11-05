@@ -206,7 +206,7 @@ fn test_pattern_editor_field_focus_and_navigation() {
     // Switch to Agents section
     editor.active_section = EditorSection::Agents;
     editor.active_field = 0;
-    assert_eq!(editor.field_count_for_section(), 10);
+    assert_eq!(editor.field_count_for_section(), 11); // F12: +start
     editor.cycle_forward();
     assert_eq!(editor.active_field, 1);
 }
@@ -240,6 +240,23 @@ fn test_pattern_editor_agent_add_remove_and_reorder() {
     editor.selected_agent = 0;
     editor.remove_agent();
     assert_eq!(editor.agents.len(), 1, "cannot delete sole remaining agent");
+}
+
+#[test]
+fn test_pattern_editor_start_checkbox_toggles_and_is_saved() {
+    let pat = get_builtin_pattern("market").expect("template exists");
+    let mut editor = PatternEditorState::from_pattern(&pat, PatternSource::Project);
+    editor.active_section = EditorSection::Agents;
+    editor.selected_agent = 0; // market-maker: not a starter
+    editor.active_field = 10;
+    assert_eq!(editor.field_count_for_section(), 11);
+    assert!(!editor.agents[0].start);
+    editor.toggle_active_choice();
+    assert!(editor.agents[0].start);
+    editor.toggle_active_choice();
+    assert!(!editor.agents[0].start);
+    // The requester template agent keeps its explicit `start: true` through the editor.
+    assert!(editor.agents.iter().any(|a| a.id == "requester" && a.start));
 }
 
 #[test]

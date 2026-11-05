@@ -47,8 +47,14 @@ fn quiescent_run_goes_done_after_period_and_revives_on_new_message() {
     let tmp = TestDir::new("f8f-quiescence");
     let (service, terminals, clock) = test_service(tmp.path());
     let run = start_run(&service, tmp.path());
+    // F12: a run where nothing was ever published is `stalled`, not `done`.
+    service
+        .publish_topic("orders", "go", None, Some(0), "human")
+        .unwrap();
     set_all_status(&service, &terminals, "idle");
 
+    service.reconcile_once().unwrap(); // wakes the unread consumers
+    set_all_status(&service, &terminals, "idle");
     service.reconcile_once().unwrap();
     let r = service.get_pattern_run(tmp.path(), &run.id).unwrap();
     assert_eq!(
@@ -118,6 +124,9 @@ fn quiescence_is_reconciled_after_server_restart() {
     let tmp = TestDir::new("f8f-restart");
     let (service, terminals, _clock) = test_service(tmp.path());
     let run = start_run(&service, tmp.path());
+    service
+        .publish_topic("orders", "go", None, Some(0), "human")
+        .unwrap();
     set_all_status(&service, &terminals, "idle");
 
     // Restart: fresh service (empty in-memory timers) over the same state, panes still live.
@@ -125,6 +134,8 @@ fn quiescence_is_reconciled_after_server_restart() {
     service2.set_mcp_url(Some("http://127.0.0.1:9099/mcp".into()));
     set_all_status(&service2, &terminals2, "idle");
     service2.resume_on_startup().unwrap();
+    service2.reconcile_once().unwrap(); // wakes the unread consumers
+    set_all_status(&service2, &terminals2, "idle");
     service2.reconcile_once().unwrap();
     clock2.advance(Duration::from_secs(31));
     service2.reconcile_once().unwrap();
