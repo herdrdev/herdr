@@ -19,8 +19,8 @@ use ratatui::{
     widgets::{Paragraph, Widget},
 };
 
-use crate::app::state::Palette;
 use super::panel::contains_point;
+use crate::app::state::Palette;
 
 pub const SHEPHERD_RUNS_MODAL_SIZE: (u16, u16) = (90, 24);
 
@@ -94,7 +94,8 @@ impl LaunchOptionsFormState {
                     self.options.replan = !self.options.replan;
                     self.error = None;
                 } else {
-                    self.error = Some("Replanificar solo está disponible si existe un plan guardado".into());
+                    self.error =
+                        Some("Replanificar solo está disponible si existe un plan guardado".into());
                 }
             }
             _ => {}
@@ -106,7 +107,11 @@ impl LaunchOptionsFormState {
     }
 
     pub fn cycle_backward(&mut self) {
-        self.active_option = if self.active_option == 0 { 2 } else { self.active_option - 1 };
+        self.active_option = if self.active_option == 0 {
+            2
+        } else {
+            self.active_option - 1
+        };
     }
 }
 
@@ -204,8 +209,14 @@ impl ShepherdRunRow {
                 Some(GateKind::PlanApproval)
             }
             Some(serde_json::Value::Object(obj)) => {
-                let kind = obj.get("kind").and_then(serde_json::Value::as_str).unwrap_or("");
-                let subtask = obj.get("subtask").and_then(serde_json::Value::as_u64).unwrap_or(0) as u32;
+                let kind = obj
+                    .get("kind")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("");
+                let subtask = obj
+                    .get("subtask")
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or(0) as u32;
                 if kind == "push_pr" || subtask > 0 {
                     Some(GateKind::PushAndPr { subtask })
                 } else if kind == "plan" {
@@ -583,27 +594,59 @@ pub fn render_shepherd_runs_panel(
     let base = Style::default().fg(palette.text).bg(palette.panel_bg);
 
     // Header
-    let button_bar = Rect::new(stack.header.x + 1, stack.header.y, stack.header.width.saturating_sub(2), 1);
+    let button_bar = Rect::new(
+        stack.header.x + 1,
+        stack.header.y,
+        stack.header.width.saturating_sub(2),
+        1,
+    );
 
     // Buttons in header (row 0)
     let mut btn_x = button_bar.x;
     let launch_btn = Rect::new(btn_x, button_bar.y, 16, 1);
-    render_runs_btn(buffer, launch_btn, "▶ Lanzar/Reanudar", palette.accent, palette);
+    render_runs_btn(
+        buffer,
+        launch_btn,
+        "▶ Lanzar/Reanudar",
+        palette.accent,
+        palette,
+    );
     btn_x = btn_x.saturating_add(18);
 
     let cancel_run_btn = Rect::new(btn_x, button_bar.y, 14, 1);
-    render_runs_btn(buffer, cancel_run_btn, "■ Cancelar run", palette.yellow, palette);
+    render_runs_btn(
+        buffer,
+        cancel_run_btn,
+        "■ Cancelar run",
+        palette.yellow,
+        palette,
+    );
     btn_x = btn_x.saturating_add(16);
 
     let approve_gate_btn = Rect::new(btn_x, button_bar.y, 16, 1);
-    render_runs_btn(buffer, approve_gate_btn, "✓ Aprobar gate", palette.green, palette);
+    render_runs_btn(
+        buffer,
+        approve_gate_btn,
+        "✓ Aprobar gate",
+        palette.green,
+        palette,
+    );
     btn_x = btn_x.saturating_add(18);
 
     let reject_gate_btn = Rect::new(btn_x, button_bar.y, 16, 1);
-    render_runs_btn(buffer, reject_gate_btn, "✗ Rechazar gate", palette.red, palette);
+    render_runs_btn(
+        buffer,
+        reject_gate_btn,
+        "✗ Rechazar gate",
+        palette.red,
+        palette,
+    );
 
     // Subtitle in header (row 1)
-    let sub_title = format!("{} run(s) · human gates protegen push y PR", state.runs.len());
+    let sub_title = format!(
+        "{} run(s) · human gates protegen push y PR",
+        state.runs.len()
+    );
     buffer.set_stringn(
         stack.header.x + 1,
         stack.header.y + 1,
@@ -629,7 +672,11 @@ pub fn render_shepherd_runs_panel(
             let row_y = body.y + idx as u16;
             let row_rect = Rect::new(body.x, row_y, body.width, 1);
             let is_sel = idx == state.selected;
-            let row_bg = if is_sel { palette.active_row_bg } else { palette.panel_bg };
+            let row_bg = if is_sel {
+                palette.active_row_bg
+            } else {
+                palette.panel_bg
+            };
             let row_style = base.bg(row_bg);
 
             for rx in row_rect.x..row_rect.right() {
@@ -672,9 +719,20 @@ pub fn render_shepherd_runs_panel(
             );
 
             if !gate_badge.is_empty() {
-                let badge_x = row_rect.right().saturating_sub(gate_badge.chars().count() as u16 + 2);
-                let badge_style = Style::default().fg(palette.surface_dim).bg(palette.red).add_modifier(Modifier::BOLD);
-                buffer.set_stringn(badge_x, row_y, gate_badge, gate_badge.chars().count(), badge_style);
+                let badge_x = row_rect
+                    .right()
+                    .saturating_sub(gate_badge.chars().count() as u16 + 2);
+                let badge_style = Style::default()
+                    .fg(palette.surface_dim)
+                    .bg(palette.red)
+                    .add_modifier(Modifier::BOLD);
+                buffer.set_stringn(
+                    badge_x,
+                    row_y,
+                    gate_badge,
+                    gate_badge.chars().count(),
+                    badge_style,
+                );
             }
 
             run_rows.push((row_rect, run.task_id));
@@ -684,7 +742,10 @@ pub fn render_shepherd_runs_panel(
     // Footer
     if let Some(footer_area) = stack.footer {
         let footer_line = Line::from(vec![
-            Span::styled(" r/l ", base.fg(palette.accent).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                " r/l ",
+                base.fg(palette.accent).add_modifier(Modifier::BOLD),
+            ),
             Span::styled("lanzar/reanudar  ·  ", base.fg(palette.overlay0)),
             Span::styled(" c ", base.fg(palette.yellow).add_modifier(Modifier::BOLD)),
             Span::styled("cancelar  ·  ", base.fg(palette.overlay0)),
@@ -727,7 +788,11 @@ pub fn render_shepherd_runs_panel(
             confirm_button = conf;
             cancel_button = canc;
         }
-        RunsSubModal::ConfirmApproveGate { task_id, gate: _, message } => {
+        RunsSubModal::ConfirmApproveGate {
+            task_id,
+            gate: _,
+            message,
+        } => {
             let (conf, canc) = render_runs_confirm_modal(
                 buffer,
                 inner,
@@ -740,7 +805,11 @@ pub fn render_shepherd_runs_panel(
             confirm_button = conf;
             cancel_button = canc;
         }
-        RunsSubModal::ConfirmRejectGate { task_id, gate: _, message } => {
+        RunsSubModal::ConfirmRejectGate {
+            task_id,
+            gate: _,
+            message,
+        } => {
             let (conf, canc) = render_runs_confirm_modal(
                 buffer,
                 inner,
@@ -790,7 +859,10 @@ fn render_launch_options_modal(
     buffer.set_stringn(
         inner.x + 1,
         inner.y,
-        &format!("Opciones de Lanzamiento / Reanudación (Tarea #{})", form.task_id),
+        &format!(
+            "Opciones de Lanzamiento / Reanudación (Tarea #{})",
+            form.task_id
+        ),
         usize::from(inner.width.saturating_sub(2)),
         base.fg(palette.text).add_modifier(Modifier::BOLD),
     );
@@ -828,7 +900,9 @@ fn render_launch_options_modal(
         };
 
         for ox in opt_rect.x..opt_rect.right() {
-            buffer[(ox, opt_rect.y)].set_symbol(" ").set_style(opt_style);
+            buffer[(ox, opt_rect.y)]
+                .set_symbol(" ")
+                .set_style(opt_style);
         }
 
         let label = format!("{check} {text}");
@@ -837,7 +911,11 @@ fn render_launch_options_modal(
             opt_rect.y,
             &label,
             usize::from(opt_rect.width.saturating_sub(2)),
-            if is_active { opt_style.fg(palette.accent) } else { opt_style.fg(palette.text) },
+            if is_active {
+                opt_style.fg(palette.accent)
+            } else {
+                opt_style.fg(palette.text)
+            },
         );
 
         opt_rects.push(opt_rect);
@@ -858,8 +936,20 @@ fn render_launch_options_modal(
     let confirm_btn = Rect::new(inner.x + 2, btn_y, 16, 1);
     let cancel_btn = Rect::new(inner.x + 20, btn_y, 16, 1);
 
-    render_runs_btn(buffer, confirm_btn, " ↵ Lanzar run ", palette.accent, palette);
-    render_runs_btn(buffer, cancel_btn, " esc Cancelar ", palette.surface_dim, palette);
+    render_runs_btn(
+        buffer,
+        confirm_btn,
+        " ↵ Lanzar run ",
+        palette.accent,
+        palette,
+    );
+    render_runs_btn(
+        buffer,
+        cancel_btn,
+        " esc Cancelar ",
+        palette.surface_dim,
+        palette,
+    );
 
     (confirm_btn, cancel_btn, opt_rects)
 }
@@ -900,7 +990,9 @@ fn render_runs_confirm_modal(
 
     for word in words.by_ref() {
         if line1.chars().count() + 1 + word.chars().count() <= max_w {
-            if !line1.is_empty() { line1.push(' '); }
+            if !line1.is_empty() {
+                line1.push(' ');
+            }
             line1.push_str(word);
         } else {
             line2.push_str(word);
@@ -909,14 +1001,28 @@ fn render_runs_confirm_modal(
     }
     for word in words {
         if line2.chars().count() + 1 + word.chars().count() <= max_w {
-            if !line2.is_empty() { line2.push(' '); }
+            if !line2.is_empty() {
+                line2.push(' ');
+            }
             line2.push_str(word);
         }
     }
 
-    buffer.set_stringn(inner.x + 1, inner.y + 2, &line1, max_w, base.fg(palette.text));
+    buffer.set_stringn(
+        inner.x + 1,
+        inner.y + 2,
+        &line1,
+        max_w,
+        base.fg(palette.text),
+    );
     if !line2.is_empty() {
-        buffer.set_stringn(inner.x + 1, inner.y + 3, &line2, max_w, base.fg(palette.text));
+        buffer.set_stringn(
+            inner.x + 1,
+            inner.y + 3,
+            &line2,
+            max_w,
+            base.fg(palette.text),
+        );
     }
 
     let btn_y = inner.bottom().saturating_sub(1);
@@ -925,12 +1031,24 @@ fn render_runs_confirm_modal(
     let cancel_btn = Rect::new(inner.x + 4 + conf_w, btn_y, 16, 1);
 
     render_runs_btn(buffer, confirm_btn, confirm_label, confirm_color, palette);
-    render_runs_btn(buffer, cancel_btn, " esc Cancelar ", palette.surface_dim, palette);
+    render_runs_btn(
+        buffer,
+        cancel_btn,
+        " esc Cancelar ",
+        palette.surface_dim,
+        palette,
+    );
 
     (confirm_btn, cancel_btn)
 }
 
-fn render_runs_btn(buffer: &mut Buffer, rect: Rect, label: &str, bg: ratatui::style::Color, palette: &Palette) {
+fn render_runs_btn(
+    buffer: &mut Buffer,
+    rect: Rect,
+    label: &str,
+    bg: ratatui::style::Color,
+    palette: &Palette,
+) {
     if rect.width < 2 || rect.height < 1 {
         return;
     }
@@ -938,7 +1056,10 @@ fn render_runs_btn(buffer: &mut Buffer, rect: Rect, label: &str, bg: ratatui::st
         ratatui::style::Color::Reset => palette.surface_dim,
         color => color,
     };
-    let style = Style::default().fg(contrast_fg).bg(bg).add_modifier(Modifier::BOLD);
+    let style = Style::default()
+        .fg(contrast_fg)
+        .bg(bg)
+        .add_modifier(Modifier::BOLD);
     buffer.set_style(rect, style);
     buffer.set_stringn(rect.x, rect.y, label, usize::from(rect.width), style);
 }
@@ -953,7 +1074,10 @@ fn draw_runs_box(
         return None;
     }
     let background = Style::default().bg(bg).remove_modifier(Modifier::DIM);
-    let border = Style::default().fg(border_color).bg(bg).remove_modifier(Modifier::DIM);
+    let border = Style::default()
+        .fg(border_color)
+        .bg(bg)
+        .remove_modifier(Modifier::DIM);
 
     for y in area.y..area.bottom() {
         for x in area.x..area.right() {
@@ -962,18 +1086,37 @@ fn draw_runs_box(
     }
     for x in area.x..area.right() {
         buffer[(x, area.y)]
-            .set_symbol(if x == area.x { "┌" } else if x + 1 == area.right() { "┐" } else { "─" })
+            .set_symbol(if x == area.x {
+                "┌"
+            } else if x + 1 == area.right() {
+                "┐"
+            } else {
+                "─"
+            })
             .set_style(border);
         let bottom_y = area.bottom() - 1;
         buffer[(x, bottom_y)]
-            .set_symbol(if x == area.x { "└" } else if x + 1 == area.right() { "┘" } else { "─" })
+            .set_symbol(if x == area.x {
+                "└"
+            } else if x + 1 == area.right() {
+                "┘"
+            } else {
+                "─"
+            })
             .set_style(border);
     }
     for y in area.y + 1..area.bottom() - 1 {
         buffer[(area.x, y)].set_symbol("│").set_style(border);
-        buffer[(area.right() - 1, y)].set_symbol("│").set_style(border);
+        buffer[(area.right() - 1, y)]
+            .set_symbol("│")
+            .set_style(border);
     }
-    Some(Rect::new(area.x + 1, area.y + 1, area.width - 2, area.height - 2))
+    Some(Rect::new(
+        area.x + 1,
+        area.y + 1,
+        area.width - 2,
+        area.height - 2,
+    ))
 }
 
 #[cfg(test)]
@@ -1003,7 +1146,10 @@ mod tests {
         // Guard: auto_push must ALWAYS be false when dialog is opened
         if let RunsSubModal::LaunchOptions(ref form) = state.sub_modal {
             assert!(!form.options.auto_push, "auto_push must be false on open");
-            assert!(form.options.wait_plan_approval, "wait_plan_approval defaults to true");
+            assert!(
+                form.options.wait_plan_approval,
+                "wait_plan_approval defaults to true"
+            );
             assert!(!form.options.replan, "replan must be false by default");
         } else {
             panic!("Expected launch options modal");
@@ -1013,7 +1159,10 @@ mod tests {
         if let RunsSubModal::LaunchOptions(ref mut form) = state.sub_modal {
             form.active_option = 2; // replan
             form.toggle_active();
-            assert!(!form.options.replan, "Replan must NOT toggle without saved plan");
+            assert!(
+                !form.options.replan,
+                "Replan must NOT toggle without saved plan"
+            );
             assert!(form.error.as_ref().unwrap().contains("plan guardado"));
         }
 
@@ -1033,7 +1182,10 @@ mod tests {
         state_planned.open_launch_options();
 
         if let RunsSubModal::LaunchOptions(ref mut form) = state_planned.sub_modal {
-            assert!(!form.options.auto_push, "auto_push must still be false on open");
+            assert!(
+                !form.options.auto_push,
+                "auto_push must still be false on open"
+            );
             form.active_option = 2; // replan
             form.toggle_active();
             assert!(form.options.replan, "Replan toggles when saved plan exists");
@@ -1075,7 +1227,11 @@ mod tests {
         assert_eq!(act, None);
         assert_eq!(state.last_action, None);
 
-        if let RunsSubModal::ConfirmCancelRun { task_id, ref message } = state.sub_modal {
+        if let RunsSubModal::ConfirmCancelRun {
+            task_id,
+            ref message,
+        } = state.sub_modal
+        {
             assert_eq!(task_id, 5);
             assert!(
                 message.contains("agentes ya lanzados seguirán vivos"),
@@ -1118,7 +1274,12 @@ mod tests {
         assert_eq!(act, None);
         assert_eq!(state.last_action, None);
 
-        if let RunsSubModal::ConfirmApproveGate { task_id, ref gate, ref message } = state.sub_modal {
+        if let RunsSubModal::ConfirmApproveGate {
+            task_id,
+            ref gate,
+            ref message,
+        } = state.sub_modal
+        {
             assert_eq!(task_id, 10);
             assert_eq!(*gate, GateKind::PushAndPr { subtask: 2 });
             assert!(
@@ -1166,7 +1327,10 @@ mod tests {
         let act = state.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::empty()));
         assert_eq!(act, None);
 
-        if let RunsSubModal::ConfirmRejectGate { task_id, ref gate, .. } = state.sub_modal {
+        if let RunsSubModal::ConfirmRejectGate {
+            task_id, ref gate, ..
+        } = state.sub_modal
+        {
             assert_eq!(task_id, 12);
             assert_eq!(*gate, GateKind::PlanApproval);
         } else {

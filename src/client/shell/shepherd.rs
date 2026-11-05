@@ -1,6 +1,6 @@
 use super::*;
-use std::path::Path;
 use crate::shepherd::overlay::ShepherdActionDispatcher;
+use std::path::Path;
 
 struct ClientActionDispatcher<'a> {
     state: &'a mut ClientShellState,
@@ -14,9 +14,7 @@ impl<'a> crate::shepherd::ShepherdActionDispatcher for ClientActionDispatcher<'a
                 op: op.to_string(),
                 args,
             }),
-            PendingEndpointKind::ShepherdCall {
-                op: op.to_string(),
-            },
+            PendingEndpointKind::ShepherdCall { op: op.to_string() },
             self.outcome,
         );
     }
@@ -87,7 +85,9 @@ impl ClientShellState {
                 crate::shepherd::panel::AgentsSubModal::ConfirmKill {
                     agent_id: agent_id.to_string(),
                     state: "working".to_string(),
-                    message: format!("¿Matar al agente '{agent_id}'? Esta acción enviará SIGKILL a su proceso."),
+                    message: format!(
+                        "¿Matar al agente '{agent_id}'? Esta acción enviará SIGKILL a su proceso."
+                    ),
                 },
             ),
         ));
@@ -114,10 +114,7 @@ impl ClientShellState {
         outcome.repaint = true;
     }
 
-    pub(super) fn open_shepherd_clean_all_confirm(
-        &mut self,
-        outcome: &mut ClientShellInput,
-    ) {
+    pub(super) fn open_shepherd_clean_all_confirm(&mut self, outcome: &mut ClientShellInput) {
         if !self.config.shepherd_enabled {
             return;
         }
@@ -174,10 +171,12 @@ impl ClientShellState {
         if let Some(ClientShellOverlay::Shepherd(ref overlay)) = self.overlay {
             if overlay.active_tab == crate::shepherd::ShepherdTab::Git {
                 self.push_endpoint_method_with_kind(
-                    crate::api::schema::Method::ShepherdCall(crate::api::schema::ShepherdCallParams {
-                        op: "git_status".to_string(),
-                        args: serde_json::json!({}),
-                    }),
+                    crate::api::schema::Method::ShepherdCall(
+                        crate::api::schema::ShepherdCallParams {
+                            op: "git_status".to_string(),
+                            args: serde_json::json!({}),
+                        },
+                    ),
                     PendingEndpointKind::ShepherdCall {
                         op: "git_status".to_string(),
                     },
@@ -205,7 +204,10 @@ impl ClientShellState {
                 for (op, args) in fake_dispatcher.calls {
                     self.push_endpoint_method_with_kind(
                         crate::api::schema::Method::ShepherdCall(
-                            crate::api::schema::ShepherdCallParams { op: op.clone(), args },
+                            crate::api::schema::ShepherdCallParams {
+                                op: op.clone(),
+                                args,
+                            },
                         ),
                         PendingEndpointKind::ShepherdCall { op },
                         outcome,
@@ -220,7 +222,10 @@ impl ClientShellState {
                     );
                 }
                 for (task_id, file_path) in fake_dispatcher.opened_editors {
-                    let mut d = ClientActionDispatcher { state: self, outcome };
+                    let mut d = ClientActionDispatcher {
+                        state: self,
+                        outcome,
+                    };
                     d.open_editor(task_id, &file_path);
                 }
 
@@ -232,16 +237,19 @@ impl ClientShellState {
                     crate::shepherd::ShepherdKeyOutcome::FocusPane { pane_id, .. } => {
                         self.overlay = None;
                         self.push_endpoint_method(
-                            crate::api::schema::Method::PaneFocus(
-                                crate::api::schema::PaneTarget { pane_id },
-                            ),
+                            crate::api::schema::Method::PaneFocus(crate::api::schema::PaneTarget {
+                                pane_id,
+                            }),
                             outcome,
                         );
                         outcome.repaint = true;
                     }
                     crate::shepherd::ShepherdKeyOutcome::OpenEditor { task_id, file_path } => {
                         self.overlay = None;
-                        let mut d = ClientActionDispatcher { state: self, outcome };
+                        let mut d = ClientActionDispatcher {
+                            state: self,
+                            outcome,
+                        };
                         d.open_editor(task_id, &file_path);
                         outcome.repaint = true;
                     }
@@ -264,7 +272,10 @@ impl ClientShellState {
                 for (op, args) in fake_dispatcher.calls {
                     self.push_endpoint_method_with_kind(
                         crate::api::schema::Method::ShepherdCall(
-                            crate::api::schema::ShepherdCallParams { op: op.clone(), args },
+                            crate::api::schema::ShepherdCallParams {
+                                op: op.clone(),
+                                args,
+                            },
                         ),
                         PendingEndpointKind::ShepherdCall { op },
                         outcome,
@@ -287,9 +298,9 @@ impl ClientShellState {
                     crate::shepherd::ShepherdKeyOutcome::FocusPane { pane_id, .. } => {
                         self.overlay = None;
                         self.push_endpoint_method(
-                            crate::api::schema::Method::PaneFocus(
-                                crate::api::schema::PaneTarget { pane_id },
-                            ),
+                            crate::api::schema::Method::PaneFocus(crate::api::schema::PaneTarget {
+                                pane_id,
+                            }),
                             outcome,
                         );
                         outcome.repaint = true;
@@ -325,7 +336,10 @@ impl ClientShellState {
             for (op, args) in fake_dispatcher.calls {
                 self.push_endpoint_method_with_kind(
                     crate::api::schema::Method::ShepherdCall(
-                        crate::api::schema::ShepherdCallParams { op: op.clone(), args },
+                        crate::api::schema::ShepherdCallParams {
+                            op: op.clone(),
+                            args,
+                        },
                     ),
                     PendingEndpointKind::ShepherdCall { op },
                     outcome,
@@ -340,7 +354,10 @@ impl ClientShellState {
                 );
             }
             for (task_id, file_path) in fake_dispatcher.opened_editors {
-                let mut d = ClientActionDispatcher { state: self, outcome };
+                let mut d = ClientActionDispatcher {
+                    state: self,
+                    outcome,
+                };
                 d.open_editor(task_id, &file_path);
             }
 
@@ -361,7 +378,10 @@ impl ClientShellState {
                 }
                 crate::shepherd::ShepherdClickOutcome::OpenEditor { task_id, file_path } => {
                     self.overlay = None;
-                    let mut d = ClientActionDispatcher { state: self, outcome };
+                    let mut d = ClientActionDispatcher {
+                        state: self,
+                        outcome,
+                    };
                     d.open_editor(task_id, &file_path);
                     outcome.repaint = true;
                 }
@@ -387,8 +407,13 @@ impl ClientShellState {
             Ok(crate::api::schema::ResponseResult::ShepherdCall { data }) => {
                 match op {
                     "tasks" => {
-                        if let Ok(tasks) = serde_json::from_value::<Vec<shepherd_core::CreatedTask>>(data.clone()) {
-                            overlay.tasks.tasks = tasks.iter().map(crate::shepherd::tasks::ShepherdTaskRow::from_created_task).collect();
+                        if let Ok(tasks) =
+                            serde_json::from_value::<Vec<shepherd_core::CreatedTask>>(data.clone())
+                        {
+                            overlay.tasks.tasks = tasks
+                                .iter()
+                                .map(crate::shepherd::tasks::ShepherdTaskRow::from_created_task)
+                                .collect();
                         }
                     }
                     "runs" => {
@@ -402,19 +427,30 @@ impl ClientShellState {
                     }
                     "skills" => {
                         // If skills JSON is returned, update skills view
-                        if let Ok(skills) = serde_json::from_value::<Vec<shepherd_core::skills::Skill>>(data.clone()) {
-                            overlay.skills.catalog_skills = skills.iter().map(crate::shepherd::skills::CatalogSkillItem::from).collect();
+                        if let Ok(skills) = serde_json::from_value::<
+                            Vec<shepherd_core::skills::Skill>,
+                        >(data.clone())
+                        {
+                            overlay.skills.catalog_skills = skills
+                                .iter()
+                                .map(crate::shepherd::skills::CatalogSkillItem::from)
+                                .collect();
                         }
                         overlay.status_message = None;
                     }
                     "git_status" => {
-                        if let Ok(status) = serde_json::from_value::<shepherd_core::git::GitRepoStatus>(data.clone()) {
+                        if let Ok(status) = serde_json::from_value::<
+                            shepherd_core::git::GitRepoStatus,
+                        >(data.clone())
+                        {
                             overlay.git.update_from_status(&status);
                         }
                         overlay.status_message = None;
                     }
-                    "archive_task" | "create_task" | "import_task" | "task_create" | "task_archive" => {
-                        overlay.status_message = Some(format!("Tarea actualizada exitosamente ({op})"));
+                    "archive_task" | "create_task" | "import_task" | "task_create"
+                    | "task_archive" => {
+                        overlay.status_message =
+                            Some(format!("Tarea actualizada exitosamente ({op})"));
                         self.refresh_shepherd_views(outcome);
                     }
                     "run" | "approve" | "cancel_run" | "reject_gate" => {
@@ -422,7 +458,8 @@ impl ClientShellState {
                         self.refresh_shepherd_views(outcome);
                     }
                     "skills_toggle" | "skills_restore" | "skills_create" | "skills_delete" => {
-                        overlay.status_message = Some(format!("Configuración de skills actualizada ({op})"));
+                        overlay.status_message =
+                            Some(format!("Configuración de skills actualizada ({op})"));
                         self.refresh_shepherd_views(outcome);
                     }
                     _ => {

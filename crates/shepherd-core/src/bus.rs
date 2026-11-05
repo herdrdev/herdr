@@ -34,7 +34,12 @@ pub struct Message {
 }
 
 impl Message {
-    pub fn directed(from: impl Into<String>, to: impl Into<String>, kind: impl Into<String>, content: impl Into<String>) -> Self {
+    pub fn directed(
+        from: impl Into<String>,
+        to: impl Into<String>,
+        kind: impl Into<String>,
+        content: impl Into<String>,
+    ) -> Self {
         Self {
             id: 0,
             ts: String::new(),
@@ -145,12 +150,20 @@ pub struct MessageBus {
 }
 
 impl MessageBus {
-    pub fn open(path: impl Into<PathBuf>) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+    pub fn open(
+        path: impl Into<PathBuf>,
+    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let path = path.into();
-        if let Some(parent) = path.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+        if let Some(parent) = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+        {
             std::fs::create_dir_all(parent)?;
         }
-        let mut state = State { next: 1, ..State::default() };
+        let mut state = State {
+            next: 1,
+            ..State::default()
+        };
 
         // 1. Load topics sidecar if present
         let topics_path = path_with_suffix(&path, ".topics");
@@ -163,7 +176,9 @@ impl MessageBus {
         // 2. Load subscriptions sidecar if present
         let subs_path = path_with_suffix(&path, ".subscriptions");
         if let Ok(bytes) = std::fs::read(&subs_path) {
-            if let Ok(subs) = serde_json::from_slice::<HashMap<String, HashMap<String, Vec<String>>>>(&bytes) {
+            if let Ok(subs) =
+                serde_json::from_slice::<HashMap<String, HashMap<String, Vec<String>>>>(&bytes)
+            {
                 state.subscriptions = subs;
             }
         }
@@ -171,7 +186,10 @@ impl MessageBus {
         // 3. Load committed offsets sidecar if present
         let offsets_path = path_with_suffix(&path, ".offsets");
         if let Ok(bytes) = std::fs::read(&offsets_path) {
-            if let Ok(offsets) = serde_json::from_slice::<HashMap<String, HashMap<String, HashMap<u32, u64>>>>(&bytes) {
+            if let Ok(offsets) = serde_json::from_slice::<
+                HashMap<String, HashMap<String, HashMap<u32, u64>>>,
+            >(&bytes)
+            {
                 state.committed_offsets = offsets;
             }
         }
@@ -200,10 +218,14 @@ impl MessageBus {
                             *next_off += 1;
 
                             // Ensure topic is registered with at least partition + 1
-                            let entry = state.topics.entry(message.topic.clone()).or_insert_with(|| Topic {
-                                name: message.topic.clone(),
-                                partitions: 1,
-                            });
+                            let entry =
+                                state
+                                    .topics
+                                    .entry(message.topic.clone())
+                                    .or_insert_with(|| Topic {
+                                        name: message.topic.clone(),
+                                        partitions: 1,
+                                    });
                             entry.partitions = entry.partitions.max(message.partition + 1);
                         }
                         state.all.push(message);
@@ -228,7 +250,11 @@ impl MessageBus {
                 && message.kind != KIND_SYSTEM
                 && message.id > *state.read_through.get(&message.to).unwrap_or(&0)
             {
-                state.pending.entry(message.to.clone()).or_default().push(message.clone());
+                state
+                    .pending
+                    .entry(message.to.clone())
+                    .or_default()
+                    .push(message.clone());
             }
         }
 
@@ -239,11 +265,28 @@ impl MessageBus {
     }
 
     /// Send a message (directed or topic).
-    pub fn send(&self, mut message: Message) -> Result<Message, Box<dyn std::error::Error + Send + Sync>> {
+    pub fn send(
+        &self,
+        mut message: Message,
+    ) -> Result<Message, Box<dyn std::error::Error + Send + Sync>> {
         if !message.topic.is_empty() {
-            let key = if message.key.is_empty() { None } else { Some(message.key.as_str()) };
-            let partition = if message.partition > 0 { Some(message.partition) } else { None };
-            return self.publish(&message.topic, &message.content, key, partition, &message.from);
+            let key = if message.key.is_empty() {
+                None
+            } else {
+                Some(message.key.as_str())
+            };
+            let partition = if message.partition > 0 {
+                Some(message.partition)
+            } else {
+                None
+            };
+            return self.publish(
+                &message.topic,
+                &message.content,
+                key,
+                partition,
+                &message.from,
+            );
         }
 
         let mut state = self.state.lock().map_err(|_| "message bus lock poisoned")?;
@@ -255,13 +298,20 @@ impl MessageBus {
         append_to_file(&self.path, &line)?;
         state.all.push(message.clone());
         if !message.to.is_empty() && message.kind != KIND_SYSTEM {
-            state.pending.entry(message.to.clone()).or_default().push(message.clone());
+            state
+                .pending
+                .entry(message.to.clone())
+                .or_default()
+                .push(message.clone());
         }
         Ok(message)
     }
 
     /// Read and commit directed pending messages for a recipient.
-    pub fn read(&self, recipient: &str) -> Result<Vec<Message>, Box<dyn std::error::Error + Send + Sync>> {
+    pub fn read(
+        &self,
+        recipient: &str,
+    ) -> Result<Vec<Message>, Box<dyn std::error::Error + Send + Sync>> {
         let mut state = self.state.lock().map_err(|_| "message bus lock poisoned")?;
         let pending = state.pending.remove(recipient).unwrap_or_default();
         if pending.is_empty() {
@@ -269,7 +319,9 @@ impl MessageBus {
         }
         let max_id = pending.iter().map(|message| message.id).max().unwrap_or(0);
         let previous = state.read_through.get(recipient).copied().unwrap_or(0);
-        state.read_through.insert(recipient.to_owned(), previous.max(max_id));
+        state
+            .read_through
+            .insert(recipient.to_owned(), previous.max(max_id));
         if let Err(error) = save_json_sidecar(&self.path, ".read", &state.read_through) {
             state.read_through.insert(recipient.to_owned(), previous);
             state.pending.insert(recipient.to_owned(), pending);
@@ -279,9 +331,17 @@ impl MessageBus {
     }
 
     /// Read messages since a given global ID.
-    pub fn since(&self, after: i64) -> Result<Vec<Message>, Box<dyn std::error::Error + Send + Sync>> {
+    pub fn since(
+        &self,
+        after: i64,
+    ) -> Result<Vec<Message>, Box<dyn std::error::Error + Send + Sync>> {
         let state = self.state.lock().map_err(|_| "message bus lock poisoned")?;
-        Ok(state.all.iter().filter(|message| message.id > after).cloned().collect())
+        Ok(state
+            .all
+            .iter()
+            .filter(|message| message.id > after)
+            .cloned()
+            .collect())
     }
 
     /// Last global message ID.
@@ -312,7 +372,9 @@ impl MessageBus {
     }
 
     /// List registered topics and their message counts.
-    pub fn list_topics(&self) -> Result<Vec<TopicSummary>, Box<dyn std::error::Error + Send + Sync>> {
+    pub fn list_topics(
+        &self,
+    ) -> Result<Vec<TopicSummary>, Box<dyn std::error::Error + Send + Sync>> {
         let state = self.state.lock().map_err(|_| "message bus lock poisoned")?;
         let mut summaries = Vec::new();
         for (name, topic) in &state.topics {
@@ -494,11 +556,7 @@ impl MessageBus {
             None => return Ok(Vec::new()),
         };
 
-        let partitions_count = state
-            .topics
-            .get(topic)
-            .map(|t| t.partitions)
-            .unwrap_or(1);
+        let partitions_count = state.topics.get(topic).map(|t| t.partitions).unwrap_or(1);
 
         let assigned_partitions: Vec<u32> = (0..partitions_count)
             .filter(|p| (*p as usize % live_members.len()) == consumer_idx)
@@ -517,7 +575,11 @@ impl MessageBus {
                 .and_then(|pm| pm.get(&p))
                 .copied();
 
-            for m in state.all.iter().filter(|m| m.topic == topic && m.partition == p) {
+            for m in state
+                .all
+                .iter()
+                .filter(|m| m.topic == topic && m.partition == p)
+            {
                 let is_eligible = match committed {
                     Some(c) => m.offset > c,
                     None => true,
@@ -674,7 +736,10 @@ fn find_consumer_group(
     })
 }
 
-fn append_to_file(path: &Path, bytes: &[u8]) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+fn append_to_file(
+    path: &Path,
+    bytes: &[u8],
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut options = OpenOptions::new();
     options.append(true).create(true).write(true);
     #[cfg(unix)]
@@ -731,20 +796,51 @@ mod tests {
     }
 
     fn clean_bus_files(path: &Path) {
-        for suffix in ["", ".read", ".read.tmp", ".topics", ".topics.tmp", ".offsets", ".offsets.tmp", ".subscriptions", ".subscriptions.tmp"] {
+        for suffix in [
+            "",
+            ".read",
+            ".read.tmp",
+            ".topics",
+            ".topics.tmp",
+            ".offsets",
+            ".offsets.tmp",
+            ".subscriptions",
+            ".subscriptions.tmp",
+        ] {
             let _ = std::fs::remove_file(path_with_suffix(path, suffix));
         }
     }
 
     #[test]
     fn persists_timeline_and_restores_only_unread_mail_after_restart() {
-        let path = std::env::temp_dir().join(format!("shepherd-messages-{}.jsonl", std::process::id()));
+        let path =
+            std::env::temp_dir().join(format!("shepherd-messages-{}.jsonl", std::process::id()));
         clean_bus_files(&path);
         {
             let bus = MessageBus::open(&path).unwrap();
-            assert_eq!(bus.send(message("brain-1", "coder-1", KIND_MESSAGE, "build the API")).unwrap().id, 1);
-            assert_eq!(bus.send(message("coder-1", "", KIND_SYSTEM, "coder started")).unwrap().id, 2);
-            assert_eq!(bus.send(message("reviewer-1", "coder-1", KIND_RESULT, "needs changes")).unwrap().id, 3);
+            assert_eq!(
+                bus.send(message("brain-1", "coder-1", KIND_MESSAGE, "build the API"))
+                    .unwrap()
+                    .id,
+                1
+            );
+            assert_eq!(
+                bus.send(message("coder-1", "", KIND_SYSTEM, "coder started"))
+                    .unwrap()
+                    .id,
+                2
+            );
+            assert_eq!(
+                bus.send(message(
+                    "reviewer-1",
+                    "coder-1",
+                    KIND_RESULT,
+                    "needs changes"
+                ))
+                .unwrap()
+                .id,
+                3
+            );
             assert_eq!(bus.last().unwrap(), 3);
             let mail = bus.read("coder-1").unwrap();
             assert_eq!(mail.iter().map(|m| m.id).collect::<Vec<_>>(), [1, 3]);
@@ -753,8 +849,20 @@ mod tests {
         {
             let bus = MessageBus::open(&path).unwrap();
             assert!(bus.read("coder-1").unwrap().is_empty());
-            assert_eq!(bus.since(1).unwrap().iter().map(|m| m.id).collect::<Vec<_>>(), [2, 3]);
-            assert_eq!(bus.send(message("brain-1", "coder-1", KIND_MESSAGE, "follow up")).unwrap().id, 4);
+            assert_eq!(
+                bus.since(1)
+                    .unwrap()
+                    .iter()
+                    .map(|m| m.id)
+                    .collect::<Vec<_>>(),
+                [2, 3]
+            );
+            assert_eq!(
+                bus.send(message("brain-1", "coder-1", KIND_MESSAGE, "follow up"))
+                    .unwrap()
+                    .id,
+                4
+            );
             assert_eq!(bus.read("coder-1").unwrap()[0].id, 4);
         }
         clean_bus_files(&path);
@@ -762,7 +870,10 @@ mod tests {
 
     #[test]
     fn reads_legacy_jsonl_format_with_default_fields() {
-        let path = std::env::temp_dir().join(format!("shepherd-legacy-jsonl-{}.jsonl", std::process::id()));
+        let path = std::env::temp_dir().join(format!(
+            "shepherd-legacy-jsonl-{}.jsonl",
+            std::process::id()
+        ));
         clean_bus_files(&path);
 
         // Write raw legacy lines without topic, key, partition, offset
@@ -785,14 +896,21 @@ mod tests {
 
     #[test]
     fn same_key_produces_same_partition() {
-        let path = std::env::temp_dir().join(format!("shepherd-key-hash-{}.jsonl", std::process::id()));
+        let path =
+            std::env::temp_dir().join(format!("shepherd-key-hash-{}.jsonl", std::process::id()));
         clean_bus_files(&path);
         let bus = MessageBus::open(&path).unwrap();
         bus.topic_create("orders", 4).unwrap();
 
-        let msg1 = bus.publish("orders", "task 1", Some("customer-42"), None, "brain-1").unwrap();
-        let msg2 = bus.publish("orders", "task 2", Some("customer-42"), None, "brain-1").unwrap();
-        let msg3 = bus.publish("orders", "task 3", Some("customer-42"), None, "reviewer-1").unwrap();
+        let msg1 = bus
+            .publish("orders", "task 1", Some("customer-42"), None, "brain-1")
+            .unwrap();
+        let msg2 = bus
+            .publish("orders", "task 2", Some("customer-42"), None, "brain-1")
+            .unwrap();
+        let msg3 = bus
+            .publish("orders", "task 3", Some("customer-42"), None, "reviewer-1")
+            .unwrap();
 
         // Same key must always yield the exact same partition
         assert_eq!(msg1.partition, msg2.partition);
@@ -807,19 +925,30 @@ mod tests {
 
     #[test]
     fn partition_ordering_and_monotonic_offsets() {
-        let path = std::env::temp_dir().join(format!("shepherd-part-order-{}.jsonl", std::process::id()));
+        let path =
+            std::env::temp_dir().join(format!("shepherd-part-order-{}.jsonl", std::process::id()));
         clean_bus_files(&path);
         let bus = MessageBus::open(&path).unwrap();
         bus.topic_create("orders", 2).unwrap();
 
         // Publish explicitly to partition 0
-        let p0_m0 = bus.publish("orders", "p0 m0", None, Some(0), "brain-1").unwrap();
-        let p0_m1 = bus.publish("orders", "p0 m1", None, Some(0), "brain-1").unwrap();
-        let p0_m2 = bus.publish("orders", "p0 m2", None, Some(0), "brain-1").unwrap();
+        let p0_m0 = bus
+            .publish("orders", "p0 m0", None, Some(0), "brain-1")
+            .unwrap();
+        let p0_m1 = bus
+            .publish("orders", "p0 m1", None, Some(0), "brain-1")
+            .unwrap();
+        let p0_m2 = bus
+            .publish("orders", "p0 m2", None, Some(0), "brain-1")
+            .unwrap();
 
         // Publish explicitly to partition 1
-        let p1_m0 = bus.publish("orders", "p1 m0", None, Some(1), "coder-1").unwrap();
-        let p1_m1 = bus.publish("orders", "p1 m1", None, Some(1), "coder-1").unwrap();
+        let p1_m0 = bus
+            .publish("orders", "p1 m0", None, Some(1), "coder-1")
+            .unwrap();
+        let p1_m1 = bus
+            .publish("orders", "p1 m1", None, Some(1), "coder-1")
+            .unwrap();
 
         assert_eq!(p0_m0.offset, 0);
         assert_eq!(p0_m1.offset, 1);
@@ -829,26 +958,35 @@ mod tests {
         assert_eq!(p1_m1.offset, 1);
 
         // Global IDs are strictly increasing
-        assert_eq!([p0_m0.id, p0_m1.id, p0_m2.id, p1_m0.id, p1_m1.id], [1, 2, 3, 4, 5]);
+        assert_eq!(
+            [p0_m0.id, p0_m1.id, p0_m2.id, p1_m0.id, p1_m1.id],
+            [1, 2, 3, 4, 5]
+        );
 
         clean_bus_files(&path);
     }
 
     #[test]
     fn deterministic_distribution_and_rebalancing_on_member_exit() {
-        let path = std::env::temp_dir().join(format!("shepherd-rebalance-{}.jsonl", std::process::id()));
+        let path =
+            std::env::temp_dir().join(format!("shepherd-rebalance-{}.jsonl", std::process::id()));
         clean_bus_files(&path);
         let bus = MessageBus::open(&path).unwrap();
         bus.topic_create("tasks", 3).unwrap();
 
         // c1 and c2 join the "worker-pool" consumer group
-        bus.subscribe("coder-1", "tasks", Some("worker-pool")).unwrap();
-        bus.subscribe("coder-2", "tasks", Some("worker-pool")).unwrap();
+        bus.subscribe("coder-1", "tasks", Some("worker-pool"))
+            .unwrap();
+        bus.subscribe("coder-2", "tasks", Some("worker-pool"))
+            .unwrap();
 
         // Publish 1 message per partition (0, 1, 2)
-        bus.publish("tasks", "task p0", None, Some(0), "brain-1").unwrap();
-        bus.publish("tasks", "task p1", None, Some(1), "brain-1").unwrap();
-        bus.publish("tasks", "task p2", None, Some(2), "brain-1").unwrap();
+        bus.publish("tasks", "task p0", None, Some(0), "brain-1")
+            .unwrap();
+        bus.publish("tasks", "task p1", None, Some(1), "brain-1")
+            .unwrap();
+        bus.publish("tasks", "task p2", None, Some(2), "brain-1")
+            .unwrap();
 
         // Sorted members: ["coder-1", "coder-2"]
         // coder-1 (idx 0) gets p0 and p2 (0 % 2 == 0, 2 % 2 == 0)
@@ -856,21 +994,35 @@ mod tests {
         let poll1 = bus.poll("coder-1", "tasks", None).unwrap();
         let poll2 = bus.poll("coder-2", "tasks", None).unwrap();
 
-        assert_eq!(poll1.iter().map(|m| m.partition).collect::<Vec<_>>(), [0, 2]);
+        assert_eq!(
+            poll1.iter().map(|m| m.partition).collect::<Vec<_>>(),
+            [0, 2]
+        );
         assert_eq!(poll2.iter().map(|m| m.partition).collect::<Vec<_>>(), [1]);
 
         // Now coder-2 exits/dies (active_members = ["coder-1"])
-        let poll1_rebalanced = bus.poll_active("coder-1", "tasks", None, Some(&["coder-1".to_string()])).unwrap();
+        let poll1_rebalanced = bus
+            .poll_active("coder-1", "tasks", None, Some(&["coder-1".to_string()]))
+            .unwrap();
         // Since coder-2 never acked partition 1, coder-1 now gets partition 1 as well!
         // coder-1 had un-acked p0 and p2, plus took over un-acked p1 -> receives all 3!
-        assert_eq!(poll1_rebalanced.iter().map(|m| m.partition).collect::<Vec<_>>(), [0, 1, 2]);
+        assert_eq!(
+            poll1_rebalanced
+                .iter()
+                .map(|m| m.partition)
+                .collect::<Vec<_>>(),
+            [0, 1, 2]
+        );
 
         clean_bus_files(&path);
     }
 
     #[test]
     fn committed_offsets_persist_across_bus_restart() {
-        let path = std::env::temp_dir().join(format!("shepherd-restart-offsets-{}.jsonl", std::process::id()));
+        let path = std::env::temp_dir().join(format!(
+            "shepherd-restart-offsets-{}.jsonl",
+            std::process::id()
+        ));
         clean_bus_files(&path);
 
         {
@@ -878,9 +1030,12 @@ mod tests {
             bus.topic_create("orders", 1).unwrap();
             bus.subscribe("c1", "orders", Some("grp")).unwrap();
 
-            bus.publish("orders", "msg 0", None, Some(0), "brain-1").unwrap();
-            bus.publish("orders", "msg 1", None, Some(0), "brain-1").unwrap();
-            bus.publish("orders", "msg 2", None, Some(0), "brain-1").unwrap();
+            bus.publish("orders", "msg 0", None, Some(0), "brain-1")
+                .unwrap();
+            bus.publish("orders", "msg 1", None, Some(0), "brain-1")
+                .unwrap();
+            bus.publish("orders", "msg 2", None, Some(0), "brain-1")
+                .unwrap();
 
             let msgs = bus.poll("c1", "orders", None).unwrap();
             assert_eq!(msgs.len(), 3);
@@ -912,13 +1067,17 @@ mod tests {
 
     #[test]
     fn at_least_once_delivery_without_ack_redelivers() {
-        let path = std::env::temp_dir().join(format!("shepherd-at-least-once-{}.jsonl", std::process::id()));
+        let path = std::env::temp_dir().join(format!(
+            "shepherd-at-least-once-{}.jsonl",
+            std::process::id()
+        ));
         clean_bus_files(&path);
         let bus = MessageBus::open(&path).unwrap();
         bus.topic_create("orders", 1).unwrap();
         bus.subscribe("c1", "orders", None).unwrap();
 
-        bus.publish("orders", "important task", None, Some(0), "brain-1").unwrap();
+        bus.publish("orders", "important task", None, Some(0), "brain-1")
+            .unwrap();
 
         // First poll
         let poll1 = bus.poll("c1", "orders", None).unwrap();
@@ -939,7 +1098,8 @@ mod tests {
 
     #[test]
     fn replay_has_no_side_effects() {
-        let path = std::env::temp_dir().join(format!("shepherd-replay-{}.jsonl", std::process::id()));
+        let path =
+            std::env::temp_dir().join(format!("shepherd-replay-{}.jsonl", std::process::id()));
         clean_bus_files(&path);
         let bus = MessageBus::open(&path).unwrap();
         bus.topic_create("events", 2).unwrap();
@@ -973,7 +1133,10 @@ mod tests {
 
     #[test]
     fn concurrent_publishing_no_lost_messages_or_duplicate_ids() {
-        let path = std::env::temp_dir().join(format!("shepherd-concurrent-pub-{}.jsonl", std::process::id()));
+        let path = std::env::temp_dir().join(format!(
+            "shepherd-concurrent-pub-{}.jsonl",
+            std::process::id()
+        ));
         clean_bus_files(&path);
         let bus = Arc::new(MessageBus::open(&path).unwrap());
         bus.topic_create("concurrent", 4).unwrap();

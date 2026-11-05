@@ -18,7 +18,6 @@
 
 #![allow(dead_code)]
 
-use std::path::{Path, PathBuf};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
     buffer::Buffer,
@@ -26,27 +25,25 @@ use ratatui::{
     style::{Color, Modifier, Style},
 };
 use serde_json::{json, Value};
+use std::path::{Path, PathBuf};
 
-use crate::app::state::Palette;
 use super::{
-    git::{
-        render_shepherd_git_panel, ShepherdGitAction, ShepherdGitRender,
-        ShepherdGitState,
-    },
+    git::{render_shepherd_git_panel, ShepherdGitAction, ShepherdGitRender, ShepherdGitState},
     panel::{contains_point, AgentsSubModal, ShepherdAgentsAction},
     runs::{
         render_shepherd_runs_panel, GateKind, RunsSubModal, ShepherdRunsAction, ShepherdRunsRender,
         ShepherdRunsState,
     },
     skills::{
-        render_shepherd_skills_panel, SkillsSubModal, ShepherdSkillsAction, ShepherdSkillsRender,
-        ShepherdSkillsState,
+        render_shepherd_skills_panel, ShepherdSkillsAction, ShepherdSkillsRender,
+        ShepherdSkillsState, SkillsSubModal,
     },
     tasks::{
-        render_shepherd_tasks_panel, TasksSubModal, ShepherdTasksAction, ShepherdTasksRender,
-        ShepherdTasksState,
+        render_shepherd_tasks_panel, ShepherdTasksAction, ShepherdTasksRender, ShepherdTasksState,
+        TasksSubModal,
     },
 };
+use crate::app::state::Palette;
 
 pub const SHEPHERD_OVERLAY_MODAL_SIZE: (u16, u16) = (96, 28);
 
@@ -247,7 +244,8 @@ impl ShepherdActionDispatcher for FakeShepherdDispatcher {
     }
 
     fn focus_pane(&mut self, pane_id: &str, agent_id: &str) {
-        self.focused_panes.push((pane_id.to_string(), agent_id.to_string()));
+        self.focused_panes
+            .push((pane_id.to_string(), agent_id.to_string()));
     }
 
     fn open_editor(&mut self, task_id: u32, file_path: &Path) {
@@ -278,8 +276,12 @@ pub fn render_shepherd_overlay(
     }
 
     // Modal popup dimensions
-    let target_w = SHEPHERD_OVERLAY_MODAL_SIZE.0.min(area.width.saturating_sub(2));
-    let target_h = SHEPHERD_OVERLAY_MODAL_SIZE.1.min(area.height.saturating_sub(2));
+    let target_w = SHEPHERD_OVERLAY_MODAL_SIZE
+        .0
+        .min(area.width.saturating_sub(2));
+    let target_h = SHEPHERD_OVERLAY_MODAL_SIZE
+        .1
+        .min(area.height.saturating_sub(2));
     if target_w < 10 || target_h < 6 {
         return None;
     }
@@ -311,15 +313,31 @@ pub fn render_shepherd_overlay(
     // Borders
     for x in popup_rect.x..popup_rect.right() {
         buffer[(x, popup_rect.y)]
-            .set_symbol(if x == popup_rect.x { "┌" } else if x + 1 == popup_rect.right() { "┐" } else { "─" })
+            .set_symbol(if x == popup_rect.x {
+                "┌"
+            } else if x + 1 == popup_rect.right() {
+                "┐"
+            } else {
+                "─"
+            })
             .set_style(border_style);
         buffer[(x, popup_rect.bottom() - 1)]
-            .set_symbol(if x == popup_rect.x { "└" } else if x + 1 == popup_rect.right() { "┘" } else { "─" })
+            .set_symbol(if x == popup_rect.x {
+                "└"
+            } else if x + 1 == popup_rect.right() {
+                "┘"
+            } else {
+                "─"
+            })
             .set_style(border_style);
     }
     for y in popup_rect.y + 1..popup_rect.bottom() - 1 {
-        buffer[(popup_rect.x, y)].set_symbol("│").set_style(border_style);
-        buffer[(popup_rect.right() - 1, y)].set_symbol("│").set_style(border_style);
+        buffer[(popup_rect.x, y)]
+            .set_symbol("│")
+            .set_style(border_style);
+        buffer[(popup_rect.right() - 1, y)]
+            .set_symbol("│")
+            .set_style(border_style);
     }
 
     let inner = Rect::new(
@@ -341,7 +359,9 @@ pub fn render_shepherd_overlay(
     for (i, ch) in title_text.chars().enumerate() {
         let x = inner.x + i as u16;
         if x < inner.right() {
-            buffer[(x, inner.y)].set_symbol(&ch.to_string()).set_style(title_style);
+            buffer[(x, inner.y)]
+                .set_symbol(&ch.to_string())
+                .set_style(title_style);
         }
     }
 
@@ -355,7 +375,9 @@ pub fn render_shepherd_overlay(
     for (i, ch) in close_text.chars().enumerate() {
         let x = close_rect.x + i as u16;
         if x < inner.right() {
-            buffer[(x, inner.y)].set_symbol(&ch.to_string()).set_style(close_style);
+            buffer[(x, inner.y)]
+                .set_symbol(&ch.to_string())
+                .set_style(close_style);
         }
     }
 
@@ -376,9 +398,7 @@ pub fn render_shepherd_overlay(
                 .bg(palette.accent)
                 .add_modifier(Modifier::BOLD)
         } else {
-            Style::default()
-                .fg(palette.overlay1)
-                .bg(palette.panel_bg)
+            Style::default().fg(palette.overlay1).bg(palette.panel_bg)
         };
         for (i, ch) in label.chars().enumerate() {
             buffer[(tab_rect.x + i as u16, tab_rect.y)]
@@ -392,7 +412,9 @@ pub fn render_shepherd_overlay(
     // Divider line on row inner.y + 2
     let divider_style = Style::default().fg(palette.surface0).bg(palette.panel_bg);
     for x in inner.x..inner.right() {
-        buffer[(x, inner.y + 2)].set_symbol("─").set_style(divider_style);
+        buffer[(x, inner.y + 2)]
+            .set_symbol("─")
+            .set_style(divider_style);
     }
 
     // Content area
@@ -405,12 +427,18 @@ pub fn render_shepherd_overlay(
 
     // Render active tab view into content_area and store its rendered layout
     let active_render = match overlay.active_tab {
-        ShepherdTab::Tasks => render_shepherd_tasks_panel(buffer, content_area, &overlay.tasks, palette)
-            .map(ActivePanelRender::Tasks),
-        ShepherdTab::Runs => render_shepherd_runs_panel(buffer, content_area, &overlay.runs, palette)
-            .map(ActivePanelRender::Runs),
-        ShepherdTab::Skills => render_shepherd_skills_panel(buffer, content_area, &overlay.skills, palette)
-            .map(ActivePanelRender::Skills),
+        ShepherdTab::Tasks => {
+            render_shepherd_tasks_panel(buffer, content_area, &overlay.tasks, palette)
+                .map(ActivePanelRender::Tasks)
+        }
+        ShepherdTab::Runs => {
+            render_shepherd_runs_panel(buffer, content_area, &overlay.runs, palette)
+                .map(ActivePanelRender::Runs)
+        }
+        ShepherdTab::Skills => {
+            render_shepherd_skills_panel(buffer, content_area, &overlay.skills, palette)
+                .map(ActivePanelRender::Skills)
+        }
         ShepherdTab::Git => render_shepherd_git_panel(buffer, content_area, &overlay.git, palette)
             .map(ActivePanelRender::Git),
     };
@@ -426,7 +454,9 @@ pub fn render_shepherd_overlay(
         for (i, ch) in display_msg.chars().enumerate() {
             let x = inner.x + i as u16;
             if x < inner.right() {
-                buffer[(x, status_y)].set_symbol(&ch.to_string()).set_style(msg_style);
+                buffer[(x, status_y)]
+                    .set_symbol(&ch.to_string())
+                    .set_style(msg_style);
             }
         }
     }
@@ -511,8 +541,10 @@ pub fn route_shepherd_key(
                         attachments,
                     } => {
                         overlay.last_dispatched = Some(format!("create_task:{title}"));
-                        let attach_strings: Vec<String> =
-                            attachments.into_iter().map(|p| p.display().to_string()).collect();
+                        let attach_strings: Vec<String> = attachments
+                            .into_iter()
+                            .map(|p| p.display().to_string())
+                            .collect();
                         dispatcher.dispatch_call(
                             "create_task",
                             json!({
@@ -553,7 +585,8 @@ pub fn route_shepherd_key(
                     }
                     ShepherdRunsAction::CancelRun { task_id } => {
                         overlay.last_dispatched = Some(format!("cancel_run:{task_id}"));
-                        dispatcher.dispatch_call("cancel_run", json!({ "task": task_id.to_string() }));
+                        dispatcher
+                            .dispatch_call("cancel_run", json!({ "task": task_id.to_string() }));
                     }
                     ShepherdRunsAction::ApproveGate { task_id, gate } => {
                         let target = match gate {
@@ -588,21 +621,33 @@ pub fn route_shepherd_key(
             let action = overlay.skills.handle_key(key_event);
             if let Some(action) = action.or_else(|| overlay.skills.last_action.take()) {
                 match action {
-                    ShepherdSkillsAction::ToggleAgentSkill { agent_id, skill_name, enable } => {
+                    ShepherdSkillsAction::ToggleAgentSkill {
+                        agent_id,
+                        skill_name,
+                        enable,
+                    } => {
                         overlay.last_dispatched = Some(format!("skills_toggle:{skill_name}"));
                         dispatcher.dispatch_call(
                             "skills_toggle",
                             json!({ "agent_id": agent_id, "skill": skill_name, "enable": enable }),
                         );
                     }
-                    ShepherdSkillsAction::RestoreEditedSkill { agent_id, skill_name } => {
+                    ShepherdSkillsAction::RestoreEditedSkill {
+                        agent_id,
+                        skill_name,
+                    } => {
                         overlay.last_dispatched = Some(format!("skills_restore:{skill_name}"));
                         dispatcher.dispatch_call(
                             "skills_restore",
                             json!({ "agent_id": agent_id, "skill": skill_name }),
                         );
                     }
-                    ShepherdSkillsAction::CreateCatalogSkill { name, description, scope, is_global } => {
+                    ShepherdSkillsAction::CreateCatalogSkill {
+                        name,
+                        description,
+                        scope,
+                        is_global,
+                    } => {
                         overlay.last_dispatched = Some(format!("skills_create:{name}"));
                         dispatcher.dispatch_call(
                             "skills_create",
@@ -734,7 +779,8 @@ pub fn handle_shepherd_mouse_click(
     dispatcher: &mut dyn ShepherdActionDispatcher,
 ) -> ShepherdClickOutcome {
     // Click outside popup or on close button: closes overlay
-    if contains_point(hits.close, point.0, point.1) || !contains_point(hits.popup, point.0, point.1) {
+    if contains_point(hits.close, point.0, point.1) || !contains_point(hits.popup, point.0, point.1)
+    {
         return ShepherdClickOutcome::CloseOverlay;
     }
 
@@ -836,41 +882,76 @@ mod tests {
         assert_eq!(overlay.active_tab, ShepherdTab::Tasks);
 
         // Tab -> Runs
-        let outcome = route_shepherd_key(&mut overlay, KeyCode::Tab, KeyModifiers::empty(), &mut dispatcher);
+        let outcome = route_shepherd_key(
+            &mut overlay,
+            KeyCode::Tab,
+            KeyModifiers::empty(),
+            &mut dispatcher,
+        );
         assert_eq!(outcome, ShepherdKeyOutcome::Handled);
         assert_eq!(overlay.active_tab, ShepherdTab::Runs);
 
         // Tab -> Skills
-        route_shepherd_key(&mut overlay, KeyCode::Tab, KeyModifiers::empty(), &mut dispatcher);
+        route_shepherd_key(
+            &mut overlay,
+            KeyCode::Tab,
+            KeyModifiers::empty(),
+            &mut dispatcher,
+        );
         assert_eq!(overlay.active_tab, ShepherdTab::Skills);
 
         // Tab -> Git (dispatches git_status)
-        route_shepherd_key(&mut overlay, KeyCode::Tab, KeyModifiers::empty(), &mut dispatcher);
+        route_shepherd_key(
+            &mut overlay,
+            KeyCode::Tab,
+            KeyModifiers::empty(),
+            &mut dispatcher,
+        );
         assert_eq!(overlay.active_tab, ShepherdTab::Git);
         assert!(dispatcher.calls.iter().any(|(op, _)| op == "git_status"));
 
         // Tab wraps -> Tareas
-        route_shepherd_key(&mut overlay, KeyCode::Tab, KeyModifiers::empty(), &mut dispatcher);
+        route_shepherd_key(
+            &mut overlay,
+            KeyCode::Tab,
+            KeyModifiers::empty(),
+            &mut dispatcher,
+        );
         assert_eq!(overlay.active_tab, ShepherdTab::Tasks);
 
         // BackTab wraps -> Git
-        route_shepherd_key(&mut overlay, KeyCode::BackTab, KeyModifiers::empty(), &mut dispatcher);
+        route_shepherd_key(
+            &mut overlay,
+            KeyCode::BackTab,
+            KeyModifiers::empty(),
+            &mut dispatcher,
+        );
         assert_eq!(overlay.active_tab, ShepherdTab::Git);
 
         // Mouse click on tab
         let mut buf = Buffer::empty(Rect::new(0, 0, 96, 28));
         let hits = render_shepherd_overlay(&mut buf, &overlay, &test_palette()).unwrap();
-        let (runs_rect, _) = hits.tabs.iter().find(|(_, t)| *t == ShepherdTab::Runs).unwrap();
+        let (runs_rect, _) = hits
+            .tabs
+            .iter()
+            .find(|(_, t)| *t == ShepherdTab::Runs)
+            .unwrap();
         let click_point = (runs_rect.x, runs_rect.y);
 
-        let click_outcome = handle_shepherd_mouse_click(&mut overlay, click_point, &hits, &mut dispatcher);
+        let click_outcome =
+            handle_shepherd_mouse_click(&mut overlay, click_point, &hits, &mut dispatcher);
         assert_eq!(click_outcome, ShepherdClickOutcome::Handled);
         assert_eq!(overlay.active_tab, ShepherdTab::Runs);
 
         // Mouse click on Git tab
-        let (git_rect, _) = hits.tabs.iter().find(|(_, t)| *t == ShepherdTab::Git).unwrap();
+        let (git_rect, _) = hits
+            .tabs
+            .iter()
+            .find(|(_, t)| *t == ShepherdTab::Git)
+            .unwrap();
         let click_git_point = (git_rect.x, git_rect.y);
-        let click_git_outcome = handle_shepherd_mouse_click(&mut overlay, click_git_point, &hits, &mut dispatcher);
+        let click_git_outcome =
+            handle_shepherd_mouse_click(&mut overlay, click_git_point, &hits, &mut dispatcher);
         assert_eq!(click_git_outcome, ShepherdClickOutcome::Handled);
         assert_eq!(overlay.active_tab, ShepherdTab::Git);
     }
@@ -882,7 +963,8 @@ mod tests {
         let area = Rect::new(0, 0, 100, 30);
         let mut buffer = Buffer::empty(area);
 
-        let hits = render_shepherd_overlay(&mut buffer, &overlay, &palette).expect("render overlay");
+        let hits =
+            render_shepherd_overlay(&mut buffer, &overlay, &palette).expect("render overlay");
         assert_eq!(hits.area, area);
 
         let text = buffer
@@ -914,12 +996,22 @@ mod tests {
         assert!(overlay.has_active_submodal());
 
         // First Esc: cancels submodal
-        let res1 = route_shepherd_key(&mut overlay, KeyCode::Esc, KeyModifiers::empty(), &mut dispatcher);
+        let res1 = route_shepherd_key(
+            &mut overlay,
+            KeyCode::Esc,
+            KeyModifiers::empty(),
+            &mut dispatcher,
+        );
         assert_eq!(res1, ShepherdKeyOutcome::Handled);
         assert!(!overlay.has_active_submodal());
 
         // Second Esc: closes overlay
-        let res2 = route_shepherd_key(&mut overlay, KeyCode::Esc, KeyModifiers::empty(), &mut dispatcher);
+        let res2 = route_shepherd_key(
+            &mut overlay,
+            KeyCode::Esc,
+            KeyModifiers::empty(),
+            &mut dispatcher,
+        );
         assert_eq!(res2, ShepherdKeyOutcome::CloseOverlay);
     }
 
@@ -945,12 +1037,28 @@ mod tests {
         }];
 
         // Press 'a' to archive
-        route_shepherd_key(&mut overlay, KeyCode::Char('a'), KeyModifiers::empty(), &mut dispatcher);
-        assert!(matches!(overlay.tasks.sub_modal, TasksSubModal::ConfirmArchive { .. }));
-        assert!(dispatcher.calls.is_empty(), "Archive must NOT be dispatched without confirmation");
+        route_shepherd_key(
+            &mut overlay,
+            KeyCode::Char('a'),
+            KeyModifiers::empty(),
+            &mut dispatcher,
+        );
+        assert!(matches!(
+            overlay.tasks.sub_modal,
+            TasksSubModal::ConfirmArchive { .. }
+        ));
+        assert!(
+            dispatcher.calls.is_empty(),
+            "Archive must NOT be dispatched without confirmation"
+        );
 
         // Confirm with Enter
-        route_shepherd_key(&mut overlay, KeyCode::Enter, KeyModifiers::empty(), &mut dispatcher);
+        route_shepherd_key(
+            &mut overlay,
+            KeyCode::Enter,
+            KeyModifiers::empty(),
+            &mut dispatcher,
+        );
         assert_eq!(dispatcher.calls.len(), 1);
         assert_eq!(dispatcher.calls[0].0, "archive_task");
         assert_eq!(dispatcher.calls[0].1["id"], 101);
@@ -974,12 +1082,28 @@ mod tests {
         }];
 
         // Press 'c' to cancel run
-        route_shepherd_key(&mut overlay, KeyCode::Char('c'), KeyModifiers::empty(), &mut dispatcher);
-        assert!(matches!(overlay.runs.sub_modal, RunsSubModal::ConfirmCancelRun { .. }));
-        assert!(dispatcher.calls.is_empty(), "Cancel run must NOT be dispatched without confirmation");
+        route_shepherd_key(
+            &mut overlay,
+            KeyCode::Char('c'),
+            KeyModifiers::empty(),
+            &mut dispatcher,
+        );
+        assert!(matches!(
+            overlay.runs.sub_modal,
+            RunsSubModal::ConfirmCancelRun { .. }
+        ));
+        assert!(
+            dispatcher.calls.is_empty(),
+            "Cancel run must NOT be dispatched without confirmation"
+        );
 
         // Confirm with Enter
-        route_shepherd_key(&mut overlay, KeyCode::Enter, KeyModifiers::empty(), &mut dispatcher);
+        route_shepherd_key(
+            &mut overlay,
+            KeyCode::Enter,
+            KeyModifiers::empty(),
+            &mut dispatcher,
+        );
         assert_eq!(dispatcher.calls.len(), 1);
         assert_eq!(dispatcher.calls[0].0, "cancel_run");
         assert_eq!(dispatcher.calls[0].1["task"], "202");
@@ -1003,12 +1127,28 @@ mod tests {
         }];
 
         // Press 'a' to open approve gate confirm (which triggers push & PR)
-        route_shepherd_key(&mut overlay, KeyCode::Char('a'), KeyModifiers::empty(), &mut dispatcher);
-        assert!(matches!(overlay.runs.sub_modal, RunsSubModal::ConfirmApproveGate { .. }));
-        assert!(dispatcher.calls.is_empty(), "Push & PR must NEVER be dispatched without confirmation");
+        route_shepherd_key(
+            &mut overlay,
+            KeyCode::Char('a'),
+            KeyModifiers::empty(),
+            &mut dispatcher,
+        );
+        assert!(matches!(
+            overlay.runs.sub_modal,
+            RunsSubModal::ConfirmApproveGate { .. }
+        ));
+        assert!(
+            dispatcher.calls.is_empty(),
+            "Push & PR must NEVER be dispatched without confirmation"
+        );
 
         // Confirm with Enter
-        route_shepherd_key(&mut overlay, KeyCode::Enter, KeyModifiers::empty(), &mut dispatcher);
+        route_shepherd_key(
+            &mut overlay,
+            KeyCode::Enter,
+            KeyModifiers::empty(),
+            &mut dispatcher,
+        );
         assert_eq!(dispatcher.calls.len(), 2);
         assert_eq!(dispatcher.calls[0].0, "approve");
         assert_eq!(dispatcher.calls[0].1["task"], "303");
@@ -1034,12 +1174,28 @@ mod tests {
         }];
 
         // Press 'd' to open reject gate confirm
-        route_shepherd_key(&mut overlay, KeyCode::Char('d'), KeyModifiers::empty(), &mut dispatcher);
-        assert!(matches!(overlay.runs.sub_modal, RunsSubModal::ConfirmRejectGate { .. }));
-        assert!(dispatcher.calls.is_empty(), "Reject must NOT be dispatched without confirmation");
+        route_shepherd_key(
+            &mut overlay,
+            KeyCode::Char('d'),
+            KeyModifiers::empty(),
+            &mut dispatcher,
+        );
+        assert!(matches!(
+            overlay.runs.sub_modal,
+            RunsSubModal::ConfirmRejectGate { .. }
+        ));
+        assert!(
+            dispatcher.calls.is_empty(),
+            "Reject must NOT be dispatched without confirmation"
+        );
 
         // Confirm with Enter
-        route_shepherd_key(&mut overlay, KeyCode::Enter, KeyModifiers::empty(), &mut dispatcher);
+        route_shepherd_key(
+            &mut overlay,
+            KeyCode::Enter,
+            KeyModifiers::empty(),
+            &mut dispatcher,
+        );
         assert_eq!(dispatcher.calls.len(), 2);
         assert_eq!(dispatcher.calls[0].0, "reject");
         assert_eq!(dispatcher.calls[0].1["task"], "304");
@@ -1064,12 +1220,28 @@ mod tests {
         }];
 
         // Press 'd' to delete catalog skill
-        route_shepherd_key(&mut overlay, KeyCode::Char('d'), KeyModifiers::empty(), &mut dispatcher);
-        assert!(matches!(overlay.skills.sub_modal, SkillsSubModal::ConfirmDelete { .. }));
-        assert!(dispatcher.calls.is_empty(), "Delete skill must NOT be dispatched without confirmation");
+        route_shepherd_key(
+            &mut overlay,
+            KeyCode::Char('d'),
+            KeyModifiers::empty(),
+            &mut dispatcher,
+        );
+        assert!(matches!(
+            overlay.skills.sub_modal,
+            SkillsSubModal::ConfirmDelete { .. }
+        ));
+        assert!(
+            dispatcher.calls.is_empty(),
+            "Delete skill must NOT be dispatched without confirmation"
+        );
 
         // Confirm with Enter
-        route_shepherd_key(&mut overlay, KeyCode::Enter, KeyModifiers::empty(), &mut dispatcher);
+        route_shepherd_key(
+            &mut overlay,
+            KeyCode::Enter,
+            KeyModifiers::empty(),
+            &mut dispatcher,
+        );
         assert_eq!(dispatcher.calls.len(), 1);
         assert_eq!(dispatcher.calls[0].0, "skills_delete");
         assert_eq!(dispatcher.calls[0].1["name"], "custom-tool");
@@ -1094,12 +1266,28 @@ mod tests {
         }];
 
         // Press 'r' to restore edited skill
-        route_shepherd_key(&mut overlay, KeyCode::Char('r'), KeyModifiers::empty(), &mut dispatcher);
-        assert!(matches!(overlay.skills.sub_modal, SkillsSubModal::ConfirmRestore { .. }));
-        assert!(dispatcher.calls.is_empty(), "Restore skill must NOT be dispatched without confirmation");
+        route_shepherd_key(
+            &mut overlay,
+            KeyCode::Char('r'),
+            KeyModifiers::empty(),
+            &mut dispatcher,
+        );
+        assert!(matches!(
+            overlay.skills.sub_modal,
+            SkillsSubModal::ConfirmRestore { .. }
+        ));
+        assert!(
+            dispatcher.calls.is_empty(),
+            "Restore skill must NOT be dispatched without confirmation"
+        );
 
         // Confirm with Enter
-        route_shepherd_key(&mut overlay, KeyCode::Enter, KeyModifiers::empty(), &mut dispatcher);
+        route_shepherd_key(
+            &mut overlay,
+            KeyCode::Enter,
+            KeyModifiers::empty(),
+            &mut dispatcher,
+        );
         assert_eq!(dispatcher.calls.len(), 1);
         assert_eq!(dispatcher.calls[0].0, "skills_restore");
         assert_eq!(dispatcher.calls[0].1["skill"], "git-review");
@@ -1127,8 +1315,16 @@ mod tests {
         }];
 
         // Press 'e' on task
-        let outcome = route_shepherd_key(&mut overlay, KeyCode::Char('e'), KeyModifiers::empty(), &mut dispatcher);
-        assert!(matches!(outcome, ShepherdKeyOutcome::OpenEditor { task_id: 404, .. }));
+        let outcome = route_shepherd_key(
+            &mut overlay,
+            KeyCode::Char('e'),
+            KeyModifiers::empty(),
+            &mut dispatcher,
+        );
+        assert!(matches!(
+            outcome,
+            ShepherdKeyOutcome::OpenEditor { task_id: 404, .. }
+        ));
         assert_eq!(dispatcher.opened_editors.len(), 1);
         assert_eq!(dispatcher.opened_editors[0].0, 404);
     }
@@ -1143,7 +1339,12 @@ mod tests {
             state: "working".into(),
             message: "Kill agent?".into(),
         });
-        let outcome = route_agent_modal_key(&mut kill_modal, KeyCode::Enter, KeyModifiers::empty(), &mut dispatcher);
+        let outcome = route_agent_modal_key(
+            &mut kill_modal,
+            KeyCode::Enter,
+            KeyModifiers::empty(),
+            &mut dispatcher,
+        );
         assert_eq!(outcome, ShepherdKeyOutcome::CloseOverlay);
         assert_eq!(dispatcher.calls.len(), 1);
         assert_eq!(dispatcher.calls[0].0, "kill");
@@ -1155,7 +1356,12 @@ mod tests {
             state: "done".into(),
             message: "Clean agent?".into(),
         });
-        let outcome = route_agent_modal_key(&mut clean_modal, KeyCode::Enter, KeyModifiers::empty(), &mut dispatcher);
+        let outcome = route_agent_modal_key(
+            &mut clean_modal,
+            KeyCode::Enter,
+            KeyModifiers::empty(),
+            &mut dispatcher,
+        );
         assert_eq!(outcome, ShepherdKeyOutcome::CloseOverlay);
         assert_eq!(dispatcher.calls.len(), 2);
         assert_eq!(dispatcher.calls[1].0, "clean");

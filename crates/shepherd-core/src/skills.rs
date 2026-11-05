@@ -114,7 +114,10 @@ const EMBEDDED_SKILLS: &[EmbeddedSkill] = &[
     EmbeddedSkill {
         name: "code-review",
         skill_md: include_str!("../assets/skills/code-review/SKILL.md"),
-        extra_files: &[("checklist.md", include_str!("../assets/skills/code-review/checklist.md"))],
+        extra_files: &[(
+            "checklist.md",
+            include_str!("../assets/skills/code-review/checklist.md"),
+        )],
     },
     EmbeddedSkill {
         name: "conventional-commits",
@@ -606,12 +609,15 @@ fn unset_yaml_key(cfg_path: &Path, key: &str) -> Result<(), String> {
 fn read_yaml_mapping(cfg_path: &Path) -> Result<Mapping, String> {
     match fs::read(cfg_path) {
         Ok(bytes) if !bytes.is_empty() => {
-            let val: Value =
-                serde_yaml_ng::from_slice(&bytes).map_err(|e| format!("{}: {e}", cfg_path.display()))?;
+            let val: Value = serde_yaml_ng::from_slice(&bytes)
+                .map_err(|e| format!("{}: {e}", cfg_path.display()))?;
             match val {
                 Value::Mapping(m) => Ok(m),
                 Value::Null => Ok(Mapping::new()),
-                _ => Err(format!("{}: root must be a YAML mapping", cfg_path.display())),
+                _ => Err(format!(
+                    "{}: root must be a YAML mapping",
+                    cfg_path.display()
+                )),
             }
         }
         Ok(_) => Ok(Mapping::new()),
@@ -1058,7 +1064,10 @@ mod tests {
             }
         }
         let cr = c.get("code-review").unwrap();
-        assert!(cr.has_file("checklist.md"), "code-review/checklist.md missing");
+        assert!(
+            cr.has_file("checklist.md"),
+            "code-review/checklist.md missing"
+        );
         fs::remove_dir_all(user).unwrap();
     }
 
@@ -1113,7 +1122,10 @@ mod tests {
             Some("api-conventions")
         );
         let joined = problems.join("|");
-        assert!(joined.contains("bad") && joined.contains("ghost"), "{problems:?}");
+        assert!(
+            joined.contains("bad") && joined.contains("ghost"),
+            "{problems:?}"
+        );
         assert!(!c.get("wrong-name").unwrap().ok());
 
         fs::remove_dir_all(root).unwrap();

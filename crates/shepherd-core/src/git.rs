@@ -7,10 +7,10 @@
 //!   ahead/behind counts, associated Shepherd agents, and pull request info.
 //! - Non-blocking execution with short timeouts and graceful fallback when `gh` is unavailable.
 
-use std::path::{Path, PathBuf};
-use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use crate::Agent;
 
@@ -232,7 +232,11 @@ pub fn parse_gh_pr_list_json(text: &str) -> Result<Vec<ParsedPr>, String> {
     let mut prs = Vec::new();
     for item in array {
         let number = item.get("number").and_then(Value::as_u64).unwrap_or(0);
-        let title = item.get("title").and_then(Value::as_str).unwrap_or("").to_string();
+        let title = item
+            .get("title")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
         let head_branch = item
             .get("headRefName")
             .or_else(|| item.get("head_branch"))
@@ -245,8 +249,16 @@ pub fn parse_gh_pr_list_json(text: &str) -> Result<Vec<ParsedPr>, String> {
             .and_then(Value::as_str)
             .unwrap_or("")
             .to_string();
-        let state = item.get("state").and_then(Value::as_str).unwrap_or("UNKNOWN").to_string();
-        let url = item.get("url").and_then(Value::as_str).unwrap_or("").to_string();
+        let state = item
+            .get("state")
+            .and_then(Value::as_str)
+            .unwrap_or("UNKNOWN")
+            .to_string();
+        let url = item
+            .get("url")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
         let is_draft = item
             .get("isDraft")
             .or_else(|| item.get("is_draft"))
@@ -385,7 +397,12 @@ where
     let parsed_wts = match base_worktrees {
         Some(wts) => wts,
         None => {
-            let wt_output = match runner("git", &["worktree", "list", "--porcelain"], root, cmd_timeout) {
+            let wt_output = match runner(
+                "git",
+                &["worktree", "list", "--porcelain"],
+                root,
+                cmd_timeout,
+            ) {
                 Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout).to_string(),
                 Ok(out) => {
                     let stderr = String::from_utf8_lossy(&out.stderr);
@@ -455,7 +472,12 @@ where
             }
         });
 
-        let (status, ahead, behind) = match runner("git", &["status", "--porcelain=v1", "-b"], &wt.path, cmd_timeout) {
+        let (status, ahead, behind) = match runner(
+            "git",
+            &["status", "--porcelain=v1", "-b"],
+            &wt.path,
+            cmd_timeout,
+        ) {
             Ok(out) if out.status.success() => {
                 let text = String::from_utf8_lossy(&out.stdout);
                 let st = parse_git_status_porcelain(&text);
@@ -466,7 +488,12 @@ where
                     let base = crate::mcp::default_base(&root.display().to_string(), "");
                     if base != branch_name && base != "HEAD" {
                         let rev_arg = format!("{base}...HEAD");
-                        if let Ok(rev_out) = runner("git", &["rev-list", "--left-right", "--count", &rev_arg], &wt.path, cmd_timeout) {
+                        if let Ok(rev_out) = runner(
+                            "git",
+                            &["rev-list", "--left-right", "--count", &rev_arg],
+                            &wt.path,
+                            cmd_timeout,
+                        ) {
                             if rev_out.status.success() {
                                 let rev_text = String::from_utf8_lossy(&rev_out.stdout);
                                 let (b, a) = parse_rev_list_left_right(&rev_text);
@@ -486,7 +513,10 @@ where
                 if ag.worktree == wt.path.display().to_string() {
                     return Some(ag.id.clone());
                 }
-                if let (Ok(ag_can), Ok(wt_can)) = (Path::new(&ag.worktree).canonicalize(), wt.path.canonicalize()) {
+                if let (Ok(ag_can), Ok(wt_can)) = (
+                    Path::new(&ag.worktree).canonicalize(),
+                    wt.path.canonicalize(),
+                ) {
                     if ag_can == wt_can {
                         return Some(ag.id.clone());
                     }
@@ -498,13 +528,16 @@ where
             None
         });
 
-        let pr = prs.iter().find(|p| p.head_branch == branch_name).map(|p| GitPrSummary {
-            number: p.number,
-            title: p.title.clone(),
-            state: p.state.clone(),
-            url: p.url.clone(),
-            is_draft: p.is_draft,
-        });
+        let pr = prs
+            .iter()
+            .find(|p| p.head_branch == branch_name)
+            .map(|p| GitPrSummary {
+                number: p.number,
+                title: p.title.clone(),
+                state: p.state.clone(),
+                url: p.url.clone(),
+                is_draft: p.is_draft,
+            });
 
         worktrees.push(GitWorktreeInfo {
             path: wt.path.display().to_string(),
@@ -688,7 +721,11 @@ locked work in progress
             ..Agent::default()
         }];
 
-        let runner = |cmd: &str, args: &[&str], cwd: &Path, _t: Duration| -> Result<std::process::Output, String> {
+        let runner = |cmd: &str,
+                      args: &[&str],
+                      cwd: &Path,
+                      _t: Duration|
+         -> Result<std::process::Output, String> {
             use std::os::unix::process::ExitStatusExt;
             if cmd == "git" && args == ["worktree", "list", "--porcelain"] {
                 let out = "\
@@ -767,7 +804,11 @@ branch refs/heads/shep/1-auth
             ..Agent::default()
         }];
 
-        let runner = |cmd: &str, args: &[&str], _cwd: &Path, _t: Duration| -> Result<std::process::Output, String> {
+        let runner = |cmd: &str,
+                      args: &[&str],
+                      _cwd: &Path,
+                      _t: Duration|
+         -> Result<std::process::Output, String> {
             use std::os::unix::process::ExitStatusExt;
             if cmd == "git" && args == ["worktree", "list", "--porcelain"] {
                 let out = "\
@@ -816,8 +857,10 @@ branch refs/heads/shep/1-coder
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let root = std::env::temp_dir().join(format!("shepherd-git-real-{}-{nonce}", std::process::id()));
-        let wt_path = std::env::temp_dir().join(format!("shepherd-wt-real-{}-{nonce}", std::process::id()));
+        let root =
+            std::env::temp_dir().join(format!("shepherd-git-real-{}-{nonce}", std::process::id()));
+        let wt_path =
+            std::env::temp_dir().join(format!("shepherd-wt-real-{}-{nonce}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
 
         let git = |args: &[&str]| {
@@ -829,14 +872,26 @@ branch refs/heads/shep/1-coder
         };
 
         assert!(git(&["init", "-b", "master"]).status.success());
-        assert!(git(&["config", "user.email", "test@example.test"]).status.success());
-        assert!(git(&["config", "user.name", "Shepherd Test"]).status.success());
+        assert!(git(&["config", "user.email", "test@example.test"])
+            .status
+            .success());
+        assert!(git(&["config", "user.name", "Shepherd Test"])
+            .status
+            .success());
         std::fs::write(root.join("init.txt"), "hello\n").unwrap();
         assert!(git(&["add", "init.txt"]).status.success());
         assert!(git(&["commit", "-m", "initial commit"]).status.success());
 
         // Create a worktree
-        assert!(git(&["worktree", "add", "-b", "shep/42-test", wt_path.to_str().unwrap()]).status.success());
+        assert!(git(&[
+            "worktree",
+            "add",
+            "-b",
+            "shep/42-test",
+            wt_path.to_str().unwrap()
+        ])
+        .status
+        .success());
 
         // Make the worktree dirty
         std::fs::write(wt_path.join("dirty.txt"), "dirty content\n").unwrap();
@@ -901,7 +956,11 @@ branch refs/heads/shep/1-coder
             branch: "shep/1-task".into(),
             ..Agent::default()
         }];
-        let runner = |_cmd: &str, args: &[&str], cwd: &Path, _timeout: Duration| -> Result<std::process::Output, String> {
+        let runner = |_cmd: &str,
+                      args: &[&str],
+                      cwd: &Path,
+                      _timeout: Duration|
+         -> Result<std::process::Output, String> {
             #[cfg(unix)]
             use std::os::unix::process::ExitStatusExt;
             if args.contains(&"status") {
@@ -932,7 +991,9 @@ branch refs/heads/shep/1-coder
             Err("failed".into())
         };
 
-        let res = collect_git_status_with_base_internal(root, &agents, Some(base_worktrees), runner).unwrap();
+        let res =
+            collect_git_status_with_base_internal(root, &agents, Some(base_worktrees), runner)
+                .unwrap();
         assert_eq!(res.worktrees.len(), 2);
         assert_eq!(res.worktrees[0].branch, "master");
         assert!(res.worktrees[0].is_main);

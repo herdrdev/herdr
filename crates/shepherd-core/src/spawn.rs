@@ -49,7 +49,9 @@ struct RuntimeAgent {
 
 pub(crate) const RUNTIME_CONSTRAINTS: &str = "## Runtime constraints (take precedence over the role instructions above)\nThe Shepherd MCP server is not connected in this runtime. Do not attempt MCP calls, including get_task_context, read_messages, send_message, update_task_context, or submit_result. Use the task and context included in this prompt, then report your result in the terminal.\n";
 
-pub fn spawn(request: SpawnRequest) -> Result<SpawnedAgent, Box<dyn std::error::Error + Send + Sync>> {
+pub fn spawn(
+    request: SpawnRequest,
+) -> Result<SpawnedAgent, Box<dyn std::error::Error + Send + Sync>> {
     let config = load_config(&request.root)?;
     let terminals = connect_terminals(&config)?;
     spawn_with_options(
@@ -203,7 +205,9 @@ pub fn spawn_child(
         &config,
         &assignment.vendor,
         &agent,
-        task.as_ref().map(|t| task_context(t, 8000)).unwrap_or_default(),
+        task.as_ref()
+            .map(|t| task_context(t, 8000))
+            .unwrap_or_default(),
         &session_root,
         use_worktree.as_deref(),
         options.terminals,
@@ -232,7 +236,11 @@ pub fn spawn_child(
             })
         }
         Err(error) => {
-            if let Some(record) = registry.agents.iter_mut().find(|record| record.id == agent.id) {
+            if let Some(record) = registry
+                .agents
+                .iter_mut()
+                .find(|record| record.id == agent.id)
+            {
                 record.state = "failed".into();
                 record.error = error.to_string();
             }
@@ -285,28 +293,27 @@ fn spawn_in_terminals(
         )?);
     }
 
-    let (open_root, worktree, explicit_wt) = if let Some(wt) = use_worktree.filter(|s| !s.trim().is_empty()) {
-        let wt_path = PathBuf::from(wt);
-        if !wt_path.exists() {
-            return Err(format!("{wt} is not a worktree of {}", request.root.display()).into());
-        }
-        (wt_path, None, Some(wt.to_owned()))
-    } else {
-        let wt = config.roles[&request.role].worktree.then(|| {
-            let base = (!config.workflow.base_branch.trim().is_empty())
-                .then(|| config.workflow.base_branch.clone());
-            WorktreeSpec {
-                branch: format!("shep/{}-{}", agent.seq, task_slug(&request.task)),
-                base,
+    let (open_root, worktree, explicit_wt) =
+        if let Some(wt) = use_worktree.filter(|s| !s.trim().is_empty()) {
+            let wt_path = PathBuf::from(wt);
+            if !wt_path.exists() {
+                return Err(format!("{wt} is not a worktree of {}", request.root.display()).into());
             }
-        });
-        (request.root.clone(), wt, None)
-    };
+            (wt_path, None, Some(wt.to_owned()))
+        } else {
+            let wt = config.roles[&request.role].worktree.then(|| {
+                let base = (!config.workflow.base_branch.trim().is_empty())
+                    .then(|| config.workflow.base_branch.clone());
+                WorktreeSpec {
+                    branch: format!("shep/{}-{}", agent.seq, task_slug(&request.task)),
+                    base,
+                }
+            });
+            (request.root.clone(), wt, None)
+        };
 
-    let cat = crate::skills::Catalog::load(
-        Some(&request.root),
-        Some(&crate::skills::user_skills_dir()),
-    );
+    let cat =
+        crate::skills::Catalog::load(Some(&request.root), Some(&crate::skills::user_skills_dir()));
     let (_, langs) = crate::skills::detect_checks(&open_root);
     let (resolved, _problems) = cat.effective_for(config, &request.role, &langs, &agent.skills);
     let active_skills: Vec<String> = resolved.iter().map(|r| r.skill.name.clone()).collect();
@@ -395,7 +402,10 @@ pub(crate) fn role_prompt(root: &Path, role_name: &str, role: &crate::config::Ro
             root.join(&role.prompt)
         });
     }
-    candidates.push(root.join(".shepherd/prompts").join(format!("{role_name}.md")));
+    candidates.push(
+        root.join(".shepherd/prompts")
+            .join(format!("{role_name}.md")),
+    );
     if let Some(prompt) = candidates
         .into_iter()
         .find_map(|path| std::fs::read_to_string(path).ok())
@@ -405,9 +415,13 @@ pub(crate) fn role_prompt(root: &Path, role_name: &str, role: &crate::config::Ro
     match role_name {
         "brain" => include_str!("../assets/prompts/brain.md").trim().to_owned(),
         "coder" => include_str!("../assets/prompts/coder.md").trim().to_owned(),
-        "reviewer" => include_str!("../assets/prompts/reviewer.md").trim().to_owned(),
+        "reviewer" => include_str!("../assets/prompts/reviewer.md")
+            .trim()
+            .to_owned(),
         "docs" => include_str!("../assets/prompts/docs.md").trim().to_owned(),
-        "tester" => include_str!("../assets/prompts/tester.md").trim().to_owned(),
+        "tester" => include_str!("../assets/prompts/tester.md")
+            .trim()
+            .to_owned(),
         _ => include_str!("../assets/prompts/generic.md")
             .replace("{{role}}", role_name)
             .trim()
@@ -496,9 +510,12 @@ mod tests {
     #[test]
     fn vendor_mcp_arguments_configure_authentication() {
         let config = crate::config::Config::default();
-        let codex =
-            mcp_launch_args(&config.vendors["codex"], "http://127.0.0.1:4321/mcp", "secret")
-                .unwrap();
+        let codex = mcp_launch_args(
+            &config.vendors["codex"],
+            "http://127.0.0.1:4321/mcp",
+            "secret",
+        )
+        .unwrap();
         assert_eq!(
             codex[1],
             "mcp_servers.shepherd.url=\"http://127.0.0.1:4321/mcp\""
@@ -508,9 +525,12 @@ mod tests {
             "mcp_servers.shepherd.bearer_token_env_var=\"SHEP_TOKEN\""
         );
         assert!(!codex.join(" ").contains("secret"));
-        let claude =
-            mcp_launch_args(&config.vendors["claude"], "http://127.0.0.1:4321/mcp", "secret")
-                .unwrap();
+        let claude = mcp_launch_args(
+            &config.vendors["claude"],
+            "http://127.0.0.1:4321/mcp",
+            "secret",
+        )
+        .unwrap();
         let launch_config: Value = serde_json::from_str(&claude[1]).unwrap();
         assert_eq!(
             launch_config["mcpServers"]["shepherd"]["headers"]["Authorization"],
@@ -524,7 +544,10 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let root = std::env::temp_dir().join(format!("shepherd-spawn-trait-{}-{nonce}", std::process::id()));
+        let root = std::env::temp_dir().join(format!(
+            "shepherd-spawn-trait-{}-{nonce}",
+            std::process::id()
+        ));
         std::fs::create_dir_all(&root).unwrap();
         let registry_path = root.join("agents.json");
         let terminals = InMemoryTerminals::new();
@@ -617,7 +640,10 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let root = std::env::temp_dir().join(format!("shepherd-spawn-base-{}-{nonce}", std::process::id()));
+        let root = std::env::temp_dir().join(format!(
+            "shepherd-spawn-base-{}-{nonce}",
+            std::process::id()
+        ));
         std::fs::create_dir_all(root.join(".shepherd")).unwrap();
         std::fs::write(
             root.join(".shepherd/config.yaml"),

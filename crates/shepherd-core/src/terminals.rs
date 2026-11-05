@@ -166,13 +166,20 @@ pub fn select_backend(config: &Config) -> Result<BackendKind, TerminalError> {
     select_backend_with_env(config, env_value.as_deref())
 }
 
-pub fn select_backend_with_env(config: &Config, env_override: Option<&str>) -> Result<BackendKind, TerminalError> {
+pub fn select_backend_with_env(
+    config: &Config,
+    env_override: Option<&str>,
+) -> Result<BackendKind, TerminalError> {
     let raw = env_override
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| {
             let cfg = config.shepherd.backend.trim();
-            if cfg.is_empty() { "socket" } else { cfg }
+            if cfg.is_empty() {
+                "socket"
+            } else {
+                cfg
+            }
         });
     match raw {
         "in-process" | "in_process" => Ok(BackendKind::InProcess),
@@ -193,9 +200,7 @@ fn in_process_factory_slot() -> &'static Mutex<Option<Arc<InProcessTerminalsFact
 }
 
 /// Register an in-process `Terminals` factory used when `BackendKind::InProcess` is selected.
-pub fn set_in_process_terminals_factory(
-    factory: Option<Arc<InProcessTerminalsFactory>>,
-) {
+pub fn set_in_process_terminals_factory(factory: Option<Arc<InProcessTerminalsFactory>>) {
     if let Ok(mut guard) = in_process_factory_slot().lock() {
         *guard = factory;
     }
@@ -230,7 +235,8 @@ pub fn connect_terminals(config: &Config) -> Result<Box<dyn Terminals>, Terminal
 pub struct ShepherdInProcess {
     client: ShepherdClient,
     session: String,
-    attach_handler: Option<Arc<dyn Fn(Option<&str>, bool) -> Result<(), TerminalError> + Send + Sync>>,
+    attach_handler:
+        Option<Arc<dyn Fn(Option<&str>, bool) -> Result<(), TerminalError> + Send + Sync>>,
     event_waiter: Option<Arc<dyn Fn(Duration) -> Result<bool, TerminalError> + Send + Sync>>,
 }
 
@@ -508,13 +514,19 @@ fn shepherd_open_agent(
         workspace_id = nested_string(&created, &["workspace", "workspace_id"])?;
         initial_tab_id = nested_string(&created, &["tab", "tab_id"])?;
         worktree_path = nested_string(&created, &["worktree", "path"])?;
-        branch = nested_string(&created, &["worktree", "branch"]).unwrap_or_else(|_| wt.branch.clone());
+        branch =
+            nested_string(&created, &["worktree", "branch"]).unwrap_or_else(|_| wt.branch.clone());
     } else {
         workspace_id = match find_workspace(&client.snapshot()?, &request.root) {
             Some(id) => id,
             None => {
-                let label = request.root.file_name().unwrap_or_default().to_string_lossy();
-                let created = client.create_workspace(&request.root.display().to_string(), &label)?;
+                let label = request
+                    .root
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy();
+                let created =
+                    client.create_workspace(&request.root.display().to_string(), &label)?;
                 nested_string(&created, &["workspace", "workspace_id"])?
             }
         };
@@ -542,11 +554,18 @@ fn shepherd_open_agent(
 
     if request.shepherd_agent.is_empty() {
         let command = crate::spawn::shell_join(
-            std::iter::once(request.command.as_str()).chain(request.args.iter().map(String::as_str)),
+            std::iter::once(request.command.as_str())
+                .chain(request.args.iter().map(String::as_str)),
         );
         client.send_input(&pane_id, &command)?;
     } else {
-        start_shepherd_agent(client, &pane_id, &request.agent_id, &request.shepherd_agent, &request.args)?;
+        start_shepherd_agent(
+            client,
+            &pane_id,
+            &request.agent_id,
+            &request.shepherd_agent,
+            &request.args,
+        )?;
     }
 
     Ok(OpenedAgent {
@@ -558,7 +577,11 @@ fn shepherd_open_agent(
     })
 }
 
-fn shepherd_read_screen(client: &ShepherdClient, target: &str, lines: u32) -> Result<String, TerminalError> {
+fn shepherd_read_screen(
+    client: &ShepherdClient,
+    target: &str,
+    lines: u32,
+) -> Result<String, TerminalError> {
     let result = client.read_pane(target, lines)?;
     Ok(result
         .get("text")
@@ -593,7 +616,10 @@ fn shepherd_wait(
     })
 }
 
-fn shepherd_agent_status(client: &ShepherdClient, target: &str) -> Result<TerminalAgentStatus, TerminalError> {
+fn shepherd_agent_status(
+    client: &ShepherdClient,
+    target: &str,
+) -> Result<TerminalAgentStatus, TerminalError> {
     let agent = client.get_agent(target)?;
     Ok(TerminalAgentStatus {
         state: "live".into(),
@@ -659,7 +685,9 @@ fn shepherd_attach_process(
     let args = shepherd_attach_args(session, target, takeover);
     let status = Command::new("shepherd").args(args).status()?;
     if !status.success() {
-        return Err(TerminalError::Protocol(format!("shepherd attach exited with {status}")));
+        return Err(TerminalError::Protocol(format!(
+            "shepherd attach exited with {status}"
+        )));
     }
     Ok(())
 }
@@ -714,7 +742,11 @@ fn deliver_prompt(
     }
 }
 
-fn shepherd_notify(client: &ShepherdClient, title: &str, body: Option<&str>) -> Result<(), TerminalError> {
+fn shepherd_notify(
+    client: &ShepherdClient,
+    title: &str,
+    body: Option<&str>,
+) -> Result<(), TerminalError> {
     let mut params = serde_json::json!({
         "title": title,
         "sound": "request",
@@ -726,7 +758,10 @@ fn shepherd_notify(client: &ShepherdClient, title: &str, body: Option<&str>) -> 
     Ok(())
 }
 
-fn shepherd_list_worktrees(client: &ShepherdClient, root: &Path) -> Result<Vec<ParsedWorktree>, TerminalError> {
+fn shepherd_list_worktrees(
+    client: &ShepherdClient,
+    root: &Path,
+) -> Result<Vec<ParsedWorktree>, TerminalError> {
     let params = serde_json::json!({
         "cwd": root.display().to_string(),
     });
@@ -742,9 +777,15 @@ fn shepherd_list_worktrees(client: &ShepherdClient, root: &Path) -> Result<Vec<P
         .map(|wt| {
             let path = PathBuf::from(wt.get("path").and_then(Value::as_str).unwrap_or_default());
             let branch = wt.get("branch").and_then(Value::as_str).map(str::to_owned);
-            let is_detached = wt.get("is_detached").and_then(Value::as_bool).unwrap_or(false);
+            let is_detached = wt
+                .get("is_detached")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
             let is_bare = wt.get("is_bare").and_then(Value::as_bool).unwrap_or(false);
-            let is_prunable = wt.get("is_prunable").and_then(Value::as_bool).unwrap_or(false);
+            let is_prunable = wt
+                .get("is_prunable")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
             ParsedWorktree {
                 path,
                 head: String::new(),
@@ -819,7 +860,10 @@ fn nested_string(value: &Value, path: &[&str]) -> Result<String, TerminalError> 
         })?;
     }
     current.as_str().map(str::to_owned).ok_or_else(|| {
-        TerminalError::Protocol(format!("Shepherd response field {} is not a string", path.join(".")))
+        TerminalError::Protocol(format!(
+            "Shepherd response field {} is not a string",
+            path.join(".")
+        ))
     })
 }
 
@@ -836,14 +880,22 @@ impl Default for HcCli {
 
 impl HcCli {
     pub fn new() -> Self {
-        Self { binary: PathBuf::from("hc") }
+        Self {
+            binary: PathBuf::from("hc"),
+        }
     }
 
     pub fn with_binary(binary: impl Into<PathBuf>) -> Self {
-        Self { binary: binary.into() }
+        Self {
+            binary: binary.into(),
+        }
     }
 
-    fn run_json(&self, args: &[String], env: Option<&HashMap<String, String>>) -> Result<Value, TerminalError> {
+    fn run_json(
+        &self,
+        args: &[String],
+        env: Option<&HashMap<String, String>>,
+    ) -> Result<Value, TerminalError> {
         let output = self.run_raw(args, env)?;
         if !output.status.success() {
             return Err(parse_hc_error(&output));
@@ -853,8 +905,9 @@ impl HcCli {
         if trimmed.is_empty() {
             return Ok(Value::Null);
         }
-        serde_json::from_str(trimmed)
-            .map_err(|error| TerminalError::Protocol(format!("hc invalid JSON ({error}): {trimmed}")))
+        serde_json::from_str(trimmed).map_err(|error| {
+            TerminalError::Protocol(format!("hc invalid JSON ({error}): {trimmed}"))
+        })
     }
 
     fn run_raw(
@@ -959,7 +1012,11 @@ fn parse_hc_error(output: &std::process::Output) -> TerminalError {
     if output.status.code() == Some(9) {
         return TerminalError::Api {
             code: "blocked".into(),
-            message: if detail.is_empty() { "terminal is blocked".into() } else { detail },
+            message: if detail.is_empty() {
+                "terminal is blocked".into()
+            } else {
+                detail
+            },
         };
     }
     TerminalError::Protocol(format!("hc exited with {}: {detail}", output.status))
@@ -1102,13 +1159,20 @@ impl Terminals for HcCli {
         ];
         let value = self.run_json(&args, None)?;
         let ended = value.get("ended").and_then(Value::as_bool).unwrap_or(true);
-        let status = value.get("status").and_then(Value::as_str).map(str::to_owned);
+        let status = value
+            .get("status")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
         let reason = value
             .get("reason")
             .and_then(Value::as_str)
             .unwrap_or("status")
             .to_owned();
-        Ok(TerminalWaitResult { ended, status, reason })
+        Ok(TerminalWaitResult {
+            ended,
+            status,
+            reason,
+        })
     }
 
     fn agent_status(&self, target: &str) -> Result<TerminalAgentStatus, TerminalError> {
@@ -1118,7 +1182,9 @@ impl Terminals for HcCli {
             .get("terminals")
             .and_then(Value::as_array)
             .or_else(|| value.as_array())
-            .ok_or_else(|| TerminalError::Protocol("hc ls --json did not return a terminals array".into()))?;
+            .ok_or_else(|| {
+                TerminalError::Protocol("hc ls --json did not return a terminals array".into())
+            })?;
         let item = list
             .iter()
             .find(|entry| {
@@ -1146,10 +1212,16 @@ impl Terminals for HcCli {
             .to_owned();
         let status = item
             .get("status")
-            .and_then(|s| s.get("state").and_then(Value::as_str).or_else(|| s.as_str()))
+            .and_then(|s| {
+                s.get("state")
+                    .and_then(Value::as_str)
+                    .or_else(|| s.as_str())
+            })
             .or_else(|| {
                 if state == "finished" {
-                    item.get("reason").and_then(Value::as_str).or(Some("finished"))
+                    item.get("reason")
+                        .and_then(Value::as_str)
+                        .or(Some("finished"))
                 } else {
                     None
                 }
@@ -1197,7 +1269,9 @@ impl Terminals for HcCli {
         let args = hc_attach_args(target, takeover);
         let status = Command::new(&self.binary).args(args).status()?;
         if !status.success() {
-            return Err(TerminalError::Protocol(format!("hc attach exited with {status}")));
+            return Err(TerminalError::Protocol(format!(
+                "hc attach exited with {status}"
+            )));
         }
         Ok(())
     }
@@ -1267,7 +1341,11 @@ impl InMemoryTerminals {
     }
 
     pub fn set_prompt_outcome(&self, target: impl Into<String>, outcome: PromptOutcome) {
-        self.inner.lock().unwrap().prompt_outcomes.insert(target.into(), outcome);
+        self.inner
+            .lock()
+            .unwrap()
+            .prompt_outcomes
+            .insert(target.into(), outcome);
     }
 
     pub fn set_prompt_error(
@@ -1284,7 +1362,11 @@ impl InMemoryTerminals {
     }
 
     pub fn set_screen(&self, target: impl Into<String>, screen: impl Into<String>) {
-        self.inner.lock().unwrap().screens.insert(target.into(), screen.into());
+        self.inner
+            .lock()
+            .unwrap()
+            .screens
+            .insert(target.into(), screen.into());
     }
 
     pub fn set_status(&self, target: impl Into<String>, status: TerminalAgentStatus) {
@@ -1406,7 +1488,10 @@ impl Terminals for InMemoryTerminals {
                 let path = if state.create_real_worktrees {
                     create_git_worktree(&request.root, spec)?
                 } else {
-                    request.root.join(".worktrees").join(spec.branch.replace('/', "-"))
+                    request
+                        .root
+                        .join(".worktrees")
+                        .join(spec.branch.replace('/', "-"))
                 };
                 (path.display().to_string(), spec.branch.clone())
             }
@@ -1420,10 +1505,18 @@ impl Terminals for InMemoryTerminals {
             title: request.label.clone(),
             seq: 1,
         };
-        state.statuses.insert(request.agent_id.clone(), status.clone());
+        state
+            .statuses
+            .insert(request.agent_id.clone(), status.clone());
         state.statuses.insert(pane.clone(), status);
         state.opened.push(request.clone());
-        Ok(OpenedAgent { workspace, tab, pane, worktree, branch })
+        Ok(OpenedAgent {
+            workspace,
+            tab,
+            pane,
+            worktree,
+            branch,
+        })
     }
 
     fn prompt(
@@ -1520,7 +1613,11 @@ impl Terminals for InMemoryTerminals {
     }
 
     fn send_keys(&self, target: &str, keys: &[String]) -> Result<(), TerminalError> {
-        self.inner.lock().unwrap().sent_keys.push((target.to_owned(), keys.to_vec()));
+        self.inner
+            .lock()
+            .unwrap()
+            .sent_keys
+            .push((target.to_owned(), keys.to_vec()));
         Ok(())
     }
 
@@ -1581,7 +1678,9 @@ impl Terminals for InMemoryTerminals {
 
     fn notify(&self, title: &str, body: Option<&str>) -> Result<(), TerminalError> {
         let mut state = self.inner.lock().unwrap();
-        state.notifications.push((title.to_owned(), body.map(str::to_owned)));
+        state
+            .notifications
+            .push((title.to_owned(), body.map(str::to_owned)));
         Ok(())
     }
 
@@ -1676,11 +1775,20 @@ mod tests {
     #[test]
     fn backend_selection_prioritizes_env_over_config_and_defaults_to_socket() {
         let mut config = Config::default();
-        assert_eq!(select_backend_with_env(&config, None).unwrap(), BackendKind::Socket);
+        assert_eq!(
+            select_backend_with_env(&config, None).unwrap(),
+            BackendKind::Socket
+        );
         config.shepherd.backend = "hc".into();
-        assert_eq!(select_backend_with_env(&config, None).unwrap(), BackendKind::Hc);
+        assert_eq!(
+            select_backend_with_env(&config, None).unwrap(),
+            BackendKind::Hc
+        );
         config.shepherd.backend = "in-process".into();
-        assert_eq!(select_backend_with_env(&config, None).unwrap(), BackendKind::InProcess);
+        assert_eq!(
+            select_backend_with_env(&config, None).unwrap(),
+            BackendKind::InProcess
+        );
         assert_eq!(
             select_backend_with_env(&config, Some("in_process")).unwrap(),
             BackendKind::InProcess
@@ -1704,7 +1812,10 @@ mod tests {
         let attached_ref = Arc::clone(&attached);
 
         let adapter = ShepherdInProcess::new("shepherd", move |method, params| {
-            calls_ref.lock().unwrap().push((method.to_owned(), params.clone()));
+            calls_ref
+                .lock()
+                .unwrap()
+                .push((method.to_owned(), params.clone()));
             match method {
                 "worktree.create" => Ok(serde_json::json!({
                     "workspace": { "workspace_id": "w1" },
@@ -1728,7 +1839,10 @@ mod tests {
                     "tab": { "tab_id": "w1:t1" },
                     "root_pane": { "pane_id": "w1:p1" },
                 })),
-                "tab.close" | "pane.rename" | "pane.report_metadata" | "agent.start"
+                "tab.close"
+                | "pane.rename"
+                | "pane.report_metadata"
+                | "agent.start"
                 | "pane.send_input" => Ok(serde_json::json!({"ok": true})),
                 "agent.prompt" => {
                     if params["text"] == "BLOCK_ME" {
@@ -1892,16 +2006,28 @@ mod tests {
             PromptOutcome::Blocked
         );
         fake.send_text(&opened.pane, "echo hi").unwrap();
-        fake.send_keys(&opened.pane, &["Enter".into(), "Escape".into()]).unwrap();
+        fake.send_keys(&opened.pane, &["Enter".into(), "Escape".into()])
+            .unwrap();
         fake.set_screen(&opened.pane, "line 1\nline 2\n");
-        assert_eq!(fake.read_screen(&opened.pane, 20).unwrap(), "line 1\nline 2\n");
+        assert_eq!(
+            fake.read_screen(&opened.pane, 20).unwrap(),
+            "line 1\nline 2\n"
+        );
         let waited = fake.wait("coder-1", Duration::from_secs(5)).unwrap();
         assert!(waited.ended);
         let status = fake.agent_status("coder-1").unwrap();
         assert_eq!(status.state, "live");
-        fake.label(&opened.pane, &HashMap::from([("role".into(), "coder".into())]))
-            .unwrap();
-        assert_eq!(fake.labels_for(&opened.pane).get("role").map(String::as_str), Some("coder"));
+        fake.label(
+            &opened.pane,
+            &HashMap::from([("role".into(), "coder".into())]),
+        )
+        .unwrap();
+        assert_eq!(
+            fake.labels_for(&opened.pane)
+                .get("role")
+                .map(String::as_str),
+            Some("coder")
+        );
         fake.attach(Some("coder-1"), true).unwrap();
         fake.close(&opened.tab).unwrap();
         assert_eq!(fake.closed(), vec![opened.tab]);
@@ -1916,7 +2042,8 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let temp = std::env::temp_dir().join(format!("shepherd-fake-hc-{}-{nonce}", std::process::id()));
+        let temp =
+            std::env::temp_dir().join(format!("shepherd-fake-hc-{}-{nonce}", std::process::id()));
         std::fs::create_dir_all(&temp).unwrap();
         let log_path = temp.join("hc.log");
         let script_path = temp.join("hc");
@@ -1990,11 +2117,21 @@ esac
         assert_eq!(opened.pane, "t7");
         assert_eq!(opened.tab, "t7");
 
-        assert_eq!(hc.prompt_text("t7", "do work").unwrap(), PromptOutcome::Delivered);
-        assert_eq!(hc.prompt_text("t7", "BLOCK_ME").unwrap(), PromptOutcome::Blocked);
+        assert_eq!(
+            hc.prompt_text("t7", "do work").unwrap(),
+            PromptOutcome::Delivered
+        );
+        assert_eq!(
+            hc.prompt_text("t7", "BLOCK_ME").unwrap(),
+            PromptOutcome::Blocked
+        );
         hc.send_text("t7", "hello world").unwrap();
-        hc.send_keys("t7", &["down".into(), "enter".into()]).unwrap();
-        assert_eq!(hc.read_screen("t7", 50).unwrap(), "screen line 1\nscreen line 2");
+        hc.send_keys("t7", &["down".into(), "enter".into()])
+            .unwrap();
+        assert_eq!(
+            hc.read_screen("t7", 50).unwrap(),
+            "screen line 1\nscreen line 2"
+        );
         let waited = hc.wait("t7", Duration::from_secs(12)).unwrap();
         assert!(waited.ended);
         assert_eq!(waited.status.as_deref(), Some("done"));
@@ -2002,8 +2139,11 @@ esac
         assert_eq!(status.pane, "t7");
         assert_eq!(status.status, "working");
         assert_eq!(status.seq, 4);
-        hc.label("t7", &HashMap::from([("role".into(), "coder".into()), ("task".into(), "1".into())]))
-            .unwrap();
+        hc.label(
+            "t7",
+            &HashMap::from([("role".into(), "coder".into()), ("task".into(), "1".into())]),
+        )
+        .unwrap();
         hc.attach(Some("t7"), false).unwrap();
         hc.close("t7").unwrap();
 

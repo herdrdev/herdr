@@ -33,7 +33,11 @@ impl std::fmt::Display for ShepherdError {
 }
 
 impl std::error::Error for ShepherdError {}
-impl From<std::io::Error> for ShepherdError { fn from(error: std::io::Error) -> Self { Self::Io(error) } }
+impl From<std::io::Error> for ShepherdError {
+    fn from(error: std::io::Error) -> Self {
+        Self::Io(error)
+    }
+}
 
 #[derive(Serialize)]
 struct Request<'a> {
@@ -50,13 +54,18 @@ struct Response {
 }
 
 #[derive(Deserialize)]
-struct ApiError { code: String, message: String }
+struct ApiError {
+    code: String,
+    message: String,
+}
 
 /// Resolve the socket from Shepherd's environment or its own server status command.
 /// A named session deliberately ignores SHEPHERD_SOCKET_PATH, which may point at another session.
 pub fn resolve_socket(session: Option<&str>) -> Result<PathBuf, ShepherdError> {
     if session.unwrap_or_default().is_empty() {
-        if let Some(path) = std::env::var_os("SHEPHERD_SOCKET_PATH").filter(|value| !value.is_empty()) {
+        if let Some(path) =
+            std::env::var_os("SHEPHERD_SOCKET_PATH").filter(|value| !value.is_empty())
+        {
             return Ok(PathBuf::from(path));
         }
     }
@@ -64,13 +73,21 @@ pub fn resolve_socket(session: Option<&str>) -> Result<PathBuf, ShepherdError> {
     if let Some(name) = session.filter(|name| !name.is_empty() && *name != "-") {
         command.args(["--session", name]);
     }
-    let output = command.args(["status", "server"]).output().map_err(|error| {
-        if error.kind() == std::io::ErrorKind::NotFound {
-            ShepherdError::Protocol("shepherd not found in PATH; install Shepherd first".into())
-        } else { ShepherdError::Io(error) }
-    })?;
+    let output = command
+        .args(["status", "server"])
+        .output()
+        .map_err(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                ShepherdError::Protocol("shepherd not found in PATH; install Shepherd first".into())
+            } else {
+                ShepherdError::Io(error)
+            }
+        })?;
     if !output.status.success() {
-        return Err(ShepherdError::Protocol(format!("status server failed: {}", String::from_utf8_lossy(&output.stderr).trim())));
+        return Err(ShepherdError::Protocol(format!(
+            "status server failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
     }
     parse_socket_path(&String::from_utf8_lossy(&output.stdout))
         .map(PathBuf::from)
@@ -78,7 +95,12 @@ pub fn resolve_socket(session: Option<&str>) -> Result<PathBuf, ShepherdError> {
 }
 
 fn parse_socket_path(output: &str) -> Option<&str> {
-    output.lines().find_map(|line| line.trim().strip_prefix("socket:").map(str::trim).filter(|value| !value.is_empty()))
+    output.lines().find_map(|line| {
+        line.trim()
+            .strip_prefix("socket:")
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    })
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -143,7 +165,10 @@ impl ShepherdClient {
             if self.socket.as_os_str().is_empty() || !self.socket.exists() {
                 return false;
             }
-            use std::{io::{BufRead, BufReader, Write}, os::unix::net::UnixStream};
+            use std::{
+                io::{BufRead, BufReader, Write},
+                os::unix::net::UnixStream,
+            };
             let stream = match UnixStream::connect(&self.socket) {
                 Ok(s) => s,
                 Err(_) => return false,
@@ -184,10 +209,13 @@ impl ShepherdClient {
 
     /// Generic caller for `shepherd.call` operations.
     pub fn shepherd_call(&self, op: &str, args: Value) -> Result<Value, ShepherdError> {
-        let result = self.call("shepherd.call", serde_json::json!({
-            "op": op,
-            "args": args,
-        }))?;
+        let result = self.call(
+            "shepherd.call",
+            serde_json::json!({
+                "op": op,
+                "args": args,
+            }),
+        )?;
         if let Some(data) = result.get("data") {
             Ok(data.clone())
         } else {
@@ -254,10 +282,19 @@ impl ShepherdClient {
     }
 
     pub fn create_workspace(&self, cwd: &str, label: &str) -> Result<Value, ShepherdError> {
-        self.call("workspace.create", serde_json::json!({"cwd":cwd,"label":label,"focus":false}))
+        self.call(
+            "workspace.create",
+            serde_json::json!({"cwd":cwd,"label":label,"focus":false}),
+        )
     }
 
-    pub fn create_tab(&self, workspace_id: &str, cwd: &str, label: &str, env: &std::collections::HashMap<String, String>) -> Result<Value, ShepherdError> {
+    pub fn create_tab(
+        &self,
+        workspace_id: &str,
+        cwd: &str,
+        label: &str,
+        env: &std::collections::HashMap<String, String>,
+    ) -> Result<Value, ShepherdError> {
         self.call("tab.create", serde_json::json!({"workspace_id":workspace_id,"cwd":cwd,"label":label,"focus":false,"env":env}))
     }
 
@@ -280,7 +317,13 @@ impl ShepherdClient {
         self.call("worktree.create", params)
     }
 
-    pub fn start_agent(&self, pane_id: &str, name: &str, kind: &str, args: &[String]) -> Result<Value, ShepherdError> {
+    pub fn start_agent(
+        &self,
+        pane_id: &str,
+        name: &str,
+        kind: &str,
+        args: &[String],
+    ) -> Result<Value, ShepherdError> {
         self.call("agent.start", serde_json::json!({"pane_id":pane_id,"name":name,"kind":kind,"args":args,"timeout_ms":90000}))
     }
 
@@ -312,11 +355,17 @@ impl ShepherdClient {
     }
 
     pub fn send_input(&self, pane_id: &str, text: &str) -> Result<Value, ShepherdError> {
-        self.call("pane.send_input", serde_json::json!({"pane_id":pane_id,"text":text,"keys":["Enter"]}))
+        self.call(
+            "pane.send_input",
+            serde_json::json!({"pane_id":pane_id,"text":text,"keys":["Enter"]}),
+        )
     }
 
     pub fn send_keys(&self, pane_id: &str, keys: &[String]) -> Result<Value, ShepherdError> {
-        self.call("pane.send_input", serde_json::json!({"pane_id":pane_id,"keys":keys}))
+        self.call(
+            "pane.send_input",
+            serde_json::json!({"pane_id":pane_id,"keys":keys}),
+        )
     }
 
     pub fn read_pane(&self, pane_id: &str, lines: u32) -> Result<Value, ShepherdError> {
@@ -324,7 +373,12 @@ impl ShepherdClient {
         Ok(result.get("read").cloned().unwrap_or(result))
     }
 
-    pub fn wait_agent(&self, target: &str, until: &[&str], timeout: Duration) -> Result<Value, ShepherdError> {
+    pub fn wait_agent(
+        &self,
+        target: &str,
+        until: &[&str],
+        timeout: Duration,
+    ) -> Result<Value, ShepherdError> {
         self.call("agent.wait", serde_json::json!({"target":target,"until":until,"timeout_ms":timeout.as_millis() as u64}))
     }
 
@@ -350,22 +404,40 @@ impl ShepherdClient {
     }
 
     pub fn rename_pane(&self, pane_id: &str, label: &str) -> Result<Value, ShepherdError> {
-        self.call("pane.rename", serde_json::json!({"pane_id":pane_id,"label":label}))
+        self.call(
+            "pane.rename",
+            serde_json::json!({"pane_id":pane_id,"label":label}),
+        )
     }
 
-    pub fn report_metadata(&self, pane_id: &str, role: &str, agent_id: &str, vendor: &str, title: &str) -> Result<Value, ShepherdError> {
+    pub fn report_metadata(
+        &self,
+        pane_id: &str,
+        role: &str,
+        agent_id: &str,
+        vendor: &str,
+        title: &str,
+    ) -> Result<Value, ShepherdError> {
         self.call("pane.report_metadata", serde_json::json!({"pane_id":pane_id,"source":"shepherd","title":title,"tokens":{"role":role,"agent":agent_id,"vendor":vendor}}))
     }
 
     #[cfg(unix)]
     fn call_unix(&self, method: &str, params: Value) -> Result<Value, ShepherdError> {
-        use std::{io::{BufRead, BufReader, Write}, os::unix::net::UnixStream};
+        use std::{
+            io::{BufRead, BufReader, Write},
+            os::unix::net::UnixStream,
+        };
         let stream = UnixStream::connect(&self.socket)?;
         stream.set_read_timeout(Some(Duration::from_secs(30)))?;
         stream.set_write_timeout(Some(Duration::from_secs(30)))?;
         let id = format!("shepherd-{}", self.sequence.fetch_add(1, Ordering::Relaxed));
-        let request = Request { id: id.clone(), method, params };
-        let mut bytes = serde_json::to_vec(&request).map_err(|e| ShepherdError::Protocol(e.to_string()))?;
+        let request = Request {
+            id: id.clone(),
+            method,
+            params,
+        };
+        let mut bytes =
+            serde_json::to_vec(&request).map_err(|e| ShepherdError::Protocol(e.to_string()))?;
         bytes.push(b'\n');
         let mut writer = &stream;
         writer.write_all(&bytes)?;
@@ -373,16 +445,34 @@ impl ShepherdClient {
         let mut reader = BufReader::new(stream);
         let mut line = String::new();
         reader.read_line(&mut line)?;
-        if line.len() > 16 * 1024 * 1024 { return Err(ShepherdError::Protocol("response exceeds 16 MiB".into())); }
-        let response: Response = serde_json::from_str(&line).map_err(|e| ShepherdError::Protocol(e.to_string()))?;
-        if response.id != id { return Err(ShepherdError::Protocol(format!("response id {:?} does not match request {id:?}", response.id))); }
-        if let Some(error) = response.error { return Err(ShepherdError::Api { code: error.code, message: error.message }); }
-        response.result.ok_or_else(|| ShepherdError::Protocol("success response has no result".into()))
+        if line.len() > 16 * 1024 * 1024 {
+            return Err(ShepherdError::Protocol("response exceeds 16 MiB".into()));
+        }
+        let response: Response =
+            serde_json::from_str(&line).map_err(|e| ShepherdError::Protocol(e.to_string()))?;
+        if response.id != id {
+            return Err(ShepherdError::Protocol(format!(
+                "response id {:?} does not match request {id:?}",
+                response.id
+            )));
+        }
+        if let Some(error) = response.error {
+            return Err(ShepherdError::Api {
+                code: error.code,
+                message: error.message,
+            });
+        }
+        response
+            .result
+            .ok_or_else(|| ShepherdError::Protocol("success response has no result".into()))
     }
 }
 
 fn start_server(session: Option<&str>) -> Result<(), ShepherdError> {
-    use std::{fs::OpenOptions, process::{Command, Stdio}};
+    use std::{
+        fs::OpenOptions,
+        process::{Command, Stdio},
+    };
     let state_dir = crate::config::state_dir();
     std::fs::create_dir_all(&state_dir)?;
     #[cfg(unix)]
@@ -399,18 +489,30 @@ fn start_server(session: Option<&str>) -> Result<(), ShepherdError> {
     }
     let log = log_options.open(state_dir.join("shepherd.log"))?;
     let mut command = Command::new("shepherd");
-    if let Some(name) = session.filter(|name| !name.is_empty() && *name != "-") { command.args(["--session", name]); }
-    command.arg("server").stdin(Stdio::null()).stdout(Stdio::from(log.try_clone()?)).stderr(Stdio::from(log));
+    if let Some(name) = session.filter(|name| !name.is_empty() && *name != "-") {
+        command.args(["--session", name]);
+    }
+    command
+        .arg("server")
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(log.try_clone()?))
+        .stderr(Stdio::from(log));
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
         command.process_group(0);
     }
     let child = command.spawn().map_err(|error| {
-        if error.kind() == std::io::ErrorKind::NotFound { ShepherdError::Protocol("shepherd not found in PATH".into()) }
-        else { ShepherdError::Io(error) }
+        if error.kind() == std::io::ErrorKind::NotFound {
+            ShepherdError::Protocol("shepherd not found in PATH".into())
+        } else {
+            ShepherdError::Io(error)
+        }
     })?;
-    std::thread::spawn(move || { let mut child = child; let _ = child.wait(); });
+    std::thread::spawn(move || {
+        let mut child = child;
+        let _ = child.wait();
+    });
     Ok(())
 }
 
@@ -420,7 +522,10 @@ mod tests {
 
     #[test]
     fn resolves_socket_line_and_ignores_blank_values() {
-        assert_eq!(parse_socket_path("pid: 42\nsocket: /tmp/shepherd.sock\n"), Some("/tmp/shepherd.sock"));
+        assert_eq!(
+            parse_socket_path("pid: 42\nsocket: /tmp/shepherd.sock\n"),
+            Some("/tmp/shepherd.sock")
+        );
         assert_eq!(parse_socket_path("socket: \n"), None);
     }
 
@@ -442,15 +547,21 @@ mod tests {
         assert!(client.socket().as_os_str().is_empty());
         let snapshot = client.snapshot().unwrap();
         assert_eq!(snapshot["version"], "in-process-test");
-        let err = client.call("unknown.method", serde_json::json!({})).unwrap_err();
+        let err = client
+            .call("unknown.method", serde_json::json!({}))
+            .unwrap_err();
         assert!(err.to_string().contains("unsupported"));
     }
 
     #[cfg(unix)]
     #[test]
     fn client_sends_ndjson_and_validates_response_id() {
-        use std::{io::{BufRead, BufReader, Write}, os::unix::net::UnixListener};
-        let socket = std::env::temp_dir().join(format!("shepherd-shepherd-api-{}.sock", std::process::id()));
+        use std::{
+            io::{BufRead, BufReader, Write},
+            os::unix::net::UnixListener,
+        };
+        let socket =
+            std::env::temp_dir().join(format!("shepherd-shepherd-api-{}.sock", std::process::id()));
         let _ = std::fs::remove_file(&socket);
         let listener = UnixListener::bind(&socket).unwrap();
         let server = std::thread::spawn(move || {
@@ -464,7 +575,9 @@ mod tests {
             let mut stream = reader.into_inner();
             writeln!(stream, "{response}").unwrap();
         });
-        let result = ShepherdClient::new(&socket).call("session.snapshot", serde_json::json!({})).unwrap();
+        let result = ShepherdClient::new(&socket)
+            .call("session.snapshot", serde_json::json!({}))
+            .unwrap();
         assert_eq!(result["version"], "test");
         server.join().unwrap();
         let _ = std::fs::remove_file(socket);
@@ -478,19 +591,27 @@ mod tests {
                 "received_params": params,
             }))
         });
-        let res_none = client.create_worktree("/repo", "shep/1", None, "label").unwrap();
+        let res_none = client
+            .create_worktree("/repo", "shep/1", None, "label")
+            .unwrap();
         assert_eq!(res_none["received_params"].get("base"), None);
         assert_eq!(res_none["received_params"]["branch"], "shep/1");
         assert_eq!(res_none["received_params"]["cwd"], "/repo");
         assert_eq!(res_none["received_params"]["label"], "label");
 
-        let res_empty = client.create_worktree("/repo", "shep/1", Some(""), "label").unwrap();
+        let res_empty = client
+            .create_worktree("/repo", "shep/1", Some(""), "label")
+            .unwrap();
         assert_eq!(res_empty["received_params"].get("base"), None);
 
-        let res_whitespace = client.create_worktree("/repo", "shep/1", Some("   "), "label").unwrap();
+        let res_whitespace = client
+            .create_worktree("/repo", "shep/1", Some("   "), "label")
+            .unwrap();
         assert_eq!(res_whitespace["received_params"].get("base"), None);
 
-        let res_base = client.create_worktree("/repo", "shep/1", Some("develop"), "label").unwrap();
+        let res_base = client
+            .create_worktree("/repo", "shep/1", Some("develop"), "label")
+            .unwrap();
         assert_eq!(res_base["received_params"]["base"], "develop");
     }
 
@@ -507,13 +628,16 @@ mod tests {
             }))
         });
         assert!(client.is_reachable());
-        let res = client.shepherd_call("agents", serde_json::json!({})).unwrap();
+        let res = client
+            .shepherd_call("agents", serde_json::json!({}))
+            .unwrap();
         assert_eq!(res[0]["id"], "coder-1");
     }
 
     #[test]
     fn socket_client_unreachable_when_file_missing() {
-        let client = ShepherdClient::new(PathBuf::from("/tmp/nonexistent-shepherd-test-12345.sock"));
+        let client =
+            ShepherdClient::new(PathBuf::from("/tmp/nonexistent-shepherd-test-12345.sock"));
         assert!(!client.is_reachable());
     }
 }

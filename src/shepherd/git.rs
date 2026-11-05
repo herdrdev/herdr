@@ -10,16 +10,16 @@
 
 #![allow(dead_code)]
 
-use std::path::PathBuf;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
     style::{Color, Modifier, Style},
 };
+use std::path::PathBuf;
 
-use crate::app::state::Palette;
 use super::panel::contains_point;
+use crate::app::state::Palette;
 
 // Re-export pure parsers and models from shepherd_core::git
 #[allow(unused_imports)]
@@ -49,7 +49,10 @@ impl ShepherdGitRow {
     pub fn from_worktree_info(wt: &GitWorktreeInfo, gh_available: bool) -> Self {
         let (pr_display, pr_url) = if let Some(ref pr) = wt.pr {
             let draft = if pr.is_draft { " [draft]" } else { "" };
-            (format!("#{} {}{draft}", pr.number, pr.state), Some(pr.url.clone()))
+            (
+                format!("#{} {}{draft}", pr.number, pr.state),
+                Some(pr.url.clone()),
+            )
         } else if gh_available {
             ("—".to_string(), None)
         } else {
@@ -257,11 +260,23 @@ pub fn render_shepherd_git_panel(
 
     let mut btn_x = button_bar.x;
     let refresh_btn = Rect::new(btn_x, button_bar.y, 16, 1);
-    render_git_btn(buffer, refresh_btn, "↻ Refrescar (r)", palette.accent, palette);
+    render_git_btn(
+        buffer,
+        refresh_btn,
+        "↻ Refrescar (r)",
+        palette.accent,
+        palette,
+    );
     btn_x = btn_x.saturating_add(18);
 
     let copy_btn = Rect::new(btn_x, button_bar.y, 18, 1);
-    render_git_btn(buffer, copy_btn, "📋 Copiar ruta (c)", palette.blue, palette);
+    render_git_btn(
+        buffer,
+        copy_btn,
+        "📋 Copiar ruta (c)",
+        palette.blue,
+        palette,
+    );
 
     // Subtitle (row 1)
     let gh_text = if !state.gh_available {
@@ -297,7 +312,11 @@ pub fn render_shepherd_git_panel(
             body.y + 1,
             msg,
             usize::from(body.width.saturating_sub(2)),
-            base.fg(if state.error.is_some() { palette.red } else { palette.overlay0 }),
+            base.fg(if state.error.is_some() {
+                palette.red
+            } else {
+                palette.overlay0
+            }),
         );
     } else {
         // Table columns layout:
@@ -337,7 +356,13 @@ pub fn render_shepherd_git_panel(
             buffer.set_stringn(col_pr, header_y, "PR", 12, th_style);
         }
         if col_ruta < body.right() {
-            buffer.set_stringn(col_ruta, header_y, "RUTA", usize::from(body.right().saturating_sub(col_ruta)), th_style);
+            buffer.set_stringn(
+                col_ruta,
+                header_y,
+                "RUTA",
+                usize::from(body.right().saturating_sub(col_ruta)),
+                th_style,
+            );
         }
 
         let row_start_y = header_y + 1;
@@ -364,7 +389,10 @@ pub fn render_shepherd_git_panel(
             // Bullet
             let bullet = if is_selected { "● " } else { "· " };
             let bullet_style = if is_selected {
-                Style::default().fg(palette.accent).bg(row_bg).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(palette.accent)
+                    .bg(row_bg)
+                    .add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(palette.overlay0).bg(row_bg)
             };
@@ -469,7 +497,8 @@ pub fn render_shepherd_git_panel(
 
     // 3. Footer (shortcuts / help)
     if let Some(footer_area) = stack.footer {
-        let help_text = "r refrescar  ·   c copiar/mostrar ruta  ·   Tab cambiar pestaña  ·   Esc cerrar";
+        let help_text =
+            "r refrescar  ·   c copiar/mostrar ruta  ·   Tab cambiar pestaña  ·   Esc cerrar";
         buffer.set_stringn(
             footer_area.x + 1,
             footer_area.y,
@@ -487,13 +516,7 @@ pub fn render_shepherd_git_panel(
     })
 }
 
-fn render_git_btn(
-    buffer: &mut Buffer,
-    rect: Rect,
-    label: &str,
-    accent: Color,
-    _palette: &Palette,
-) {
+fn render_git_btn(buffer: &mut Buffer, rect: Rect, label: &str, accent: Color, _palette: &Palette) {
     if rect.width < 3 || rect.height < 1 {
         return;
     }
@@ -702,7 +725,11 @@ mod tests {
         assert_eq!(state.selected, 1);
 
         // Click refresh button
-        let action = state.handle_click(render.refresh_button.x + 1, render.refresh_button.y, &render);
+        let action = state.handle_click(
+            render.refresh_button.x + 1,
+            render.refresh_button.y,
+            &render,
+        );
         assert_eq!(action, Some(ShepherdGitAction::Refresh));
 
         // Click copy button

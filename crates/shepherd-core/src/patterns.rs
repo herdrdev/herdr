@@ -12,7 +12,8 @@ use std::{
 
 // --- Embedded Templates ---
 
-const TEMPLATE_ORCHESTRATOR_WORKER: &str = include_str!("../assets/patterns/orchestrator-worker.yaml");
+const TEMPLATE_ORCHESTRATOR_WORKER: &str =
+    include_str!("../assets/patterns/orchestrator-worker.yaml");
 const TEMPLATE_HIERARCHICAL: &str = include_str!("../assets/patterns/hierarchical.yaml");
 const TEMPLATE_BLACKBOARD: &str = include_str!("../assets/patterns/blackboard.yaml");
 const TEMPLATE_MARKET: &str = include_str!("../assets/patterns/market.yaml");
@@ -341,10 +342,7 @@ pub fn validate(pattern: &Pattern, config: &Config) -> Vec<Problem> {
         } else if !is_valid_ident(&topic.name) {
             problems.push(Problem::error(
                 format!("{path}.name"),
-                format!(
-                    "topic name '{}' contains invalid characters",
-                    topic.name
-                ),
+                format!("topic name '{}' contains invalid characters", topic.name),
             ));
         } else if !topic_names.insert(topic.name.clone()) {
             problems.push(Problem::error(
@@ -436,7 +434,10 @@ pub fn validate(pattern: &Pattern, config: &Config) -> Vec<Problem> {
         if role_def.is_none() {
             problems.push(Problem::error(
                 format!("{path}.role"),
-                format!("unknown role '{}' (not defined in config roles)", agent.role),
+                format!(
+                    "unknown role '{}' (not defined in config roles)",
+                    agent.role
+                ),
             ));
         }
 
@@ -504,10 +505,7 @@ pub fn validate(pattern: &Pattern, config: &Config) -> Vec<Problem> {
             if !topic_names.contains(con_topic) {
                 problems.push(Problem::error(
                     format!("{path}.consumes[{j}]"),
-                    format!(
-                        "agent '{}' consumes unknown topic '{con_topic}'",
-                        agent.id
-                    ),
+                    format!("agent '{}' consumes unknown topic '{con_topic}'", agent.id),
                 ));
             } else {
                 topics_consumed.insert(con_topic.clone());
@@ -604,11 +602,16 @@ fn validate_orchestrator_worker(pattern: &Pattern, problems: &mut Vec<Problem>) 
         let mut found_response_topic = false;
         for &w_idx in &workers {
             let worker = &pattern.agents[w_idx];
-            let worker_consumes: HashSet<&str> = worker.consumes.iter().map(String::as_str).collect();
-            let worker_publishes: HashSet<&str> = worker.publishes.iter().map(String::as_str).collect();
+            let worker_consumes: HashSet<&str> =
+                worker.consumes.iter().map(String::as_str).collect();
+            let worker_publishes: HashSet<&str> =
+                worker.publishes.iter().map(String::as_str).collect();
 
             // Worker consumes orders from orchestrator
-            let consumes_orch_orders = worker_consumes.intersection(&orch_publishes).next().is_some();
+            let consumes_orch_orders = worker_consumes
+                .intersection(&orch_publishes)
+                .next()
+                .is_some();
             if !consumes_orch_orders {
                 problems.push(Problem::warning(
                     format!("agents[{w_idx}].consumes"),
@@ -620,7 +623,10 @@ fn validate_orchestrator_worker(pattern: &Pattern, problems: &mut Vec<Problem>) 
             }
 
             // Worker publishes responses back to orchestrator
-            let publishes_to_orch = worker_publishes.intersection(&orch_consumes).next().is_some();
+            let publishes_to_orch = worker_publishes
+                .intersection(&orch_consumes)
+                .next()
+                .is_some();
             if publishes_to_orch {
                 found_response_topic = true;
             } else {
@@ -700,7 +706,9 @@ fn validate_hierarchical(pattern: &Pattern, problems: &mut Vec<Problem>) {
             if !levels_map.contains_key(&lvl) {
                 problems.push(Problem::error(
                     "agents",
-                    format!("hierarchical pattern has a gap at level {lvl}; levels must be contiguous"),
+                    format!(
+                        "hierarchical pattern has a gap at level {lvl}; levels must be contiguous"
+                    ),
                 ));
             }
         }
@@ -873,7 +881,9 @@ pub fn global_patterns_dir_with(global_config: Option<&Path>) -> PathBuf {
     if let Some(path) = std::env::var_os("XDG_CONFIG_HOME").filter(|v| !v.is_empty()) {
         return PathBuf::from(path).join("shepherd/patterns");
     }
-    let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."));
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."));
     home.join(".config/shepherd/patterns")
 }
 
@@ -957,11 +967,7 @@ pub fn list_patterns(
         }
     }
 
-    summaries.sort_by(|a, b| {
-        a.name
-            .cmp(&b.name)
-            .then_with(|| a.source.cmp(&b.source))
-    });
+    summaries.sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.source.cmp(&b.source)));
     Ok(summaries)
 }
 
@@ -1091,7 +1097,10 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let path = std::env::temp_dir().join(format!("shepherd-test-{name}-{}-{nonce}", std::process::id()));
+        let path = std::env::temp_dir().join(format!(
+            "shepherd-test-{name}-{}-{nonce}",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&path);
         std::fs::create_dir_all(&path).unwrap();
         path
@@ -1100,7 +1109,8 @@ mod tests {
     #[test]
     fn test_builtin_templates_serde_roundtrip() {
         for tmpl in EMBEDDED_TEMPLATES {
-            let pattern: Pattern = serde_yaml_ng::from_str(tmpl.yaml).expect("deserialize template");
+            let pattern: Pattern =
+                serde_yaml_ng::from_str(tmpl.yaml).expect("deserialize template");
             assert_eq!(pattern.name, tmpl.name);
             let serialized = serde_yaml_ng::to_string(&pattern).expect("serialize pattern");
             let roundtripped: Pattern =
@@ -1113,7 +1123,8 @@ mod tests {
     fn test_builtin_templates_validate_without_errors() {
         let config = Config::default();
         for tmpl in EMBEDDED_TEMPLATES {
-            let pattern: Pattern = serde_yaml_ng::from_str(tmpl.yaml).expect("deserialize template");
+            let pattern: Pattern =
+                serde_yaml_ng::from_str(tmpl.yaml).expect("deserialize template");
             let problems = validate(&pattern, &config);
             let errors: Vec<_> = problems.iter().filter(|p| p.is_error()).collect();
             assert!(
@@ -1128,15 +1139,12 @@ mod tests {
     #[test]
     fn test_validate_invalid_pattern_name_and_agent_id() {
         let config = Config::default();
-        let mut pattern: Pattern =
-            serde_yaml_ng::from_str(TEMPLATE_ORCHESTRATOR_WORKER).unwrap();
+        let mut pattern: Pattern = serde_yaml_ng::from_str(TEMPLATE_ORCHESTRATOR_WORKER).unwrap();
         pattern.name = "bad name with spaces".into();
         pattern.agents[0].id = "invalid id!".into();
 
         let problems = validate(&pattern, &config);
-        assert!(problems
-            .iter()
-            .any(|p| p.path == "name" && p.is_error()));
+        assert!(problems.iter().any(|p| p.path == "name" && p.is_error()));
         assert!(problems
             .iter()
             .any(|p| p.path == "agents[0].id" && p.is_error()));
@@ -1145,8 +1153,7 @@ mod tests {
     #[test]
     fn test_validate_unknown_and_orphan_topics() {
         let config = Config::default();
-        let mut pattern: Pattern =
-            serde_yaml_ng::from_str(TEMPLATE_ORCHESTRATOR_WORKER).unwrap();
+        let mut pattern: Pattern = serde_yaml_ng::from_str(TEMPLATE_ORCHESTRATOR_WORKER).unwrap();
         pattern.agents[0].publishes = vec!["nonexistent-topic".into()];
         pattern.topics.push(Topic {
             name: "orphan-topic".into(),
@@ -1169,15 +1176,14 @@ mod tests {
     #[test]
     fn test_validate_unknown_role_and_uninstalled_vendor() {
         let config = Config::default();
-        let mut pattern: Pattern =
-            serde_yaml_ng::from_str(TEMPLATE_ORCHESTRATOR_WORKER).unwrap();
+        let mut pattern: Pattern = serde_yaml_ng::from_str(TEMPLATE_ORCHESTRATOR_WORKER).unwrap();
         pattern.agents[0].role = "nonexistent-role".into();
         pattern.agents[1].vendor = Some("fake-vendor".into());
 
         let problems = validate(&pattern, &config);
-        assert!(problems.iter().any(
-            |p| p.path == "agents[0].role" && p.is_error() && p.message.contains("nonexistent-role")
-        ));
+        assert!(problems.iter().any(|p| p.path == "agents[0].role"
+            && p.is_error()
+            && p.message.contains("nonexistent-role")));
         assert!(problems.iter().any(|p| p.path == "agents[1].vendor"
             && p.severity == Severity::Warning
             && p.message.contains("fake-vendor")));
@@ -1186,8 +1192,7 @@ mod tests {
     #[test]
     fn test_validate_limits() {
         let config = Config::default();
-        let mut pattern: Pattern =
-            serde_yaml_ng::from_str(TEMPLATE_ORCHESTRATOR_WORKER).unwrap();
+        let mut pattern: Pattern = serde_yaml_ng::from_str(TEMPLATE_ORCHESTRATOR_WORKER).unwrap();
         pattern.agents[0].count = 0;
         pattern.agents[1].count = 100;
         pattern.topics[0].partitions = 0;
@@ -1215,12 +1220,13 @@ mod tests {
     #[test]
     fn test_validate_orchestrator_worker_missing_worker_group() {
         let config = Config::default();
-        let mut pattern: Pattern =
-            serde_yaml_ng::from_str(TEMPLATE_ORCHESTRATOR_WORKER).unwrap();
+        let mut pattern: Pattern = serde_yaml_ng::from_str(TEMPLATE_ORCHESTRATOR_WORKER).unwrap();
         pattern.agents[1].group = None;
 
         let problems = validate(&pattern, &config);
-        assert!(problems.iter().any(|p| p.is_error() && p.message.contains("worker")));
+        assert!(problems
+            .iter()
+            .any(|p| p.is_error() && p.message.contains("worker")));
     }
 
     #[test]
@@ -1231,7 +1237,9 @@ mod tests {
         pattern.agents.retain(|a| a.level != Some(1));
 
         let problems = validate(&pattern, &config);
-        assert!(problems.iter().any(|p| p.is_error() && p.message.contains("gap")));
+        assert!(problems
+            .iter()
+            .any(|p| p.is_error() && p.message.contains("gap")));
     }
 
     #[test]
@@ -1242,7 +1250,9 @@ mod tests {
         pattern.agents[0].count = 1;
 
         let problems = validate(&pattern, &config);
-        assert!(problems.iter().any(|p| p.is_error() && p.message.contains("at least 2")));
+        assert!(problems
+            .iter()
+            .any(|p| p.is_error() && p.message.contains("at least 2")));
     }
 
     #[test]
@@ -1269,7 +1279,9 @@ mod tests {
         // 1. Initial listing: only builtins
         let list1 = list_patterns(&proj_root, Some(&glob_dir)).unwrap();
         assert_eq!(list1.len(), 4);
-        assert!(list1.iter().all(|s| s.source == PatternSource::Builtin && !s.shadowed));
+        assert!(list1
+            .iter()
+            .all(|s| s.source == PatternSource::Builtin && !s.shadowed));
 
         // 2. Duplicate a pattern to global
         let (glob_pat, glob_path) = duplicate_pattern(
@@ -1285,10 +1297,19 @@ mod tests {
 
         // Now list should show global version unshadowed, and builtin version shadowed
         let list2 = list_patterns(&proj_root, Some(&glob_dir)).unwrap();
-        let ow_entries: Vec<_> = list2.iter().filter(|s| s.name == "orchestrator-worker").collect();
+        let ow_entries: Vec<_> = list2
+            .iter()
+            .filter(|s| s.name == "orchestrator-worker")
+            .collect();
         assert_eq!(ow_entries.len(), 2);
-        let glob_entry = ow_entries.iter().find(|s| s.source == PatternSource::Global).unwrap();
-        let built_entry = ow_entries.iter().find(|s| s.source == PatternSource::Builtin).unwrap();
+        let glob_entry = ow_entries
+            .iter()
+            .find(|s| s.source == PatternSource::Global)
+            .unwrap();
+        let built_entry = ow_entries
+            .iter()
+            .find(|s| s.source == PatternSource::Builtin)
+            .unwrap();
         assert!(!glob_entry.shadowed);
         assert!(built_entry.shadowed);
 
@@ -1306,23 +1327,37 @@ mod tests {
 
         // Now project is unshadowed, global is shadowed, builtin is shadowed
         let list3 = list_patterns(&proj_root, Some(&glob_dir)).unwrap();
-        let ow_entries3: Vec<_> = list3.iter().filter(|s| s.name == "orchestrator-worker").collect();
+        let ow_entries3: Vec<_> = list3
+            .iter()
+            .filter(|s| s.name == "orchestrator-worker")
+            .collect();
         assert_eq!(ow_entries3.len(), 3);
-        let proj_entry = ow_entries3.iter().find(|s| s.source == PatternSource::Project).unwrap();
-        let glob_entry = ow_entries3.iter().find(|s| s.source == PatternSource::Global).unwrap();
-        let built_entry = ow_entries3.iter().find(|s| s.source == PatternSource::Builtin).unwrap();
+        let proj_entry = ow_entries3
+            .iter()
+            .find(|s| s.source == PatternSource::Project)
+            .unwrap();
+        let glob_entry = ow_entries3
+            .iter()
+            .find(|s| s.source == PatternSource::Global)
+            .unwrap();
+        let built_entry = ow_entries3
+            .iter()
+            .find(|s| s.source == PatternSource::Builtin)
+            .unwrap();
         assert!(!proj_entry.shadowed);
         assert!(glob_entry.shadowed);
         assert!(built_entry.shadowed);
 
         // 4. Load resolution priority
-        let (loaded, src, path) = load_pattern("orchestrator-worker", &proj_root, Some(&glob_dir)).unwrap();
+        let (loaded, src, path) =
+            load_pattern("orchestrator-worker", &proj_root, Some(&glob_dir)).unwrap();
         assert_eq!(src, PatternSource::Project);
         assert_eq!(path.unwrap(), proj_path);
         assert_eq!(loaded.name, "orchestrator-worker");
 
         // 5. Delete project pattern -> global becomes active
-        let deleted_src = delete_pattern("orchestrator-worker", &proj_root, Some(&glob_dir)).unwrap();
+        let deleted_src =
+            delete_pattern("orchestrator-worker", &proj_root, Some(&glob_dir)).unwrap();
         assert_eq!(deleted_src, PatternSource::Project);
         let (loaded_after, src_after, _) =
             load_pattern("orchestrator-worker", &proj_root, Some(&glob_dir)).unwrap();
@@ -1330,7 +1365,8 @@ mod tests {
         assert_eq!(loaded_after.name, "orchestrator-worker");
 
         // 6. Delete global pattern -> builtin becomes active
-        let deleted_src2 = delete_pattern("orchestrator-worker", &proj_root, Some(&glob_dir)).unwrap();
+        let deleted_src2 =
+            delete_pattern("orchestrator-worker", &proj_root, Some(&glob_dir)).unwrap();
         assert_eq!(deleted_src2, PatternSource::Global);
         let (loaded_built, src_built, _) =
             load_pattern("orchestrator-worker", &proj_root, Some(&glob_dir)).unwrap();

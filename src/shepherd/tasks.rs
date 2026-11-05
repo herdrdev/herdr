@@ -21,8 +21,8 @@ use ratatui::{
     widgets::{Paragraph, Widget},
 };
 
-use crate::app::state::Palette;
 use super::panel::contains_point;
+use crate::app::state::Palette;
 
 pub const SHEPHERD_TASKS_MODAL_SIZE: (u16, u16) = (92, 26);
 
@@ -101,7 +101,10 @@ impl CreateTaskFormState {
             for raw_path in self.attachments.split_whitespace() {
                 let p = PathBuf::from(raw_path.trim().trim_matches(','));
                 if !p.exists() {
-                    return Err(format!("Ruta de archivo adjunto no existe: '{}'", p.display()));
+                    return Err(format!(
+                        "Ruta de archivo adjunto no existe: '{}'",
+                        p.display()
+                    ));
                 }
                 valid_attachments.push(p);
             }
@@ -115,7 +118,11 @@ impl CreateTaskFormState {
     }
 
     pub fn cycle_field_backward(&mut self) {
-        self.active_field = if self.active_field == 0 { 3 } else { self.active_field - 1 };
+        self.active_field = if self.active_field == 0 {
+            3
+        } else {
+            self.active_field - 1
+        };
     }
 
     pub fn insert_char(&mut self, c: char) {
@@ -130,10 +137,18 @@ impl CreateTaskFormState {
 
     pub fn delete_char(&mut self) {
         match self.active_field {
-            0 => { self.title.pop(); }
-            1 => { self.description.pop(); }
-            2 => { self.criteria.pop(); }
-            3 => { self.attachments.pop(); }
+            0 => {
+                self.title.pop();
+            }
+            1 => {
+                self.description.pop();
+            }
+            2 => {
+                self.criteria.pop();
+            }
+            3 => {
+                self.attachments.pop();
+            }
             _ => {}
         }
     }
@@ -201,11 +216,16 @@ pub fn is_spec_template(content: &str) -> bool {
     if trimmed.is_empty() {
         return true;
     }
-    let template_text = "Design decisions, constraints, interfaces. Agents read this before coding.";
-    trimmed == "# Spec\n\nDesign decisions, constraints, interfaces. Agents read this before coding."
-        || trimmed == "# Spec\nDesign decisions, constraints, interfaces. Agents read this before coding."
+    let template_text =
+        "Design decisions, constraints, interfaces. Agents read this before coding.";
+    trimmed
+        == "# Spec\n\nDesign decisions, constraints, interfaces. Agents read this before coding."
+        || trimmed
+            == "# Spec\nDesign decisions, constraints, interfaces. Agents read this before coding."
         || trimmed == template_text
-        || (trimmed.starts_with("# Spec") && trimmed.contains(template_text) && trimmed.len() <= template_text.len() + 20)
+        || (trimmed.starts_with("# Spec")
+            && trimmed.contains(template_text)
+            && trimmed.len() <= template_text.len() + 20)
 }
 
 impl ShepherdTaskRow {
@@ -399,41 +419,37 @@ impl ShepherdTasksState {
     pub fn confirm_active_action(&mut self) -> Option<ShepherdTasksAction> {
         match std::mem::replace(&mut self.sub_modal, TasksSubModal::None) {
             TasksSubModal::None => None,
-            TasksSubModal::Create(form) => {
-                match form.validate() {
-                    Ok((criteria, attachments)) => {
-                        let action = ShepherdTasksAction::CreateTask {
-                            title: form.title.trim().to_string(),
-                            description: form.description.trim().to_string(),
-                            criteria,
-                            attachments,
-                        };
-                        self.last_action = Some(action.clone());
-                        Some(action)
-                    }
-                    Err(err) => {
-                        let mut form = form;
-                        form.error = Some(err);
-                        self.sub_modal = TasksSubModal::Create(form);
-                        None
-                    }
+            TasksSubModal::Create(form) => match form.validate() {
+                Ok((criteria, attachments)) => {
+                    let action = ShepherdTasksAction::CreateTask {
+                        title: form.title.trim().to_string(),
+                        description: form.description.trim().to_string(),
+                        criteria,
+                        attachments,
+                    };
+                    self.last_action = Some(action.clone());
+                    Some(action)
                 }
-            }
-            TasksSubModal::ImportGh(form) => {
-                match form.validate() {
-                    Ok(issue_ref) => {
-                        let action = ShepherdTasksAction::ImportGhIssue { issue_ref };
-                        self.last_action = Some(action.clone());
-                        Some(action)
-                    }
-                    Err(err) => {
-                        let mut form = form;
-                        form.error = Some(err);
-                        self.sub_modal = TasksSubModal::ImportGh(form);
-                        None
-                    }
+                Err(err) => {
+                    let mut form = form;
+                    form.error = Some(err);
+                    self.sub_modal = TasksSubModal::Create(form);
+                    None
                 }
-            }
+            },
+            TasksSubModal::ImportGh(form) => match form.validate() {
+                Ok(issue_ref) => {
+                    let action = ShepherdTasksAction::ImportGhIssue { issue_ref };
+                    self.last_action = Some(action.clone());
+                    Some(action)
+                }
+                Err(err) => {
+                    let mut form = form;
+                    form.error = Some(err);
+                    self.sub_modal = TasksSubModal::ImportGh(form);
+                    None
+                }
+            },
             TasksSubModal::ConfirmArchive { task_id, .. } => {
                 let action = ShepherdTasksAction::ArchiveTask { task_id };
                 self.last_action = Some(action.clone());
@@ -624,7 +640,12 @@ pub fn render_shepherd_tasks_panel(
     let base = Style::default().fg(palette.text).bg(palette.panel_bg);
 
     // Header
-    let button_bar = Rect::new(stack.header.x + 1, stack.header.y, stack.header.width.saturating_sub(2), 1);
+    let button_bar = Rect::new(
+        stack.header.x + 1,
+        stack.header.y,
+        stack.header.width.saturating_sub(2),
+        1,
+    );
 
     // Action buttons in header (row 0)
     let mut btn_x = button_bar.x;
@@ -633,7 +654,13 @@ pub fn render_shepherd_tasks_panel(
     btn_x = btn_x.saturating_add(18);
 
     let import_gh_btn = Rect::new(btn_x, button_bar.y, 18, 1);
-    render_btn(buffer, import_gh_btn, "↓ GitHub issue (i)", palette.blue, palette);
+    render_btn(
+        buffer,
+        import_gh_btn,
+        "↓ GitHub issue (i)",
+        palette.blue,
+        palette,
+    );
     btn_x = btn_x.saturating_add(20);
 
     let edit_btn = Rect::new(btn_x, button_bar.y, 16, 1);
@@ -641,10 +668,19 @@ pub fn render_shepherd_tasks_panel(
     btn_x = btn_x.saturating_add(18);
 
     let archive_btn = Rect::new(btn_x, button_bar.y, 16, 1);
-    render_btn(buffer, archive_btn, "📦 Archivar (a)", palette.yellow, palette);
+    render_btn(
+        buffer,
+        archive_btn,
+        "📦 Archivar (a)",
+        palette.yellow,
+        palette,
+    );
 
     // Subtitle in header (row 1)
-    let sub_title = format!("{} tarea(s) · vista previa y edición en $EDITOR", state.tasks.len());
+    let sub_title = format!(
+        "{} tarea(s) · vista previa y edición en $EDITOR",
+        state.tasks.len()
+    );
     buffer.set_stringn(
         stack.header.x + 1,
         stack.header.y + 1,
@@ -664,7 +700,9 @@ pub fn render_shepherd_tasks_panel(
 
     // Draw vertical divider
     for y in body.y..body.bottom() {
-        buffer[(divider_x, y)].set_symbol("│").set_style(base.fg(palette.surface_dim));
+        buffer[(divider_x, y)]
+            .set_symbol("│")
+            .set_style(base.fg(palette.surface_dim));
     }
 
     // Render task list on the left
@@ -678,11 +716,20 @@ pub fn render_shepherd_tasks_panel(
             base.fg(palette.overlay0),
         );
     } else {
-        for (idx, task) in state.tasks.iter().enumerate().take(usize::from(list_area.height)) {
+        for (idx, task) in state
+            .tasks
+            .iter()
+            .enumerate()
+            .take(usize::from(list_area.height))
+        {
             let row_y = list_area.y + idx as u16;
             let row_rect = Rect::new(list_area.x, row_y, list_area.width, 1);
             let is_sel = idx == state.selected;
-            let row_bg = if is_sel { palette.active_row_bg } else { palette.panel_bg };
+            let row_bg = if is_sel {
+                palette.active_row_bg
+            } else {
+                palette.panel_bg
+            };
             let row_style = base.bg(row_bg);
 
             for rx in row_rect.x..row_rect.right() {
@@ -716,7 +763,13 @@ pub fn render_shepherd_tasks_panel(
     }
 
     // Render task preview on the right
-    render_task_preview(buffer, preview_area, state.selected_task(), state.preview_scroll, palette);
+    render_task_preview(
+        buffer,
+        preview_area,
+        state.selected_task(),
+        state.preview_scroll,
+        palette,
+    );
 
     // Footer
     if let Some(footer_area) = stack.footer {
@@ -759,7 +812,11 @@ pub fn render_shepherd_tasks_panel(
                 form_fields.push(f);
             }
         }
-        TasksSubModal::ConfirmArchive { task_id, title, message } => {
+        TasksSubModal::ConfirmArchive {
+            task_id,
+            title,
+            message,
+        } => {
             let (conf, canc) = render_archive_modal(
                 buffer,
                 inner,
@@ -809,14 +866,23 @@ fn render_task_preview(
 
     // Title header
     lines.push(Line::from(vec![
-        Span::styled(format!("# Tarea #{}: ", task.id), base.fg(palette.accent).add_modifier(Modifier::BOLD)),
-        Span::styled(&task.title, base.fg(palette.text).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            format!("# Tarea #{}: ", task.id),
+            base.fg(palette.accent).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            &task.title,
+            base.fg(palette.text).add_modifier(Modifier::BOLD),
+        ),
     ]));
     lines.push(Line::from(vec![
         Span::styled("Estado: ", base.fg(palette.overlay0)),
         Span::styled(&task.state, base.fg(palette.teal)),
         Span::styled("  ·  Directorio: ", base.fg(palette.overlay0)),
-        Span::styled(task.directory.display().to_string(), base.fg(palette.subtext0)),
+        Span::styled(
+            task.directory.display().to_string(),
+            base.fg(palette.subtext0),
+        ),
     ]));
     if let Some(ref url) = task.issue_url {
         lines.push(Line::from(vec![
@@ -827,17 +893,27 @@ fn render_task_preview(
     lines.push(Line::from(""));
 
     // Description / Issue markdown preview
-    lines.push(Line::from(vec![
-        Span::styled("## Descripción", base.fg(palette.mauve).add_modifier(Modifier::BOLD)),
-    ]));
+    lines.push(Line::from(vec![Span::styled(
+        "## Descripción",
+        base.fg(palette.mauve).add_modifier(Modifier::BOLD),
+    )]));
     if task.description.trim().is_empty() {
-        lines.push(Line::from(vec![Span::styled("  (Sin descripción)", base.fg(palette.overlay0))]));
+        lines.push(Line::from(vec![Span::styled(
+            "  (Sin descripción)",
+            base.fg(palette.overlay0),
+        )]));
     } else {
         for l in task.description.lines() {
             if l.starts_with("# ") {
-                lines.push(Line::from(vec![Span::styled(l, base.fg(palette.accent).add_modifier(Modifier::BOLD))]));
+                lines.push(Line::from(vec![Span::styled(
+                    l,
+                    base.fg(palette.accent).add_modifier(Modifier::BOLD),
+                )]));
             } else if l.starts_with("## ") {
-                lines.push(Line::from(vec![Span::styled(l, base.fg(palette.mauve).add_modifier(Modifier::BOLD))]));
+                lines.push(Line::from(vec![Span::styled(
+                    l,
+                    base.fg(palette.mauve).add_modifier(Modifier::BOLD),
+                )]));
             } else if l.starts_with("- ") || l.starts_with("* ") {
                 lines.push(Line::from(vec![
                     Span::styled("  • ", base.fg(palette.accent)),
@@ -852,14 +928,21 @@ fn render_task_preview(
 
     // Spec only if present and not template
     if !task.spec.trim().is_empty() {
-        lines.push(Line::from(vec![
-            Span::styled("## Especificación", base.fg(palette.mauve).add_modifier(Modifier::BOLD)),
-        ]));
+        lines.push(Line::from(vec![Span::styled(
+            "## Especificación",
+            base.fg(palette.mauve).add_modifier(Modifier::BOLD),
+        )]));
         for l in task.spec.lines() {
             if l.starts_with("# ") {
-                lines.push(Line::from(vec![Span::styled(l, base.fg(palette.accent).add_modifier(Modifier::BOLD))]));
+                lines.push(Line::from(vec![Span::styled(
+                    l,
+                    base.fg(palette.accent).add_modifier(Modifier::BOLD),
+                )]));
             } else if l.starts_with("## ") {
-                lines.push(Line::from(vec![Span::styled(l, base.fg(palette.accent).add_modifier(Modifier::BOLD))]));
+                lines.push(Line::from(vec![Span::styled(
+                    l,
+                    base.fg(palette.accent).add_modifier(Modifier::BOLD),
+                )]));
             } else if l.starts_with("- ") || l.starts_with("* ") {
                 lines.push(Line::from(vec![
                     Span::styled("  • ", base.fg(palette.accent)),
@@ -873,11 +956,15 @@ fn render_task_preview(
     }
 
     // Criteria checklist
-    lines.push(Line::from(vec![
-        Span::styled("## Criterios de Aceptación", base.fg(palette.teal).add_modifier(Modifier::BOLD)),
-    ]));
+    lines.push(Line::from(vec![Span::styled(
+        "## Criterios de Aceptación",
+        base.fg(palette.teal).add_modifier(Modifier::BOLD),
+    )]));
     if task.criteria.is_empty() {
-        lines.push(Line::from(vec![Span::styled("  (Sin criterios definidos)", base.fg(palette.overlay0))]));
+        lines.push(Line::from(vec![Span::styled(
+            "  (Sin criterios definidos)",
+            base.fg(palette.overlay0),
+        )]));
     } else {
         for crit in &task.criteria {
             let is_checked = crit.starts_with("- [x]") || crit.starts_with("- [X]");
@@ -897,14 +984,22 @@ fn render_task_preview(
                 .trim_start_matches("* ")
                 .trim();
             lines.push(Line::from(vec![
-                Span::styled(format!("  {mark}"), base.fg(mark_color).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    format!("  {mark}"),
+                    base.fg(mark_color).add_modifier(Modifier::BOLD),
+                ),
                 Span::styled(text, base.fg(palette.text)),
             ]));
         }
     }
 
     let viewport_h = usize::from(area.height);
-    for (idx, line) in lines.into_iter().skip(usize::from(scroll)).take(viewport_h).enumerate() {
+    for (idx, line) in lines
+        .into_iter()
+        .skip(usize::from(scroll))
+        .take(viewport_h)
+        .enumerate()
+    {
         let row_y = area.y + idx as u16;
         let line_rect = Rect::new(area.x + 1, row_y, area.width.saturating_sub(2), 1);
         Paragraph::new(line).render(line_rect, buffer);
@@ -975,7 +1070,9 @@ fn render_create_task_modal(
             Style::default().fg(palette.text).bg(palette.surface_dim)
         };
         for ix in input_rect.x..input_rect.right() {
-            buffer[(ix, input_rect.y)].set_symbol(" ").set_style(input_style);
+            buffer[(ix, input_rect.y)]
+                .set_symbol(" ")
+                .set_style(input_style);
         }
         let val = field_values[idx];
         let display = if is_active {
@@ -1014,8 +1111,20 @@ fn render_create_task_modal(
     let confirm_btn = Rect::new(inner.x + 2, btn_y, 16, 1);
     let cancel_btn = Rect::new(inner.x + 20, btn_y, 16, 1);
 
-    render_btn(buffer, confirm_btn, " ↵ Crear tarea ", palette.accent, palette);
-    render_btn(buffer, cancel_btn, " esc Cancelar ", palette.surface_dim, palette);
+    render_btn(
+        buffer,
+        confirm_btn,
+        " ↵ Crear tarea ",
+        palette.accent,
+        palette,
+    );
+    render_btn(
+        buffer,
+        cancel_btn,
+        " esc Cancelar ",
+        palette.surface_dim,
+        palette,
+    );
 
     (confirm_btn, cancel_btn, field_rects)
 }
@@ -1057,7 +1166,9 @@ fn render_import_gh_modal(
     let input_rect = Rect::new(inner.x + 1, inner.y + 3, inner.width.saturating_sub(2), 1);
     let input_style = Style::default().fg(palette.text).bg(palette.active_row_bg);
     for ix in input_rect.x..input_rect.right() {
-        buffer[(ix, input_rect.y)].set_symbol(" ").set_style(input_style);
+        buffer[(ix, input_rect.y)]
+            .set_symbol(" ")
+            .set_style(input_style);
     }
     let display = format!("{}█", form.issue_ref);
     buffer.set_stringn(
@@ -1083,7 +1194,13 @@ fn render_import_gh_modal(
     let cancel_btn = Rect::new(inner.x + 20, btn_y, 16, 1);
 
     render_btn(buffer, confirm_btn, " ↵ Importar ", palette.blue, palette);
-    render_btn(buffer, cancel_btn, " esc Cancelar ", palette.surface_dim, palette);
+    render_btn(
+        buffer,
+        cancel_btn,
+        " esc Cancelar ",
+        palette.surface_dim,
+        palette,
+    );
 
     (confirm_btn, cancel_btn, Some(input_rect))
 }
@@ -1127,13 +1244,31 @@ fn render_archive_modal(
     let confirm_btn = Rect::new(inner.x + 2, btn_y, 18, 1);
     let cancel_btn = Rect::new(inner.x + 22, btn_y, 16, 1);
 
-    render_btn(buffer, confirm_btn, " ↵ Archivar tarea ", palette.yellow, palette);
-    render_btn(buffer, cancel_btn, " esc Cancelar ", palette.surface_dim, palette);
+    render_btn(
+        buffer,
+        confirm_btn,
+        " ↵ Archivar tarea ",
+        palette.yellow,
+        palette,
+    );
+    render_btn(
+        buffer,
+        cancel_btn,
+        " esc Cancelar ",
+        palette.surface_dim,
+        palette,
+    );
 
     (confirm_btn, cancel_btn)
 }
 
-fn render_btn(buffer: &mut Buffer, rect: Rect, label: &str, bg: ratatui::style::Color, palette: &Palette) {
+fn render_btn(
+    buffer: &mut Buffer,
+    rect: Rect,
+    label: &str,
+    bg: ratatui::style::Color,
+    palette: &Palette,
+) {
     if rect.width < 2 || rect.height < 1 {
         return;
     }
@@ -1141,7 +1276,10 @@ fn render_btn(buffer: &mut Buffer, rect: Rect, label: &str, bg: ratatui::style::
         ratatui::style::Color::Reset => palette.surface_dim,
         color => color,
     };
-    let style = Style::default().fg(contrast_fg).bg(bg).add_modifier(Modifier::BOLD);
+    let style = Style::default()
+        .fg(contrast_fg)
+        .bg(bg)
+        .add_modifier(Modifier::BOLD);
     buffer.set_style(rect, style);
     buffer.set_stringn(rect.x, rect.y, label, usize::from(rect.width), style);
 }
@@ -1156,7 +1294,10 @@ fn draw_tasks_box(
         return None;
     }
     let background = Style::default().bg(bg).remove_modifier(Modifier::DIM);
-    let border = Style::default().fg(border_color).bg(bg).remove_modifier(Modifier::DIM);
+    let border = Style::default()
+        .fg(border_color)
+        .bg(bg)
+        .remove_modifier(Modifier::DIM);
 
     for y in area.y..area.bottom() {
         for x in area.x..area.right() {
@@ -1165,18 +1306,37 @@ fn draw_tasks_box(
     }
     for x in area.x..area.right() {
         buffer[(x, area.y)]
-            .set_symbol(if x == area.x { "┌" } else if x + 1 == area.right() { "┐" } else { "─" })
+            .set_symbol(if x == area.x {
+                "┌"
+            } else if x + 1 == area.right() {
+                "┐"
+            } else {
+                "─"
+            })
             .set_style(border);
         let bottom_y = area.bottom() - 1;
         buffer[(x, bottom_y)]
-            .set_symbol(if x == area.x { "└" } else if x + 1 == area.right() { "┘" } else { "─" })
+            .set_symbol(if x == area.x {
+                "└"
+            } else if x + 1 == area.right() {
+                "┘"
+            } else {
+                "─"
+            })
             .set_style(border);
     }
     for y in area.y + 1..area.bottom() - 1 {
         buffer[(area.x, y)].set_symbol("│").set_style(border);
-        buffer[(area.right() - 1, y)].set_symbol("│").set_style(border);
+        buffer[(area.right() - 1, y)]
+            .set_symbol("│")
+            .set_style(border);
     }
-    Some(Rect::new(area.x + 1, area.y + 1, area.width - 2, area.height - 2))
+    Some(Rect::new(
+        area.x + 1,
+        area.y + 1,
+        area.width - 2,
+        area.height - 2,
+    ))
 }
 
 #[cfg(test)]
@@ -1308,7 +1468,12 @@ mod tests {
         assert_eq!(act, None);
         assert_eq!(state.last_action, None);
 
-        if let TasksSubModal::ConfirmArchive { task_id, ref message, .. } = state.sub_modal {
+        if let TasksSubModal::ConfirmArchive {
+            task_id,
+            ref message,
+            ..
+        } = state.sub_modal
+        {
             assert_eq!(task_id, 42);
             assert!(message.contains("Archivar la tarea '#42"));
         } else {
@@ -1319,7 +1484,10 @@ mod tests {
         let cancel_act = state.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::empty()));
         assert_eq!(cancel_act, None);
         assert_eq!(state.sub_modal, TasksSubModal::None);
-        assert_eq!(state.last_action, None, "Archive must not execute when canceled");
+        assert_eq!(
+            state.last_action, None,
+            "Archive must not execute when canceled"
+        );
 
         // Press 'a' again and confirm with Enter
         state.handle_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::empty()));
@@ -1344,7 +1512,10 @@ mod tests {
 
         // Press 'e'
         let act = state.handle_key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::empty()));
-        assert!(matches!(act, Some(ShepherdTasksAction::OpenEditor { task_id: 7, .. })));
+        assert!(matches!(
+            act,
+            Some(ShepherdTasksAction::OpenEditor { task_id: 7, .. })
+        ));
     }
 
     #[test]
@@ -1369,7 +1540,12 @@ mod tests {
 
         // Submit with Enter
         let act = state.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()));
-        assert_eq!(act, Some(ShepherdTasksAction::ImportGhIssue { issue_ref: "123".into() }));
+        assert_eq!(
+            act,
+            Some(ShepherdTasksAction::ImportGhIssue {
+                issue_ref: "123".into()
+            })
+        );
         assert_eq!(state.sub_modal, TasksSubModal::None);
     }
 
@@ -1431,13 +1607,20 @@ mod tests {
             links: Vec::new(),
         };
 
-        let created = shepherd_core::create_task(&temp_root, new_task).expect("create_task should succeed");
+        let created =
+            shepherd_core::create_task(&temp_root, new_task).expect("create_task should succeed");
         let row = ShepherdTaskRow::from_created_task(&created);
 
         assert_eq!(row.title, "Tarea Real F3e");
         assert_eq!(row.description, "Esta es la descripcion real de la tarea");
-        assert!(row.spec.is_empty(), "Spec should be empty when it only has the template");
-        assert_eq!(row.criteria, vec!["- [ ] Criterio uno", "- [ ] Criterio dos"]);
+        assert!(
+            row.spec.is_empty(),
+            "Spec should be empty when it only has the template"
+        );
+        assert_eq!(
+            row.criteria,
+            vec!["- [ ] Criterio uno", "- [ ] Criterio dos"]
+        );
 
         let state = ShepherdTasksState::new(vec![row]);
         let area = Rect::new(0, 0, 100, 30);
@@ -1464,12 +1647,16 @@ mod tests {
         // Now modify spec.md with custom content and check acceptance criteria
         let custom_spec = "# Spec Custom\n\nDetalles tecnicos de arquitectura.";
         std::fs::write(created.directory.join("spec.md"), custom_spec).unwrap();
-        let updated_acceptance = "# Acceptance criteria\n\n- [x] Criterio uno\n- [ ] Criterio dos\n";
+        let updated_acceptance =
+            "# Acceptance criteria\n\n- [x] Criterio uno\n- [ ] Criterio dos\n";
         std::fs::write(created.directory.join("acceptance.md"), updated_acceptance).unwrap();
 
         let updated_row = ShepherdTaskRow::from_created_task(&created);
         assert_eq!(updated_row.spec, custom_spec);
-        assert_eq!(updated_row.criteria, vec!["- [x] Criterio uno", "- [ ] Criterio dos"]);
+        assert_eq!(
+            updated_row.criteria,
+            vec!["- [x] Criterio uno", "- [ ] Criterio dos"]
+        );
 
         let updated_state = ShepherdTasksState::new(vec![updated_row]);
         let mut buffer2 = Buffer::empty(area);

@@ -22,8 +22,8 @@ use ratatui::{
 
 use shepherd_core::skills::{Level, Scope};
 
-use crate::app::state::Palette;
 use super::panel::contains_point;
+use crate::app::state::Palette;
 
 pub const SHEPHERD_SKILLS_MODAL_SIZE: (u16, u16) = (92, 26);
 
@@ -105,7 +105,9 @@ impl CreateSkillFormState {
             return Err("El nombre de la skill es obligatorio".into());
         }
         if !shepherd_core::skills::name_ok(n) {
-            return Err(format!("Nombre de skill inválido: '{n}'. Use solo minúsculas, números y guiones."));
+            return Err(format!(
+                "Nombre de skill inválido: '{n}'. Use solo minúsculas, números y guiones."
+            ));
         }
         if self.description.trim().is_empty() {
             return Err("La descripción de la skill es obligatoria".into());
@@ -300,7 +302,8 @@ impl ShepherdSkillsState {
         self.last_action = Some(action.clone());
         self.error = None;
         self.feedback_notice = Some(
-            "Cambio guardado. Recuerda: añadir o quitar skills se aplica al REINICIAR el agente.".into(),
+            "Cambio guardado. Recuerda: añadir o quitar skills se aplica al REINICIAR el agente."
+                .into(),
         );
         Ok(Some(action))
     }
@@ -311,7 +314,10 @@ impl ShepherdSkillsState {
         }
         if let Some(skill) = self.selected_agent_skill() {
             if !skill.edited {
-                self.error = Some(format!("La skill '{}' no tiene modificaciones locales que restaurar", skill.name));
+                self.error = Some(format!(
+                    "La skill '{}' no tiene modificaciones locales que restaurar",
+                    skill.name
+                ));
                 return;
             }
             let message = format!(
@@ -377,27 +383,29 @@ impl ShepherdSkillsState {
     pub fn confirm_active_action(&mut self) -> Option<ShepherdSkillsAction> {
         match std::mem::replace(&mut self.sub_modal, SkillsSubModal::None) {
             SkillsSubModal::None => None,
-            SkillsSubModal::Create(form) => {
-                match form.validate() {
-                    Ok(()) => {
-                        let action = ShepherdSkillsAction::CreateCatalogSkill {
-                            name: form.name.trim().to_string(),
-                            description: form.description.trim().to_string(),
-                            scope: form.scope,
-                            is_global: form.is_global,
-                        };
-                        self.last_action = Some(action.clone());
-                        Some(action)
-                    }
-                    Err(err) => {
-                        let mut form = form;
-                        form.error = Some(err);
-                        self.sub_modal = SkillsSubModal::Create(form);
-                        None
-                    }
+            SkillsSubModal::Create(form) => match form.validate() {
+                Ok(()) => {
+                    let action = ShepherdSkillsAction::CreateCatalogSkill {
+                        name: form.name.trim().to_string(),
+                        description: form.description.trim().to_string(),
+                        scope: form.scope,
+                        is_global: form.is_global,
+                    };
+                    self.last_action = Some(action.clone());
+                    Some(action)
                 }
-            }
-            SkillsSubModal::ConfirmRestore { agent_id, skill_name, .. } => {
+                Err(err) => {
+                    let mut form = form;
+                    form.error = Some(err);
+                    self.sub_modal = SkillsSubModal::Create(form);
+                    None
+                }
+            },
+            SkillsSubModal::ConfirmRestore {
+                agent_id,
+                skill_name,
+                ..
+            } => {
                 let action = ShepherdSkillsAction::RestoreEditedSkill {
                     agent_id,
                     skill_name,
@@ -405,7 +413,9 @@ impl ShepherdSkillsState {
                 self.last_action = Some(action.clone());
                 Some(action)
             }
-            SkillsSubModal::ConfirmDelete { skill_name, scope, .. } => {
+            SkillsSubModal::ConfirmDelete {
+                skill_name, scope, ..
+            } => {
                 let action = ShepherdSkillsAction::DeleteCatalogSkill {
                     name: skill_name,
                     scope,
@@ -485,15 +495,16 @@ impl ShepherdSkillsState {
                 }
                 _ => None,
             },
-            SkillsSubModal::ConfirmRestore { .. }
-            | SkillsSubModal::ConfirmDelete { .. } => match key.code {
-                KeyCode::Esc => {
-                    self.cancel_sub_modal();
-                    None
+            SkillsSubModal::ConfirmRestore { .. } | SkillsSubModal::ConfirmDelete { .. } => {
+                match key.code {
+                    KeyCode::Esc => {
+                        self.cancel_sub_modal();
+                        None
+                    }
+                    KeyCode::Enter => self.confirm_active_action(),
+                    _ => None,
                 }
-                KeyCode::Enter => self.confirm_active_action(),
-                _ => None,
-            },
+            }
         }
     }
 
@@ -581,7 +592,12 @@ pub fn render_shepherd_skills_panel(
     let base = Style::default().fg(palette.text).bg(palette.panel_bg);
 
     // Buttons on row 0
-    let button_bar_area = Rect::new(stack.header.x + 1, stack.header.y, stack.header.width.saturating_sub(2), 1);
+    let button_bar_area = Rect::new(
+        stack.header.x + 1,
+        stack.header.y,
+        stack.header.width.saturating_sub(2),
+        1,
+    );
     let mut btn_x = button_bar_area.x;
     let mode_label = match state.mode {
         SkillsViewMode::AgentView => "Ver Catálogo (v)",
@@ -598,11 +614,23 @@ pub fn render_shepherd_skills_panel(
     btn_x = btn_x.saturating_add(18);
 
     let new_skill_btn = Rect::new(btn_x, button_bar_area.y, 18, 1);
-    render_skills_btn(buffer, new_skill_btn, "+ Nueva skill (n)", palette.accent, palette);
+    render_skills_btn(
+        buffer,
+        new_skill_btn,
+        "+ Nueva skill (n)",
+        palette.accent,
+        palette,
+    );
     btn_x = btn_x.saturating_add(20);
 
     let restore_btn = Rect::new(btn_x, button_bar_area.y, 16, 1);
-    render_skills_btn(buffer, restore_btn, "↺ Restaurar (r)", palette.teal, palette);
+    render_skills_btn(
+        buffer,
+        restore_btn,
+        "↺ Restaurar (r)",
+        palette.teal,
+        palette,
+    );
     btn_x = btn_x.saturating_add(18);
 
     let delete_btn = Rect::new(btn_x, button_bar_area.y, 14, 1);
@@ -614,7 +642,10 @@ pub fn render_shepherd_skills_panel(
             if state.selected_agent_id.trim().is_empty() {
                 "Catálogo Completo (Repo > User > Default)".to_string()
             } else {
-                format!("Agente '{}' (rol: {})", state.selected_agent_id, state.agent_role)
+                format!(
+                    "Agente '{}' (rol: {})",
+                    state.selected_agent_id, state.agent_role
+                )
             }
         }
         SkillsViewMode::CatalogView => "Catálogo Completo (Repo > User > Default)".to_string(),
@@ -658,11 +689,20 @@ pub fn render_shepherd_skills_panel(
                     base.fg(palette.overlay0),
                 );
             } else {
-                for (idx, skill) in state.agent_skills.iter().enumerate().take(usize::from(body.height)) {
+                for (idx, skill) in state
+                    .agent_skills
+                    .iter()
+                    .enumerate()
+                    .take(usize::from(body.height))
+                {
                     let row_y = body.y + idx as u16;
                     let row_rect = Rect::new(body.x, row_y, body.width, 1);
                     let is_sel = idx == state.selected;
-                    let row_bg = if is_sel { palette.active_row_bg } else { palette.panel_bg };
+                    let row_bg = if is_sel {
+                        palette.active_row_bg
+                    } else {
+                        palette.panel_bg
+                    };
                     let row_style = base.bg(row_bg);
 
                     for rx in row_rect.x..row_rect.right() {
@@ -710,26 +750,36 @@ pub fn render_shepherd_skills_panel(
                     base.fg(palette.overlay0),
                 );
             } else {
-                for (idx, skill) in state.catalog_skills.iter().enumerate().take(usize::from(body.height)) {
+                for (idx, skill) in state
+                    .catalog_skills
+                    .iter()
+                    .enumerate()
+                    .take(usize::from(body.height))
+                {
                     let row_y = body.y + idx as u16;
                     let row_rect = Rect::new(body.x, row_y, body.width, 1);
                     let is_sel = idx == state.selected;
-                    let row_bg = if is_sel { palette.active_row_bg } else { palette.panel_bg };
+                    let row_bg = if is_sel {
+                        palette.active_row_bg
+                    } else {
+                        palette.panel_bg
+                    };
                     let row_style = base.bg(row_bg);
 
                     for rx in row_rect.x..row_rect.right() {
                         buffer[(rx, row_y)].set_symbol(" ").set_style(row_style);
                     }
 
-                    let global_icon = if skill.is_global { "[GLOBAL]" } else { "        " };
+                    let global_icon = if skill.is_global {
+                        "[GLOBAL]"
+                    } else {
+                        "        "
+                    };
                     let scope_str = skill.scope.as_str();
 
                     let text = format!(
                         "{} {:<20}  origen:{:<7}  {}",
-                        global_icon,
-                        skill.name,
-                        scope_str,
-                        skill.description,
+                        global_icon, skill.name, scope_str, skill.description,
                     );
 
                     buffer.set_stringn(
@@ -771,7 +821,10 @@ pub fn render_shepherd_skills_panel(
         }
 
         let footer_line = Line::from(vec![
-            Span::styled(" Space ", base.fg(palette.accent).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                " Space ",
+                base.fg(palette.accent).add_modifier(Modifier::BOLD),
+            ),
             Span::styled("alternar/activar  ·  ", base.fg(palette.overlay0)),
             Span::styled(" v ", base.fg(palette.blue).add_modifier(Modifier::BOLD)),
             Span::styled("cambiar vista  ·  ", base.fg(palette.overlay0)),
@@ -799,7 +852,11 @@ pub fn render_shepherd_skills_panel(
             confirm_button = conf;
             cancel_button = canc;
         }
-        SkillsSubModal::ConfirmRestore { skill_name, message, .. } => {
+        SkillsSubModal::ConfirmRestore {
+            skill_name,
+            message,
+            ..
+        } => {
             let (conf, canc) = render_skills_confirm_modal(
                 buffer,
                 inner,
@@ -812,7 +869,11 @@ pub fn render_shepherd_skills_panel(
             confirm_button = conf;
             cancel_button = canc;
         }
-        SkillsSubModal::ConfirmDelete { skill_name, scope, message } => {
+        SkillsSubModal::ConfirmDelete {
+            skill_name,
+            scope,
+            message,
+        } => {
             let (conf, canc) = render_skills_confirm_modal(
                 buffer,
                 inner,
@@ -877,10 +938,18 @@ fn render_create_skill_modal(
     let input_rect = Rect::new(inner.x + 1, inner.y + 3, inner.width.saturating_sub(2), 1);
     let input_style = Style::default().fg(palette.text).bg(palette.active_row_bg);
     for ix in input_rect.x..input_rect.right() {
-        buffer[(ix, input_rect.y)].set_symbol(" ").set_style(input_style);
+        buffer[(ix, input_rect.y)]
+            .set_symbol(" ")
+            .set_style(input_style);
     }
     let display = format!("{}█", form.name);
-    buffer.set_stringn(input_rect.x, input_rect.y, &display, usize::from(input_rect.width), input_style);
+    buffer.set_stringn(
+        input_rect.x,
+        input_rect.y,
+        &display,
+        usize::from(input_rect.width),
+        input_style,
+    );
 
     if let Some(ref err) = form.error {
         buffer.set_stringn(
@@ -896,8 +965,20 @@ fn render_create_skill_modal(
     let confirm_btn = Rect::new(inner.x + 2, btn_y, 16, 1);
     let cancel_btn = Rect::new(inner.x + 20, btn_y, 16, 1);
 
-    render_skills_btn(buffer, confirm_btn, " ↵ Crear skill ", palette.accent, palette);
-    render_skills_btn(buffer, cancel_btn, " esc Cancelar ", palette.surface_dim, palette);
+    render_skills_btn(
+        buffer,
+        confirm_btn,
+        " ↵ Crear skill ",
+        palette.accent,
+        palette,
+    );
+    render_skills_btn(
+        buffer,
+        cancel_btn,
+        " esc Cancelar ",
+        palette.surface_dim,
+        palette,
+    );
 
     (confirm_btn, cancel_btn)
 }
@@ -945,12 +1026,24 @@ fn render_skills_confirm_modal(
     let cancel_btn = Rect::new(inner.x + 4 + conf_w, btn_y, 16, 1);
 
     render_skills_btn(buffer, confirm_btn, confirm_label, confirm_color, palette);
-    render_skills_btn(buffer, cancel_btn, " esc Cancelar ", palette.surface_dim, palette);
+    render_skills_btn(
+        buffer,
+        cancel_btn,
+        " esc Cancelar ",
+        palette.surface_dim,
+        palette,
+    );
 
     (confirm_btn, cancel_btn)
 }
 
-fn render_skills_btn(buffer: &mut Buffer, rect: Rect, label: &str, bg: ratatui::style::Color, palette: &Palette) {
+fn render_skills_btn(
+    buffer: &mut Buffer,
+    rect: Rect,
+    label: &str,
+    bg: ratatui::style::Color,
+    palette: &Palette,
+) {
     if rect.width < 2 || rect.height < 1 {
         return;
     }
@@ -958,7 +1051,10 @@ fn render_skills_btn(buffer: &mut Buffer, rect: Rect, label: &str, bg: ratatui::
         ratatui::style::Color::Reset => palette.surface_dim,
         color => color,
     };
-    let style = Style::default().fg(contrast_fg).bg(bg).add_modifier(Modifier::BOLD);
+    let style = Style::default()
+        .fg(contrast_fg)
+        .bg(bg)
+        .add_modifier(Modifier::BOLD);
     buffer.set_style(rect, style);
     buffer.set_stringn(rect.x, rect.y, label, usize::from(rect.width), style);
 }
@@ -973,7 +1069,10 @@ fn draw_skills_box(
         return None;
     }
     let background = Style::default().bg(bg).remove_modifier(Modifier::DIM);
-    let border = Style::default().fg(border_color).bg(bg).remove_modifier(Modifier::DIM);
+    let border = Style::default()
+        .fg(border_color)
+        .bg(bg)
+        .remove_modifier(Modifier::DIM);
 
     for y in area.y..area.bottom() {
         for x in area.x..area.right() {
@@ -982,18 +1081,37 @@ fn draw_skills_box(
     }
     for x in area.x..area.right() {
         buffer[(x, area.y)]
-            .set_symbol(if x == area.x { "┌" } else if x + 1 == area.right() { "┐" } else { "─" })
+            .set_symbol(if x == area.x {
+                "┌"
+            } else if x + 1 == area.right() {
+                "┐"
+            } else {
+                "─"
+            })
             .set_style(border);
         let bottom_y = area.bottom() - 1;
         buffer[(x, bottom_y)]
-            .set_symbol(if x == area.x { "└" } else if x + 1 == area.right() { "┘" } else { "─" })
+            .set_symbol(if x == area.x {
+                "└"
+            } else if x + 1 == area.right() {
+                "┘"
+            } else {
+                "─"
+            })
             .set_style(border);
     }
     for y in area.y + 1..area.bottom() - 1 {
         buffer[(area.x, y)].set_symbol("│").set_style(border);
-        buffer[(area.right() - 1, y)].set_symbol("│").set_style(border);
+        buffer[(area.right() - 1, y)]
+            .set_symbol("│")
+            .set_style(border);
     }
-    Some(Rect::new(area.x + 1, area.y + 1, area.width - 2, area.height - 2))
+    Some(Rect::new(
+        area.x + 1,
+        area.y + 1,
+        area.width - 2,
+        area.height - 2,
+    ))
 }
 
 #[cfg(test)]
@@ -1049,52 +1167,63 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
 
-        assert!(text.contains("REINICIAR el agente"), "Must tell user changes apply on agent restart");
-        assert!(text.contains("sí llega en vivo"), "Must tell user text edit applies live");
+        assert!(
+            text.contains("REINICIAR el agente"),
+            "Must tell user changes apply on agent restart"
+        );
+        assert!(
+            text.contains("sí llega en vivo"),
+            "Must tell user text edit applies live"
+        );
         assert!(text.contains("nivel:global"));
         assert!(text.contains("nivel:role"));
         assert!(text.contains("nivel:session"));
-        assert!(text.contains("(editada)"), "Must indicate if skill was edited");
+        assert!(
+            text.contains("(editada)"),
+            "Must indicate if skill was edited"
+        );
     }
 
     #[test]
     fn test_shadowed_skill_toggle_fails_with_descriptive_error() {
-        let skills = vec![
-            AgentSkillItem {
-                name: "code-review".into(),
-                description: "Review checklists".into(),
-                level: Level::Role,
-                scope: Scope::Default,
-                active: true,
-                edited: false,
-                shadowed_by: Some("repo".into()), // Shadowed by repository level!
-            },
-        ];
+        let skills = vec![AgentSkillItem {
+            name: "code-review".into(),
+            description: "Review checklists".into(),
+            level: Level::Role,
+            scope: Scope::Default,
+            active: true,
+            edited: false,
+            shadowed_by: Some("repo".into()), // Shadowed by repository level!
+        }];
 
         let mut state = ShepherdSkillsState::new("coder-1", "coder", skills, Vec::new());
         state.open = true;
 
         // Press Space to toggle
         let res = state.toggle_current_agent_skill();
-        assert!(res.is_err(), "Must fail when change has no effect due to shadowing");
+        assert!(
+            res.is_err(),
+            "Must fail when change has no effect due to shadowing"
+        );
         let err = res.err().unwrap();
-        assert!(err.contains("repo"), "Error must name the higher layer that shadows it");
+        assert!(
+            err.contains("repo"),
+            "Error must name the higher layer that shadows it"
+        );
         assert!(state.error.is_some());
     }
 
     #[test]
     fn test_restore_edited_skill_requires_confirmation_destructive_guard() {
-        let skills = vec![
-            AgentSkillItem {
-                name: "implement-task".into(),
-                description: "Focused tasks".into(),
-                level: Level::Role,
-                scope: Scope::Default,
-                active: true,
-                edited: true, // Edited!
-                shadowed_by: None,
-            },
-        ];
+        let skills = vec![AgentSkillItem {
+            name: "implement-task".into(),
+            description: "Focused tasks".into(),
+            level: Level::Role,
+            scope: Scope::Default,
+            active: true,
+            edited: true, // Edited!
+            shadowed_by: None,
+        }];
 
         let mut state = ShepherdSkillsState::new("coder-1", "coder", skills, Vec::new());
         state.open = true;
@@ -1105,7 +1234,12 @@ mod tests {
         assert_eq!(act, None);
         assert_eq!(state.last_action, None);
 
-        if let SkillsSubModal::ConfirmRestore { ref skill_name, ref message, .. } = state.sub_modal {
+        if let SkillsSubModal::ConfirmRestore {
+            ref skill_name,
+            ref message,
+            ..
+        } = state.sub_modal
+        {
             assert_eq!(skill_name, "implement-task");
             assert!(message.contains("Se perderán las modificaciones locales"));
         } else {
@@ -1158,7 +1292,11 @@ mod tests {
         // Selected is index 0: "conventional-commits" (Default)
         // Try deleting default skill -> rejected!
         state.open_delete_catalog_confirm();
-        assert_eq!(state.sub_modal, SkillsSubModal::None, "Default skills cannot enter delete confirmation");
+        assert_eq!(
+            state.sub_modal,
+            SkillsSubModal::None,
+            "Default skills cannot enter delete confirmation"
+        );
         assert!(state.error.as_ref().unwrap().contains("predeterminadas"));
 
         // Select index 1: "my-custom-skill" (User)
@@ -1171,7 +1309,12 @@ mod tests {
         assert_eq!(act, None);
         assert_eq!(state.last_action, None);
 
-        if let SkillsSubModal::ConfirmDelete { ref skill_name, scope, ref message } = state.sub_modal {
+        if let SkillsSubModal::ConfirmDelete {
+            ref skill_name,
+            scope,
+            ref message,
+        } = state.sub_modal
+        {
             assert_eq!(skill_name, "my-custom-skill");
             assert_eq!(scope, Scope::User);
             assert!(message.contains("eliminarán los archivos"));
@@ -1199,16 +1342,14 @@ mod tests {
 
     #[test]
     fn test_skills_view_without_agent_shows_catalog_and_single_delete_button() {
-        let catalog = vec![
-            CatalogSkillItem {
-                name: "git-review".into(),
-                description: "Review pull requests".into(),
-                scope: Scope::Default,
-                is_global: false,
-                enabled: true,
-                problems: Vec::new(),
-            },
-        ];
+        let catalog = vec![CatalogSkillItem {
+            name: "git-review".into(),
+            description: "Review pull requests".into(),
+            scope: Scope::Default,
+            is_global: false,
+            enabled: true,
+            problems: Vec::new(),
+        }];
         let state = ShepherdSkillsState::new("", "", Vec::new(), catalog);
         assert_eq!(state.mode, SkillsViewMode::CatalogView);
 
@@ -1226,37 +1367,47 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
 
-        assert!(text.contains("Catálogo Completo"), "Must show catalog header without agent");
+        assert!(
+            text.contains("Catálogo Completo"),
+            "Must show catalog header without agent"
+        );
         assert!(!text.contains("Agente ''"), "Must NOT show Agente ''");
         assert!(text.contains("git-review"), "Must show catalog skills");
 
         // "Borrar (d)" must appear exactly once in the action bar, and "Borrar (D)" must not appear
         let count_d = text.matches("Borrar (d)").count();
         let count_capital_d = text.matches("Borrar (D)").count();
-        assert_eq!(count_d, 1, "Borrar (d) must appear exactly once in action bar");
+        assert_eq!(
+            count_d, 1,
+            "Borrar (d) must appear exactly once in action bar"
+        );
         assert_eq!(count_capital_d, 0, "Borrar (D) must NOT appear");
 
         // Action bar must fit within the area without being cut off
-        assert!(rendered.delete_skill_button.right() <= area.width, "Action bar must fit without cutoff");
+        assert!(
+            rendered.delete_skill_button.right() <= area.width,
+            "Action bar must fit without cutoff"
+        );
     }
 
     #[test]
     fn test_delete_shortcut_accepts_both_lower_and_upper_case() {
-        let catalog = vec![
-            CatalogSkillItem {
-                name: "custom".into(),
-                description: "User skill".into(),
-                scope: Scope::User,
-                is_global: false,
-                enabled: true,
-                problems: Vec::new(),
-            },
-        ];
+        let catalog = vec![CatalogSkillItem {
+            name: "custom".into(),
+            description: "User skill".into(),
+            scope: Scope::User,
+            is_global: false,
+            enabled: true,
+            problems: Vec::new(),
+        }];
         let mut state = ShepherdSkillsState::new("", "", Vec::new(), catalog);
         state.open = true;
 
         // Press 'D' (uppercase)
         state.handle_key(KeyEvent::new(KeyCode::Char('D'), KeyModifiers::empty()));
-        assert!(matches!(state.sub_modal, SkillsSubModal::ConfirmDelete { .. }), "Uppercase 'D' must trigger delete confirm");
+        assert!(
+            matches!(state.sub_modal, SkillsSubModal::ConfirmDelete { .. }),
+            "Uppercase 'D' must trigger delete confirm"
+        );
     }
 }

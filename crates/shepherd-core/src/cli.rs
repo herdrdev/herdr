@@ -1,6 +1,7 @@
 //! Reusable CLI entrypoint for Shepherd (`shepherd <subcommand>` and `shepherd shepherd <subcommand>`).
 
 use crate::bus::MessageBus;
+use crate::shepherd::{self, ShepherdClient};
 use crate::{
     agents_json, archive_task,
     config::{self, available_vendors, load_config, resolve_all, validate},
@@ -12,7 +13,6 @@ use crate::{
     terminals::{connect_terminals, Terminals},
     touch_task, validate_plan, write_task_section, CreatedTask, NewTask,
 };
-use crate::shepherd::{self, ShepherdClient};
 use serde_json::Value;
 use std::{
     env,
@@ -106,7 +106,14 @@ where
         None
     };
 
-    match dispatch_cli(root, clean_args, terminals, server_client.as_ref(), json, writer) {
+    match dispatch_cli(
+        root,
+        clean_args,
+        terminals,
+        server_client.as_ref(),
+        json,
+        writer,
+    ) {
         Ok(()) => Ok(()),
         Err(err) => {
             if json {
@@ -245,9 +252,7 @@ fn dispatch_cli(
         "approve" if rest.len() == 1 => {
             approve_command(root, &command, &rest[0], server, json, writer)
         }
-        "reject" if !rest.is_empty() => {
-            reject_command(root, &command, rest, server, json, writer)
-        }
+        "reject" if !rest.is_empty() => reject_command(root, &command, rest, server, json, writer),
         "mcp" if command == "serve" && rest.len() <= 1 => {
             let port = rest
                 .first()
@@ -257,9 +262,7 @@ fn dispatch_cli(
             crate::mcp::serve_with_terminals(port, terminals)
         }
         "config" if command == "path" && rest.is_empty() => config_paths(root, json, writer),
-        "config" if command == "validate" && rest.is_empty() => {
-            config_validate(root, json, writer)
-        }
+        "config" if command == "validate" && rest.is_empty() => config_validate(root, json, writer),
         _ => usage(),
     }
 }
@@ -431,7 +434,10 @@ fn print_human_spawn_from_value(
     let model = data.get("model").and_then(Value::as_str).unwrap_or("");
     let model = if model.is_empty() { "default" } else { model };
     let pane = data.get("pane").and_then(Value::as_str).unwrap_or("-");
-    writeln!(writer, "started {id} ({vendor}/{model}) in Shepherd pane {pane}")?;
+    writeln!(
+        writer,
+        "started {id} ({vendor}/{model}) in Shepherd pane {pane}"
+    )?;
     let worktree = data.get("worktree").and_then(Value::as_str).unwrap_or("");
     let branch = data.get("branch").and_then(Value::as_str).unwrap_or("");
     if !worktree.is_empty() {
@@ -479,8 +485,14 @@ fn kill_command(
         if json {
             writeln!(writer, "{}", serde_json::to_string_pretty(&data)?)?;
         } else {
-            let kid = data.get("id").and_then(Value::as_str).unwrap_or(id.as_str());
-            let state = data.get("state").and_then(Value::as_str).unwrap_or("killed");
+            let kid = data
+                .get("id")
+                .and_then(Value::as_str)
+                .unwrap_or(id.as_str());
+            let state = data
+                .get("state")
+                .and_then(Value::as_str)
+                .unwrap_or("killed");
             writeln!(writer, "killed agent {kid} ({state})")?;
         }
         return Ok(());
@@ -594,11 +606,11 @@ fn focus_command(
         if json {
             writeln!(writer, "{}", serde_json::to_string_pretty(&data)?)?;
         } else {
-            let fid = data.get("id").and_then(Value::as_str).unwrap_or(id.as_str());
-            writeln!(
-                writer,
-                "focused agent {fid} in native shepherd terminal"
-            )?;
+            let fid = data
+                .get("id")
+                .and_then(Value::as_str)
+                .unwrap_or(id.as_str());
+            writeln!(writer, "focused agent {fid} in native shepherd terminal")?;
         }
         return Ok(());
     }
@@ -674,7 +686,9 @@ fn run_command(
             loop {
                 std::thread::sleep(Duration::from_millis(500));
                 if start.elapsed() > max_timeout {
-                    return Err(format!("run for task {reference} timed out after 30 minutes").into());
+                    return Err(
+                        format!("run for task {reference} timed out after 30 minutes").into(),
+                    );
                 }
                 let runs_data = client.shepherd_call(
                     "runs",
@@ -682,20 +696,28 @@ fn run_command(
                 )?;
                 if let Some(runs) = runs_data.as_array() {
                     let r_opt = runs.iter().find(|item| {
-                        item.get("task_id").and_then(Value::as_u64).map(|n| n.to_string()) == Some(reference.clone())
+                        item.get("task_id")
+                            .and_then(Value::as_u64)
+                            .map(|n| n.to_string())
+                            == Some(reference.clone())
                             || item.get("task_id").and_then(Value::as_str) == Some(&reference)
                     });
                     if let Some(r) = r_opt {
                         let status = r.get("status").and_then(Value::as_str).unwrap_or("");
                         let pending_gate = r.get("pending_gate");
                         let has_gate = pending_gate.is_some() && !pending_gate.unwrap().is_null();
-                        if has_gate || matches!(status, "done" | "completed" | "failed" | "cancelled") {
+                        if has_gate
+                            || matches!(status, "done" | "completed" | "failed" | "cancelled")
+                        {
                             if json {
                                 writeln!(writer, "{}", serde_json::to_string_pretty(&r)?)?;
                             } else if has_gate {
                                 writeln!(writer, "run for task {reference} is waiting for human approval at a gate; inspect with `shepherd runs list` or approve with `shepherd approve`")?;
                             } else {
-                                writeln!(writer, "run for task {reference} finished with status: {status}")?;
+                                writeln!(
+                                    writer,
+                                    "run for task {reference} finished with status: {status}"
+                                )?;
                             }
                             return Ok(());
                         }
@@ -769,7 +791,11 @@ fn print_human_run(
     writer: &mut dyn std::io::Write,
     data: &Value,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    if data.get("accepted").and_then(Value::as_bool).unwrap_or(false) {
+    if data
+        .get("accepted")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
         let task = data.get("task").and_then(Value::as_str).unwrap_or("");
         let job = data.get("job").and_then(Value::as_str).unwrap_or("");
         writeln!(writer, "run started in background for task {task} (job: {job}); use --wait to wait for completion or inspect with `shepherd runs list`")?;
@@ -868,7 +894,11 @@ fn approve_command(
                 "approved plan for task {task}; rerun shepherd run to start coders"
             )?;
         } else {
-            let pr = data.get("pr").or_else(|| data.get("url")).and_then(Value::as_str).unwrap_or("");
+            let pr = data
+                .get("pr")
+                .or_else(|| data.get("url"))
+                .and_then(Value::as_str)
+                .unwrap_or("");
             writeln!(writer, "created pull request: {pr}")?;
         }
         return Ok(());
@@ -965,7 +995,10 @@ fn reject_command(
                 writer,
                 "rejected {} for task {task}{}",
                 target,
-                reason.as_deref().map(|r| format!(": {r}")).unwrap_or_default()
+                reason
+                    .as_deref()
+                    .map(|r| format!(": {r}"))
+                    .unwrap_or_default()
             )?;
         }
         return Ok(());
@@ -987,7 +1020,10 @@ fn reject_command(
             writeln!(
                 writer,
                 "rejected plan for task {task}{}",
-                reason.as_deref().map(|r| format!(": {r}")).unwrap_or_default()
+                reason
+                    .as_deref()
+                    .map(|r| format!(": {r}"))
+                    .unwrap_or_default()
             )?;
         }
         return Ok(());
@@ -1011,7 +1047,10 @@ fn reject_command(
         writeln!(
             writer,
             "rejected subtask {number} for task {task}{}",
-            reason.as_deref().map(|r| format!(": {r}")).unwrap_or_default()
+            reason
+                .as_deref()
+                .map(|r| format!(": {r}"))
+                .unwrap_or_default()
         )?;
     }
     Ok(())
@@ -1110,7 +1149,12 @@ fn runs_list(
             let has_plan = t.directory.join("plan.md").is_file();
             let pending_gate = if t.status.waiting == "plan" {
                 Some(serde_json::json!("plan"))
-            } else if let Some(subtask) = t.status.subtasks.iter().find(|s| s.state == "awaiting-approval") {
+            } else if let Some(subtask) = t
+                .status
+                .subtasks
+                .iter()
+                .find(|s| s.state == "awaiting-approval")
+            {
                 Some(serde_json::json!({
                     "kind": "push_pr",
                     "subtask": subtask.number,
@@ -1119,19 +1163,29 @@ fn runs_list(
                 None
             };
             let total = t.status.subtasks.len();
-            let done_count = t.status.subtasks.iter().filter(|s| matches!(s.state.as_str(), "pr" | "done")).count();
-            let subtasks: Vec<serde_json::Value> = t.status.subtasks.iter().map(|s| {
-                serde_json::json!({
-                    "n": s.number,
-                    "title": s.title,
-                    "state": s.state,
-                    "branch": s.branch,
-                    "pr": s.pr,
-                    "note": s.note,
-                    "coder": s.coder,
-                    "reviewer": s.reviewer,
+            let done_count = t
+                .status
+                .subtasks
+                .iter()
+                .filter(|s| matches!(s.state.as_str(), "pr" | "done"))
+                .count();
+            let subtasks: Vec<serde_json::Value> = t
+                .status
+                .subtasks
+                .iter()
+                .map(|s| {
+                    serde_json::json!({
+                        "n": s.number,
+                        "title": s.title,
+                        "state": s.state,
+                        "branch": s.branch,
+                        "pr": s.pr,
+                        "note": s.note,
+                        "coder": s.coder,
+                        "reviewer": s.reviewer,
+                    })
                 })
-            }).collect();
+                .collect();
             serde_json::json!({
                 "task_id": t.status.id,
                 "task_title": t.status.title,
@@ -1229,9 +1283,7 @@ fn print_human_git_status(
     writer: &mut dyn std::io::Write,
     data: &Value,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let worktrees = data
-        .get("worktrees")
-        .and_then(Value::as_array);
+    let worktrees = data.get("worktrees").and_then(Value::as_array);
     let list = match worktrees {
         Some(arr) => arr,
         None => return Ok(()),
@@ -1373,7 +1425,11 @@ fn config_paths(
         return Ok(());
     }
     writeln!(writer, "global\t{}", config::global_config_path().display())?;
-    writeln!(writer, "project\t{}", config::project_config_path(&root).display())?;
+    writeln!(
+        writer,
+        "project\t{}",
+        config::project_config_path(&root).display()
+    )?;
     writeln!(writer, "state\t{}", config::state_dir().display())?;
     Ok(())
 }
@@ -1415,7 +1471,11 @@ fn attach_to_shepherd(
         [] => (None, false),
         [target] => (Some(target.as_str()), false),
         [target, flag] if flag == "--takeover" => (Some(target.as_str()), true),
-        _ => return Err("usage: shepherd attach [shepherd-agent-name-or-pane-id] [--takeover]".into()),
+        _ => {
+            return Err(
+                "usage: shepherd attach [shepherd-agent-name-or-pane-id] [--takeover]".into(),
+            )
+        }
     };
     match terminals {
         Some(t) => t.attach(target, takeover)?,
@@ -1486,10 +1546,7 @@ fn create_new_task(
                 .and_then(|s| s.get("slug"))
                 .and_then(Value::as_str)
                 .unwrap_or("");
-            let dir = data
-                .get("directory")
-                .and_then(Value::as_str)
-                .unwrap_or("");
+            let dir = data.get("directory").and_then(Value::as_str).unwrap_or("");
             writeln!(writer, "created task {id}-{slug}")?;
             writeln!(writer, "{dir}")?;
         }
@@ -1499,7 +1556,11 @@ fn create_new_task(
     if json {
         writeln!(writer, "{}", serde_json::to_string_pretty(&task)?)?;
     } else {
-        writeln!(writer, "created task {}-{}", task.status.id, task.status.slug)?;
+        writeln!(
+            writer,
+            "created task {}-{}",
+            task.status.id, task.status.slug
+        )?;
         writeln!(writer, "{}", task.directory.display())?;
     }
     Ok(())
@@ -1549,7 +1610,11 @@ fn print_human_tasks(
     archived: bool,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     if tasks.is_empty() {
-        writeln!(writer, "no {}tasks", if archived { "archived " } else { "" })?;
+        writeln!(
+            writer,
+            "no {}tasks",
+            if archived { "archived " } else { "" }
+        )?;
         return Ok(());
     }
     writeln!(writer, "ID\tSTATE\tTITLE\tISSUE\tPR")?;
@@ -1581,7 +1646,11 @@ fn print_human_tasks_from_json(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let arr = data.as_array().map(|a| a.as_slice()).unwrap_or(&[]);
     if arr.is_empty() {
-        writeln!(writer, "no {}tasks", if archived { "archived " } else { "" })?;
+        writeln!(
+            writer,
+            "no {}tasks",
+            if archived { "archived " } else { "" }
+        )?;
         return Ok(());
     }
     writeln!(writer, "ID\tSTATE\tTITLE\tISSUE\tPR")?;
@@ -1862,13 +1931,7 @@ fn print_human_patterns_list(
         writeln!(
             writer,
             "{}\t{}\t{}\t{}\t{}\t{}\t{}",
-            p.name,
-            p.kind,
-            p.source,
-            shadowed_str,
-            p.agents_count,
-            p.topics_count,
-            p.description
+            p.name, p.kind, p.source, shadowed_str, p.agents_count, p.topics_count, p.description
         )?;
     }
     Ok(())
@@ -1959,7 +2022,10 @@ fn print_human_pattern_detail(
         .get("path")
         .and_then(Value::as_str)
         .unwrap_or("(built-in template)");
-    let desc = data.get("description").and_then(Value::as_str).unwrap_or("");
+    let desc = data
+        .get("description")
+        .and_then(Value::as_str)
+        .unwrap_or("");
 
     writeln!(writer, "Pattern: {name} ({kind})")?;
     writeln!(writer, "Source:  {source} ({path})")?;
@@ -2037,7 +2103,10 @@ fn print_human_pattern_detail(
         if !problems.is_empty() {
             writeln!(writer, "Validation Diagnostics:")?;
             for prob in problems {
-                let sev = prob.get("severity").and_then(Value::as_str).unwrap_or("warning");
+                let sev = prob
+                    .get("severity")
+                    .and_then(Value::as_str)
+                    .unwrap_or("warning");
                 let path = prob.get("path").and_then(Value::as_str).unwrap_or("-");
                 let msg = prob.get("message").and_then(Value::as_str).unwrap_or("");
                 writeln!(writer, "  [{sev}] {path}: {msg}")?;
@@ -2216,10 +2285,17 @@ fn print_human_validation_problems(
     data: &Value,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let valid = data.get("valid").and_then(Value::as_bool).unwrap_or(false);
-    let problems = data.get("problems").and_then(Value::as_array).map(|a| a.as_slice()).unwrap_or(&[]);
+    let problems = data
+        .get("problems")
+        .and_then(Value::as_array)
+        .map(|a| a.as_slice())
+        .unwrap_or(&[]);
 
     if valid && problems.is_empty() {
-        writeln!(writer, "OK: pattern '{label}' is valid (0 errors, 0 warnings)")?;
+        writeln!(
+            writer,
+            "OK: pattern '{label}' is valid (0 errors, 0 warnings)"
+        )?;
         return Ok(());
     }
 
@@ -2230,7 +2306,10 @@ fn print_human_validation_problems(
     }
 
     for p in problems {
-        let sev = p.get("severity").and_then(Value::as_str).unwrap_or("warning");
+        let sev = p
+            .get("severity")
+            .and_then(Value::as_str)
+            .unwrap_or("warning");
         let path = p.get("path").and_then(Value::as_str).unwrap_or("-");
         let msg = p.get("message").and_then(Value::as_str).unwrap_or("");
         writeln!(writer, "  [{sev}] {path}: {msg}")?;
@@ -2349,7 +2428,10 @@ fn topic_list_command(
     Ok(())
 }
 
-fn print_human_topics(writer: &mut dyn std::io::Write, list: &[crate::bus::TopicSummary]) -> std::io::Result<()> {
+fn print_human_topics(
+    writer: &mut dyn std::io::Write,
+    list: &[crate::bus::TopicSummary],
+) -> std::io::Result<()> {
     if list.is_empty() {
         writeln!(writer, "no topics found")?;
         return Ok(());
@@ -2361,7 +2443,10 @@ fn print_human_topics(writer: &mut dyn std::io::Write, list: &[crate::bus::Topic
     Ok(())
 }
 
-fn print_human_topics_from_value(writer: &mut dyn std::io::Write, data: &Value) -> std::io::Result<()> {
+fn print_human_topics_from_value(
+    writer: &mut dyn std::io::Write,
+    data: &Value,
+) -> std::io::Result<()> {
     let Some(arr) = data.as_array() else {
         writeln!(writer, "{}", data)?;
         return Ok(());
@@ -2374,7 +2459,10 @@ fn print_human_topics_from_value(writer: &mut dyn std::io::Write, data: &Value) 
     for item in arr {
         let name = item.get("name").and_then(Value::as_str).unwrap_or("-");
         let partitions = item.get("partitions").and_then(Value::as_u64).unwrap_or(1);
-        let count = item.get("messages_count").and_then(Value::as_u64).unwrap_or(0);
+        let count = item
+            .get("messages_count")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
         writeln!(writer, "{name}\t{partitions}\t{count}")?;
     }
     Ok(())
@@ -2403,7 +2491,8 @@ fn topic_create_command(
             _ => {}
         }
     }
-    let name = name.ok_or("topic name is required: shepherd topic create <name> [--partitions <n>]")?;
+    let name =
+        name.ok_or("topic name is required: shepherd topic create <name> [--partitions <n>]")?;
     if let Some(client) = server {
         let res = client.shepherd_call(
             "topic_create",
@@ -2415,7 +2504,11 @@ fn topic_create_command(
         if json {
             writeln!(writer, "{}", serde_json::to_string_pretty(&res)?)?;
         } else {
-            writeln!(writer, "created topic '{}' with {} partition(s)", name, partitions)?;
+            writeln!(
+                writer,
+                "created topic '{}' with {} partition(s)",
+                name, partitions
+            )?;
         }
         return Ok(());
     }
@@ -2425,7 +2518,11 @@ fn topic_create_command(
     if json {
         writeln!(writer, "{}", serde_json::to_string_pretty(&topic)?)?;
     } else {
-        writeln!(writer, "created topic '{}' with {} partition(s)", topic.name, topic.partitions)?;
+        writeln!(
+            writer,
+            "created topic '{}' with {} partition(s)",
+            topic.name, topic.partitions
+        )?;
     }
     Ok(())
 }
@@ -2486,7 +2583,11 @@ fn topic_publish_command(
             let id = res["id"].as_i64().unwrap_or(0);
             let part = res["partition"].as_u64().unwrap_or(0);
             let offset = res["offset"].as_u64().unwrap_or(0);
-            writeln!(writer, "published message {} to {}[{}]#{}", id, topic, part, offset)?;
+            writeln!(
+                writer,
+                "published message {} to {}[{}]#{}",
+                id, topic, part, offset
+            )?;
         }
         return Ok(());
     }
@@ -2496,7 +2597,11 @@ fn topic_publish_command(
     if json {
         writeln!(writer, "{}", serde_json::to_string_pretty(&msg)?)?;
     } else {
-        writeln!(writer, "published message {} to {}[{}]#{}", msg.id, msg.topic, msg.partition, msg.offset)?;
+        writeln!(
+            writer,
+            "published message {} to {}[{}]#{}",
+            msg.id, msg.topic, msg.partition, msg.offset
+        )?;
     }
     Ok(())
 }
@@ -2538,7 +2643,9 @@ fn topic_replay_inner(
     while let Some(arg) = iter.next() {
         match arg.as_str() {
             "--partition" => partition = iter.next().and_then(|v| v.parse().ok()),
-            "--from" | "--from-offset" => from_offset = iter.next().and_then(|v| v.parse().ok()).unwrap_or(0),
+            "--from" | "--from-offset" => {
+                from_offset = iter.next().and_then(|v| v.parse().ok()).unwrap_or(0)
+            }
             "--limit" => limit = iter.next().and_then(|v| v.parse().ok()),
             other if !other.starts_with("--") && topic.is_none() => {
                 topic = Some(other.to_string());
@@ -2578,13 +2685,20 @@ fn topic_replay_inner(
     Ok(())
 }
 
-fn print_human_topic_messages(writer: &mut dyn std::io::Write, msgs: &[crate::bus::Message]) -> std::io::Result<()> {
+fn print_human_topic_messages(
+    writer: &mut dyn std::io::Write,
+    msgs: &[crate::bus::Message],
+) -> std::io::Result<()> {
     if msgs.is_empty() {
         writeln!(writer, "no messages")?;
         return Ok(());
     }
     for m in msgs {
-        let key_str = if m.key.is_empty() { String::new() } else { format!(" (key={})", m.key) };
+        let key_str = if m.key.is_empty() {
+            String::new()
+        } else {
+            format!(" (key={})", m.key)
+        };
         writeln!(
             writer,
             "[{}] {}[{}]:#{} from {}{}: {}",
@@ -2594,7 +2708,10 @@ fn print_human_topic_messages(writer: &mut dyn std::io::Write, msgs: &[crate::bu
     Ok(())
 }
 
-fn print_human_topic_messages_from_value(writer: &mut dyn std::io::Write, data: &Value) -> std::io::Result<()> {
+fn print_human_topic_messages_from_value(
+    writer: &mut dyn std::io::Write,
+    data: &Value,
+) -> std::io::Result<()> {
     let Some(arr) = data.as_array() else {
         writeln!(writer, "{}", data)?;
         return Ok(());
@@ -2611,8 +2728,15 @@ fn print_human_topic_messages_from_value(writer: &mut dyn std::io::Write, data: 
         let from = m.get("from").and_then(Value::as_str).unwrap_or("-");
         let content = m.get("content").and_then(Value::as_str).unwrap_or("");
         let key = m.get("key").and_then(Value::as_str).unwrap_or("");
-        let key_str = if key.is_empty() { String::new() } else { format!(" (key={key})") };
-        writeln!(writer, "[{ts}] {topic}[{partition}]:#{offset} from {from}{key_str}: {content}")?;
+        let key_str = if key.is_empty() {
+            String::new()
+        } else {
+            format!(" (key={key})")
+        };
+        writeln!(
+            writer,
+            "[{ts}] {topic}[{partition}]:#{offset} from {from}{key_str}: {content}"
+        )?;
     }
     Ok(())
 }
@@ -2649,23 +2773,45 @@ fn topic_groups_command(
     Ok(())
 }
 
-fn print_human_consumer_groups(writer: &mut dyn std::io::Write, groups: &[crate::bus::ConsumerGroupSummary]) -> std::io::Result<()> {
+fn print_human_consumer_groups(
+    writer: &mut dyn std::io::Write,
+    groups: &[crate::bus::ConsumerGroupSummary],
+) -> std::io::Result<()> {
     if groups.is_empty() {
         writeln!(writer, "no consumer groups")?;
         return Ok(());
     }
     writeln!(writer, "TOPIC\tGROUP\tMEMBERS\tOFFSETS")?;
     for g in groups {
-        let members_str = if g.members.is_empty() { "-".into() } else { g.members.join(",") };
-        let mut offsets_vec: Vec<_> = g.committed_offsets.iter().map(|(p, off)| format!("p{p}:#{off}")).collect();
+        let members_str = if g.members.is_empty() {
+            "-".into()
+        } else {
+            g.members.join(",")
+        };
+        let mut offsets_vec: Vec<_> = g
+            .committed_offsets
+            .iter()
+            .map(|(p, off)| format!("p{p}:#{off}"))
+            .collect();
         offsets_vec.sort();
-        let offsets_str = if offsets_vec.is_empty() { "-".into() } else { offsets_vec.join(", ") };
-        writeln!(writer, "{}\t{}\t{}\t{}", g.topic, g.group, members_str, offsets_str)?;
+        let offsets_str = if offsets_vec.is_empty() {
+            "-".into()
+        } else {
+            offsets_vec.join(", ")
+        };
+        writeln!(
+            writer,
+            "{}\t{}\t{}\t{}",
+            g.topic, g.group, members_str, offsets_str
+        )?;
     }
     Ok(())
 }
 
-fn print_human_consumer_groups_from_value(writer: &mut dyn std::io::Write, data: &Value) -> std::io::Result<()> {
+fn print_human_consumer_groups_from_value(
+    writer: &mut dyn std::io::Write,
+    data: &Value,
+) -> std::io::Result<()> {
     let Some(arr) = data.as_array() else {
         writeln!(writer, "{}", data)?;
         return Ok(());
@@ -2680,7 +2826,11 @@ fn print_human_consumer_groups_from_value(writer: &mut dyn std::io::Write, data:
         let group = item.get("group").and_then(Value::as_str).unwrap_or("-");
         let members_arr = item.get("members").and_then(Value::as_array);
         let members_str = match members_arr {
-            Some(m) if !m.is_empty() => m.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(","),
+            Some(m) if !m.is_empty() => m
+                .iter()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>()
+                .join(","),
             _ => "-".into(),
         };
         let offsets_map = item.get("committed_offsets").and_then(Value::as_object);
@@ -2783,7 +2933,14 @@ mod tests {
     fn attach_delegates_to_the_selected_shepherd_session_and_agent() {
         assert_eq!(
             shepherd_attach_args("shepherd", Some("coder-1"), true),
-            ["--session", "shepherd", "agent", "attach", "coder-1", "--takeover"]
+            [
+                "--session",
+                "shepherd",
+                "agent",
+                "attach",
+                "coder-1",
+                "--takeover"
+            ]
         );
         assert_eq!(
             shepherd_attach_args("-", Some("w1:p2"), false),
@@ -2804,8 +2961,10 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let root = std::env::temp_dir()
-            .join(format!("shepherd-plan-command-{}-{nonce}", std::process::id()));
+        let root = std::env::temp_dir().join(format!(
+            "shepherd-plan-command-{}-{nonce}",
+            std::process::id()
+        ));
         std::fs::create_dir_all(&root).unwrap();
         let task = create_task(
             &root,
@@ -2843,8 +3002,10 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let root = std::env::temp_dir()
-            .join(format!("shepherd-json-command-{}-{nonce}", std::process::id()));
+        let root = std::env::temp_dir().join(format!(
+            "shepherd-json-command-{}-{nonce}",
+            std::process::id()
+        ));
         std::fs::create_dir_all(&root).unwrap();
         create_task(
             &root,
@@ -2862,21 +3023,9 @@ mod tests {
 
         run_with_buf(&root, &["agents", "--json"], None, None).unwrap();
         run_with_buf(&root, &["task", "list", "--json"], None, None).unwrap();
-        run_with_buf(
-            &root,
-            &["task", "list", "--archived", "--json"],
-            None,
-            None,
-        )
-        .unwrap();
+        run_with_buf(&root, &["task", "list", "--archived", "--json"], None, None).unwrap();
         run_with_buf(&root, &["task", "show", "1", "--json"], None, None).unwrap();
-        run_with_buf(
-            &root,
-            &["task", "show", "1", "spec", "--json"],
-            None,
-            None,
-        )
-        .unwrap();
+        run_with_buf(&root, &["task", "show", "1", "spec", "--json"], None, None).unwrap();
         run_with_buf(&root, &["roles", "list", "--json"], None, None).unwrap();
 
         let fake = Arc::new(InMemoryTerminals::new());
@@ -2907,7 +3056,13 @@ mod tests {
     ) -> Result<String, (String, Box<dyn std::error::Error + Send + Sync>)> {
         let mut buf = Vec::new();
         let string_args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
-        match run_cli_in_root_with_output(root.to_path_buf(), string_args, terminals, client, &mut buf) {
+        match run_cli_in_root_with_output(
+            root.to_path_buf(),
+            string_args,
+            terminals,
+            client,
+            &mut buf,
+        ) {
             Ok(()) => Ok(String::from_utf8_lossy(&buf).to_string()),
             Err(e) => Err((String::from_utf8_lossy(&buf).to_string(), e)),
         }
@@ -2920,8 +3075,8 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let root = std::env::temp_dir()
-            .join(format!("shepherd-flag-test-{}-{nonce}", std::process::id()));
+        let root =
+            std::env::temp_dir().join(format!("shepherd-flag-test-{}-{nonce}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
 
         // 1. Mock server client that tracks whether it was invoked
@@ -2971,12 +3126,15 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let root = std::env::temp_dir()
-            .join(format!("shepherd-fallback-test-{}-{nonce}", std::process::id()));
+        let root = std::env::temp_dir().join(format!(
+            "shepherd-fallback-test-{}-{nonce}",
+            std::process::id()
+        ));
         std::fs::create_dir_all(&root).unwrap();
 
         // Pass a client pointing to a nonexistent socket
-        let client = ShepherdClient::new(PathBuf::from("/tmp/nonexistent-shepherd-socket-12345.sock"));
+        let client =
+            ShepherdClient::new(PathBuf::from("/tmp/nonexistent-shepherd-socket-12345.sock"));
         let out = run_with_buf(&root, &["agents", "--json"], None, Some(client)).unwrap();
         let parsed: Value = serde_json::from_str(&out).unwrap();
         assert!(parsed.is_array());
@@ -2991,12 +3149,15 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let root = std::env::temp_dir()
-            .join(format!("shepherd-json-err-test-{}-{nonce}", std::process::id()));
+        let root = std::env::temp_dir().join(format!(
+            "shepherd-json-err-test-{}-{nonce}",
+            std::process::id()
+        ));
         std::fs::create_dir_all(&root).unwrap();
 
         // 1. Task not found error with --json
-        let (out, err) = run_with_buf(&root, &["task", "show", "9999", "--json"], None, None).unwrap_err();
+        let (out, err) =
+            run_with_buf(&root, &["task", "show", "9999", "--json"], None, None).unwrap_err();
         assert!(err.to_string().contains("9999"));
         let parsed: Value = serde_json::from_str(&out).unwrap();
         assert!(parsed.get("error").is_some());
@@ -3010,7 +3171,10 @@ mod tests {
         // 3. Msg / messages not available error with --json
         let (out_msg, _) = run_with_buf(&root, &["messages", "--json"], None, None).unwrap_err();
         let parsed_msg: Value = serde_json::from_str(&out_msg).unwrap();
-        assert!(parsed_msg["error"].as_str().unwrap().contains("operation not available"));
+        assert!(parsed_msg["error"]
+            .as_str()
+            .unwrap()
+            .contains("operation not available"));
 
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -3022,8 +3186,8 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let root = std::env::temp_dir()
-            .join(format!("shepherd-all-json-{}-{nonce}", std::process::id()));
+        let root =
+            std::env::temp_dir().join(format!("shepherd-all-json-{}-{nonce}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
 
         let fake_terminals = Arc::new(InMemoryTerminals::new());
@@ -3033,10 +3197,15 @@ mod tests {
         let out = run_with_buf(
             &root,
             &[
-                "task", "new", "Feature X",
-                "--description", "My feature",
-                "--criteria", "- [ ] Must work",
-                "--id", "1",
+                "task",
+                "new",
+                "Feature X",
+                "--description",
+                "My feature",
+                "--criteria",
+                "- [ ] Must work",
+                "--id",
+                "1",
                 "--json",
             ],
             None,
@@ -3055,7 +3224,8 @@ mod tests {
         assert_eq!(v[0]["id"], 1);
 
         // 3. task list --archived --json
-        let out = run_with_buf(&root, &["task", "list", "--archived", "--json"], None, None).unwrap();
+        let out =
+            run_with_buf(&root, &["task", "list", "--archived", "--json"], None, None).unwrap();
         let v: Value = serde_json::from_str(&out).unwrap();
         assert!(v.is_array());
 
@@ -3066,7 +3236,8 @@ mod tests {
         assert!(v.get("context").is_some());
 
         // 5. task show 1 spec --json
-        let out = run_with_buf(&root, &["task", "show", "1", "spec", "--json"], None, None).unwrap();
+        let out =
+            run_with_buf(&root, &["task", "show", "1", "spec", "--json"], None, None).unwrap();
         let v: Value = serde_json::from_str(&out).unwrap();
         assert_eq!(v["id"], 1);
         assert_eq!(v["section"], "spec");
@@ -3080,7 +3251,13 @@ mod tests {
             "# Plan\n\n## Subtask 1: Base\nVerify: true\n",
         )
         .unwrap();
-        let out = run_with_buf(&root, &["task", "plan", "1", "--save", "--json"], None, None).unwrap();
+        let out = run_with_buf(
+            &root,
+            &["task", "plan", "1", "--save", "--json"],
+            None,
+            None,
+        )
+        .unwrap();
         let v: Value = serde_json::from_str(&out).unwrap();
         assert_eq!(v["id"], 1);
         assert!(v.get("subtasks").is_some());
@@ -3132,7 +3309,13 @@ mod tests {
         assert!(v.is_array());
 
         // 15. clean --json
-        let out = run_with_buf(&root, &["clean", "--json"], Some(Arc::clone(&terminals_dyn)), None).unwrap();
+        let out = run_with_buf(
+            &root,
+            &["clean", "--json"],
+            Some(Arc::clone(&terminals_dyn)),
+            None,
+        )
+        .unwrap();
         let v: Value = serde_json::from_str(&out).unwrap();
         assert!(v.get("cleaned").is_some());
 
@@ -3149,7 +3332,13 @@ mod tests {
         let mut status = task.status.clone();
         status.waiting = "plan".into();
         save_task_status(task.directory.join("status.json"), &status).unwrap();
-        let out = run_with_buf(&root, &["reject", "1", "plan", "--reason", "reformulate", "--json"], None, None).unwrap();
+        let out = run_with_buf(
+            &root,
+            &["reject", "1", "plan", "--reason", "reformulate", "--json"],
+            None,
+            None,
+        )
+        .unwrap();
         let v: Value = serde_json::from_str(&out).unwrap();
         assert_eq!(v["ok"], true);
         assert_eq!(v["task"], "1");
@@ -3163,7 +3352,10 @@ mod tests {
         assert!(v.get("path").is_some());
 
         // 18. git --json
-        let _ = std::process::Command::new("git").args(["init", "-b", "master"]).current_dir(&root).output();
+        let _ = std::process::Command::new("git")
+            .args(["init", "-b", "master"])
+            .current_dir(&root)
+            .output();
         let out = run_with_buf(&root, &["git", "--json"], None, None).unwrap();
         let v: Value = serde_json::from_str(&out).unwrap();
         assert!(v.get("worktrees").is_some());
@@ -3178,8 +3370,10 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let root = std::env::temp_dir()
-            .join(format!("shepherd-server-delegation-{}-{nonce}", std::process::id()));
+        let root = std::env::temp_dir().join(format!(
+            "shepherd-server-delegation-{}-{nonce}",
+            std::process::id()
+        ));
         std::fs::create_dir_all(&root).unwrap();
 
         let ops_called = Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -3188,7 +3382,10 @@ mod tests {
         let client = ShepherdClient::in_process(move |method, params| {
             assert_eq!(method, "shepherd.call");
             let op = params["op"].as_str().unwrap().to_string();
-            ops_clone.lock().unwrap().push((op.clone(), params["args"].clone()));
+            ops_clone
+                .lock()
+                .unwrap()
+                .push((op.clone(), params["args"].clone()));
             match op.as_str() {
                 "agents" => Ok(serde_json::json!({
                     "type": "shepherd_call",
@@ -3281,7 +3478,8 @@ mod tests {
         });
 
         // 1. agents in server mode (human and JSON)
-        let out_json = run_with_buf(&root, &["agents", "--json"], None, Some(client.clone())).unwrap();
+        let out_json =
+            run_with_buf(&root, &["agents", "--json"], None, Some(client.clone())).unwrap();
         let parsed: Value = serde_json::from_str(&out_json).unwrap();
         assert_eq!(parsed[0]["id"], "coder-1");
 
@@ -3289,12 +3487,24 @@ mod tests {
         assert!(out_human.contains("coder-1"));
 
         // 2. spawn in server mode
-        let out = run_with_buf(&root, &["spawn", "coder", "do task", "--json"], None, Some(client.clone())).unwrap();
+        let out = run_with_buf(
+            &root,
+            &["spawn", "coder", "do task", "--json"],
+            None,
+            Some(client.clone()),
+        )
+        .unwrap();
         let parsed: Value = serde_json::from_str(&out).unwrap();
         assert_eq!(parsed["id"], "coder-2");
 
         // 3. kill in server mode
-        let out = run_with_buf(&root, &["kill", "coder-1", "--json"], None, Some(client.clone())).unwrap();
+        let out = run_with_buf(
+            &root,
+            &["kill", "coder-1", "--json"],
+            None,
+            Some(client.clone()),
+        )
+        .unwrap();
         let parsed: Value = serde_json::from_str(&out).unwrap();
         assert_eq!(parsed["state"], "killed");
 
@@ -3304,32 +3514,68 @@ mod tests {
         assert_eq!(parsed["cleaned"][0], "coder-1");
 
         // 5. focus in server mode
-        let out = run_with_buf(&root, &["focus", "coder-1", "--json"], None, Some(client.clone())).unwrap();
+        let out = run_with_buf(
+            &root,
+            &["focus", "coder-1", "--json"],
+            None,
+            Some(client.clone()),
+        )
+        .unwrap();
         let parsed: Value = serde_json::from_str(&out).unwrap();
         assert_eq!(parsed["id"], "coder-1");
 
         // 6. skills list in server mode
-        let out = run_with_buf(&root, &["skills", "list", "--json"], None, Some(client.clone())).unwrap();
+        let out = run_with_buf(
+            &root,
+            &["skills", "list", "--json"],
+            None,
+            Some(client.clone()),
+        )
+        .unwrap();
         let parsed: Value = serde_json::from_str(&out).unwrap();
         assert_eq!(parsed[0]["name"], "test-skill");
 
         // 7. runs list in server mode
-        let out = run_with_buf(&root, &["runs", "list", "--json"], None, Some(client.clone())).unwrap();
+        let out = run_with_buf(
+            &root,
+            &["runs", "list", "--json"],
+            None,
+            Some(client.clone()),
+        )
+        .unwrap();
         let parsed: Value = serde_json::from_str(&out).unwrap();
         assert_eq!(parsed[0]["task_id"], 1);
 
         // 8. tasks in server mode
-        let out = run_with_buf(&root, &["task", "list", "--json"], None, Some(client.clone())).unwrap();
+        let out = run_with_buf(
+            &root,
+            &["task", "list", "--json"],
+            None,
+            Some(client.clone()),
+        )
+        .unwrap();
         let parsed: Value = serde_json::from_str(&out).unwrap();
         assert_eq!(parsed[0]["status"]["id"], 1);
 
         // 9. task new in server mode
-        let out = run_with_buf(&root, &["task", "new", "T2", "--json"], None, Some(client.clone())).unwrap();
+        let out = run_with_buf(
+            &root,
+            &["task", "new", "T2", "--json"],
+            None,
+            Some(client.clone()),
+        )
+        .unwrap();
         let parsed: Value = serde_json::from_str(&out).unwrap();
         assert_eq!(parsed["status"]["id"], 2);
 
         // 10. task archive in server mode
-        let out = run_with_buf(&root, &["task", "archive", "1", "--json"], None, Some(client.clone())).unwrap();
+        let out = run_with_buf(
+            &root,
+            &["task", "archive", "1", "--json"],
+            None,
+            Some(client.clone()),
+        )
+        .unwrap();
         let parsed: Value = serde_json::from_str(&out).unwrap();
         assert_eq!(parsed["archived"], true);
 
@@ -3340,12 +3586,24 @@ mod tests {
         assert_eq!(parsed["job"], "run-1");
 
         // 12. approve in server mode
-        let out = run_with_buf(&root, &["approve", "1", "plan", "--json"], None, Some(client.clone())).unwrap();
+        let out = run_with_buf(
+            &root,
+            &["approve", "1", "plan", "--json"],
+            None,
+            Some(client.clone()),
+        )
+        .unwrap();
         let parsed: Value = serde_json::from_str(&out).unwrap();
         assert_eq!(parsed["approved"], "plan");
 
         // 12b. reject in server mode
-        let out = run_with_buf(&root, &["reject", "1", "plan", "--reason", "too complex", "--json"], None, Some(client.clone())).unwrap();
+        let out = run_with_buf(
+            &root,
+            &["reject", "1", "plan", "--reason", "too complex", "--json"],
+            None,
+            Some(client.clone()),
+        )
+        .unwrap();
         let parsed: Value = serde_json::from_str(&out).unwrap();
         assert_eq!(parsed["rejected"], "plan");
 
@@ -3382,13 +3640,17 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let root = std::env::temp_dir()
-            .join(format!("shepherd-server-fail-{}-{nonce}", std::process::id()));
+        let root = std::env::temp_dir().join(format!(
+            "shepherd-server-fail-{}-{nonce}",
+            std::process::id()
+        ));
         std::fs::create_dir_all(&root).unwrap();
 
         // Client whose call fails (e.g. server busy, timeout, or internal error)
         let failing_client = ShepherdClient::in_process(|_method, _params| {
-            Err(crate::shepherd::ShepherdError::Protocol("server timeout or internal error".into()))
+            Err(crate::shepherd::ShepherdError::Protocol(
+                "server timeout or internal error".into(),
+            ))
         });
 
         // 1. With --json: should exit with error and json output containing {"error": ...}, NOT silent []
@@ -3403,19 +3665,19 @@ mod tests {
         assert!(err.to_string().contains("server timeout or internal error"));
         let parsed: Value = serde_json::from_str(&out).expect("must output valid error json");
         assert!(parsed.get("error").is_some());
-        assert!(parsed["error"].as_str().unwrap().contains("server timeout or internal error"));
+        assert!(parsed["error"]
+            .as_str()
+            .unwrap()
+            .contains("server timeout or internal error"));
         // Ensure it did not output silent empty array "[]"
         assert_ne!(out.trim(), "[]");
 
         // 2. Without --json: should also return Err
-        let (_out_human, err_human) = run_with_buf(
-            &root,
-            &["agents"],
-            None,
-            Some(failing_client),
-        )
-        .unwrap_err();
-        assert!(err_human.to_string().contains("server timeout or internal error"));
+        let (_out_human, err_human) =
+            run_with_buf(&root, &["agents"], None, Some(failing_client)).unwrap_err();
+        assert!(err_human
+            .to_string()
+            .contains("server timeout or internal error"));
 
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -3427,26 +3689,23 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let root = std::env::temp_dir()
-            .join(format!("shepherd-no-server-{}-{nonce}", std::process::id()));
+        let root =
+            std::env::temp_dir().join(format!("shepherd-no-server-{}-{nonce}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
 
         // 1. Client with a nonexistent socket falls back to in-process mode
         let nonexistent_sock = root.join("nonexistent.sock");
         let client_nonexistent = ShepherdClient::new(nonexistent_sock);
-        let out = run_with_buf(
-            &root,
-            &["agents", "--json"],
-            None,
-            Some(client_nonexistent),
-        )
-        .unwrap();
+        let out =
+            run_with_buf(&root, &["agents", "--json"], None, Some(client_nonexistent)).unwrap();
         let parsed: Value = serde_json::from_str(&out).unwrap();
         assert_eq!(parsed, serde_json::json!([]));
 
         // 2. Client provided, but --no-server is passed: falls back to in-process mode
         let failing_client = ShepherdClient::in_process(|_method, _params| {
-            Err(crate::shepherd::ShepherdError::Protocol("should never be called".into()))
+            Err(crate::shepherd::ShepherdError::Protocol(
+                "should never be called".into(),
+            ))
         });
         let out_no_server = run_with_buf(
             &root,
@@ -3468,7 +3727,10 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let root = std::env::temp_dir().join(format!("shepherd-test-cli-pat-{}-{nonce}", std::process::id()));
+        let root = std::env::temp_dir().join(format!(
+            "shepherd-test-cli-pat-{}-{nonce}",
+            std::process::id()
+        ));
         std::fs::create_dir_all(root.join(".shepherd")).unwrap();
 
         // 1. pattern list --json
@@ -3510,7 +3772,14 @@ mod tests {
         // 3. pattern new demo --from orchestrator-worker --json
         let out_new = run_with_buf(
             &root,
-            &["pattern", "new", "demo", "--from", "orchestrator-worker", "--json"],
+            &[
+                "pattern",
+                "new",
+                "demo",
+                "--from",
+                "orchestrator-worker",
+                "--json",
+            ],
             None,
             None,
         )
@@ -3536,12 +3805,19 @@ mod tests {
         // 5. pattern validate --file <path> --json
         let out_valid_file = run_with_buf(
             &root,
-            &["pattern", "validate", "--file", demo_path.to_str().unwrap(), "--json"],
+            &[
+                "pattern",
+                "validate",
+                "--file",
+                demo_path.to_str().unwrap(),
+                "--json",
+            ],
             None,
             None,
         )
         .unwrap();
-        let valid_file_json: Value = serde_json::from_str(&out_valid_file).expect("valid json validate file");
+        let valid_file_json: Value =
+            serde_json::from_str(&out_valid_file).expect("valid json validate file");
         assert_eq!(valid_file_json["valid"], true);
 
         // 6. Break demo.yaml and verify validate catches and explains it
@@ -3565,23 +3841,13 @@ mod tests {
             .map_or(false, |m| m.contains("broken-unknown-orders-topic"))));
 
         // 6b. human output returns Err and prints diagnostic
-        let (_, human_err) = run_with_buf(
-            &root,
-            &["pattern", "validate", "demo"],
-            None,
-            None,
-        )
-        .unwrap_err();
+        let (_, human_err) =
+            run_with_buf(&root, &["pattern", "validate", "demo"], None, None).unwrap_err();
         assert!(human_err.to_string().contains("pattern validation failed"));
 
         // 7. pattern delete demo --json
-        let out_del = run_with_buf(
-            &root,
-            &["pattern", "delete", "demo", "--json"],
-            None,
-            None,
-        )
-        .unwrap();
+        let out_del =
+            run_with_buf(&root, &["pattern", "delete", "demo", "--json"], None, None).unwrap();
         let del_json: Value = serde_json::from_str(&out_del).expect("valid json delete");
         assert_eq!(del_json["ok"], true);
         assert_eq!(del_json["deleted_source"], "project");
@@ -3597,7 +3863,10 @@ mod tests {
         .unwrap_err();
         assert!(err_del.to_string().contains("cannot delete built-in"));
         let del_err_json: Value = serde_json::from_str(&out_del_err).expect("valid error json");
-        assert!(del_err_json["error"].as_str().unwrap().contains("cannot delete built-in"));
+        assert!(del_err_json["error"]
+            .as_str()
+            .unwrap()
+            .contains("cannot delete built-in"));
 
         // 9. Pattern edit on project file succeeds (with EDITOR=true)
         let _ = run_with_buf(
@@ -3617,7 +3886,9 @@ mod tests {
             None,
         )
         .unwrap_err();
-        assert!(err_edit_builtin.to_string().contains("cannot edit built-in"));
+        assert!(err_edit_builtin
+            .to_string()
+            .contains("cannot edit built-in"));
 
         std::fs::remove_dir_all(&root).unwrap();
     }
@@ -3657,7 +3928,15 @@ mod tests {
         // 4. topic publish orders "create payment" --key k1 --json
         let out_pub = run_with_buf(
             &root,
-            &["topic", "publish", "orders", "create payment", "--key", "k1", "--json"],
+            &[
+                "topic",
+                "publish",
+                "orders",
+                "create payment",
+                "--key",
+                "k1",
+                "--json",
+            ],
             None,
             None,
         )
@@ -3669,7 +3948,8 @@ mod tests {
         assert_eq!(pub_val["offset"], 0);
 
         // 5. topic tail orders --json
-        let out_tail = run_with_buf(&root, &["topic", "tail", "orders", "--json"], None, None).unwrap();
+        let out_tail =
+            run_with_buf(&root, &["topic", "tail", "orders", "--json"], None, None).unwrap();
         let tail_val: Value = serde_json::from_str(&out_tail).unwrap();
         let msgs = tail_val.as_array().unwrap();
         assert_eq!(msgs.len(), 1);
@@ -3687,7 +3967,8 @@ mod tests {
         assert_eq!(replay_val.as_array().unwrap().len(), 1);
 
         // 7. topic groups orders --json
-        let out_groups = run_with_buf(&root, &["topic", "groups", "orders", "--json"], None, None).unwrap();
+        let out_groups =
+            run_with_buf(&root, &["topic", "groups", "orders", "--json"], None, None).unwrap();
         let groups_val: Value = serde_json::from_str(&out_groups).unwrap();
         assert!(groups_val.as_array().is_some());
 

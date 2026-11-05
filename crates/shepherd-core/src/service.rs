@@ -23,9 +23,7 @@ use crate::bus::{Message, MessageBus, KIND_SYSTEM};
 use crate::config::{self, available_vendors, load_config, resolve_role, Config};
 use crate::skills;
 use crate::spawn::{mcp_launch_args, role_prompt, RUNTIME_CONSTRAINTS};
-use crate::terminals::{
-    OpenAgentRequest, PromptOutcome, TerminalError, Terminals, WorktreeSpec,
-};
+use crate::terminals::{OpenAgentRequest, PromptOutcome, TerminalError, Terminals, WorktreeSpec};
 use crate::{
     find_task, load_agent_registry, now_rfc3339, save_agent_registry, task_context, task_slug,
     Agent, AgentRegistryFile, SkillAdjust,
@@ -566,7 +564,9 @@ impl OrchestrationService {
                 if agent.gone() {
                     agent.notice.clear();
                     self.save_registry(&registry)?;
-                    return Err(format!("agent {agent_id} was stopped during prompt delivery"));
+                    return Err(format!(
+                        "agent {agent_id} was stopped during prompt delivery"
+                    ));
                 }
                 let shepherd_agent = self
                     .shepherd_config
@@ -588,7 +588,10 @@ impl OrchestrationService {
                     until: vec!["working".into(), "idle".into()],
                     timeout: Some(self.service_config.reaction_timeout),
                 };
-                match self.terminals.prompt(&prompt_target, prompt, Some(wait_opts)) {
+                match self
+                    .terminals
+                    .prompt(&prompt_target, prompt, Some(wait_opts))
+                {
                     Ok(PromptOutcome::Delivered) => {
                         let mut registry = self.load_registry()?;
                         if let Some(agent) = registry.agents.iter_mut().find(|a| a.id == agent_id) {
@@ -603,7 +606,12 @@ impl OrchestrationService {
                         return Ok(());
                     }
                     Ok(PromptOutcome::Blocked) => {
-                        let wait_res = self.wait_until_unblocked(agent_id, start_ms, ready_timeout_ms, notice_after_ms);
+                        let wait_res = self.wait_until_unblocked(
+                            agent_id,
+                            start_ms,
+                            ready_timeout_ms,
+                            notice_after_ms,
+                        );
                         if let Err(err) = wait_res {
                             return Err(err);
                         }
@@ -633,7 +641,12 @@ impl OrchestrationService {
 
                 match send_outcome {
                     Ok(PromptOutcome::Blocked) => {
-                        let wait_res = self.wait_until_unblocked(agent_id, start_ms, ready_timeout_ms, notice_after_ms);
+                        let wait_res = self.wait_until_unblocked(
+                            agent_id,
+                            start_ms,
+                            ready_timeout_ms,
+                            notice_after_ms,
+                        );
                         if let Err(err) = wait_res {
                             return Err(err);
                         }
@@ -644,7 +657,10 @@ impl OrchestrationService {
                         if attempt + 1 == total_sends {
                             self.mark_prompt_failed(
                                 agent_id,
-                                &format!("no se pudo enviar el primer prompt tras {} reenvíos: {err}", self.service_config.max_prompt_resends),
+                                &format!(
+                                    "no se pudo enviar el primer prompt tras {} reenvíos: {err}",
+                                    self.service_config.max_prompt_resends
+                                ),
                             )?;
                             return Err(format!("no se pudo enviar el primer prompt: {err}"));
                         }
@@ -655,9 +671,13 @@ impl OrchestrationService {
                 let check_start_ms = self.clock.now_ms();
                 loop {
                     if let Ok(st) = self.terminals.agent_status(&status_target) {
-                        if st.state != "finished" && (st.status == "working" || st.seq > baseline_seq) {
+                        if st.state != "finished"
+                            && (st.status == "working" || st.seq > baseline_seq)
+                        {
                             let mut registry = self.load_registry()?;
-                            if let Some(agent) = registry.agents.iter_mut().find(|a| a.id == agent_id) {
+                            if let Some(agent) =
+                                registry.agents.iter_mut().find(|a| a.id == agent_id)
+                            {
                                 if !agent.gone() && agent.state != "done" {
                                     agent.state = "working".into();
                                 }
@@ -778,7 +798,10 @@ impl OrchestrationService {
             let mut changed = false;
             let now_ms = self.clock.now_ms();
             let now_str = self.clock.now_rfc3339();
-            let quiet_ms = self.service_config.non_mcp_done_quiet_secs.saturating_mul(1000);
+            let quiet_ms = self
+                .service_config
+                .non_mcp_done_quiet_secs
+                .saturating_mul(1000);
             let bus = self.bus()?;
 
             for agent in &mut registry.agents {
@@ -856,7 +879,11 @@ impl OrchestrationService {
                             changed = true;
                         }
                         if agent.state == "blocked" {
-                            agent.state = if agent.mcp { "idle".into() } else { "working".into() };
+                            agent.state = if agent.mcp {
+                                "idle".into()
+                            } else {
+                                "working".into()
+                            };
                             agent.updated = now_str.clone();
                             changed = true;
                         }
@@ -964,7 +991,8 @@ impl OrchestrationService {
                     .filter(|m| !m.is_empty())
                     .or_else(|| {
                         (!role_cfg.model.is_empty()
-                            && (vendor.models.is_empty() || vendor.models.contains(&role_cfg.model)))
+                            && (vendor.models.is_empty()
+                                || vendor.models.contains(&role_cfg.model)))
                         .then(|| role_cfg.model.clone())
                     })
                     .unwrap_or_else(|| vendor.default_model.clone());
@@ -1069,10 +1097,7 @@ impl OrchestrationService {
             .map_err(|e| e.to_string())?;
 
         let session_dir = self.service_config.agent_session_dir(&agent.id);
-        let catalog = skills::Catalog::load(
-            Some(&root_path),
-            Some(&skills::user_skills_dir()),
-        );
+        let catalog = skills::Catalog::load(Some(&root_path), Some(&skills::user_skills_dir()));
         let (_, langs) = skills::detect_checks(&root_path);
         let (resolved, _problems) =
             catalog.effective_for(&project_cfg, &req.role, &langs, &req.skills);
@@ -1125,10 +1150,7 @@ impl OrchestrationService {
             };
             let base = (!project_cfg.workflow.base_branch.trim().is_empty())
                 .then(|| project_cfg.workflow.base_branch.clone());
-            Some(WorktreeSpec {
-                branch,
-                base,
-            })
+            Some(WorktreeSpec { branch, base })
         } else {
             None
         };
@@ -1260,9 +1282,9 @@ impl OrchestrationService {
                     } else {
                         open_req.agent_id.as_str()
                     };
-                    self.terminals
-                        .close(close_target)
-                        .map_err(|e| format!("failed to close leftover pane {close_target}: {e}"))?;
+                    self.terminals.close(close_target).map_err(|e| {
+                        format!("failed to close leftover pane {close_target}: {e}")
+                    })?;
                     return self
                         .terminals
                         .open_agent(open_req)
@@ -1326,7 +1348,11 @@ impl OrchestrationService {
     /// - Kills a `done` agent first if requested by explicit ID.
     /// - Rejects a running agent (`starting, working, idle, blocked`).
     /// - Deletes its session directory after validating that `id` is a plain name (no `/` or `..`).
-    pub fn clean(&self, ids: &[String], workspace_root: Option<&str>) -> Result<Vec<String>, String> {
+    pub fn clean(
+        &self,
+        ids: &[String],
+        workspace_root: Option<&str>,
+    ) -> Result<Vec<String>, String> {
         let result = (|| {
             for id in ids {
                 validate_plain_agent_id(id)?;
@@ -1437,7 +1463,9 @@ impl OrchestrationService {
             let effective_mcp_url = mcp_url
                 .filter(|u| !u.is_empty())
                 .or_else(|| self.mcp_url())
-                .ok_or_else(|| "mcp_url is required when in-process MCP is not running".to_owned())?;
+                .ok_or_else(|| {
+                    "mcp_url is required when in-process MCP is not running".to_owned()
+                })?;
             let report = crate::workflow::run_coders_with_terminals(
                 crate::workflow::RunRequest {
                     root: root.clone(),
@@ -1495,9 +1523,9 @@ impl OrchestrationService {
                     "approved": "plan",
                 }))
             } else {
-                let number: u32 = clean_target
-                    .parse()
-                    .map_err(|_| format!("invalid approval target {target:?}; expected 'plan' or subtask number"))?;
+                let number: u32 = clean_target.parse().map_err(|_| {
+                    format!("invalid approval target {target:?}; expected 'plan' or subtask number")
+                })?;
                 let pr_url = crate::workflow::approve_subtask_with_registry(
                     root,
                     task,
@@ -1518,7 +1546,13 @@ impl OrchestrationService {
     }
 
     /// Explicit human rejection for `plan` or a subtask number.
-    pub fn reject(&self, root: PathBuf, task: &str, target: &str, reason: Option<&str>) -> Result<Value, String> {
+    pub fn reject(
+        &self,
+        root: PathBuf,
+        task: &str,
+        target: &str,
+        reason: Option<&str>,
+    ) -> Result<Value, String> {
         let result = (|| {
             let clean_target = target.strip_prefix("subtask:").unwrap_or(target);
             if clean_target == "plan" {
@@ -1530,10 +1564,13 @@ impl OrchestrationService {
                     "reason": reason,
                 }))
             } else {
-                let number: u32 = clean_target
-                    .parse()
-                    .map_err(|_| format!("invalid rejection target {target:?}; expected 'plan' or subtask number"))?;
-                crate::workflow::reject_subtask(root, task, number, reason).map_err(|e| e.to_string())?;
+                let number: u32 = clean_target.parse().map_err(|_| {
+                    format!(
+                        "invalid rejection target {target:?}; expected 'plan' or subtask number"
+                    )
+                })?;
+                crate::workflow::reject_subtask(root, task, number, reason)
+                    .map_err(|e| e.to_string())?;
                 Ok(serde_json::json!({
                     "ok": true,
                     "task": task,
@@ -1562,14 +1599,11 @@ impl OrchestrationService {
                 serde_json::to_value(agent.public()).map_err(|e| e.to_string())
             }
             "kill" => {
-                let id = args
-                    .get("id")
-                    .and_then(Value::as_str)
-                    .ok_or_else(|| {
-                        let msg = "missing 'id' for kill".to_owned();
-                        self.record_failure("kill", &msg);
-                        msg
-                    })?;
+                let id = args.get("id").and_then(Value::as_str).ok_or_else(|| {
+                    let msg = "missing 'id' for kill".to_owned();
+                    self.record_failure("kill", &msg);
+                    msg
+                })?;
                 let agent = self.kill(id)?;
                 serde_json::to_value(agent.public()).map_err(|e| e.to_string())
             }
@@ -1589,14 +1623,11 @@ impl OrchestrationService {
                 Ok(serde_json::json!({ "cleaned": cleaned }))
             }
             "focus" => {
-                let id = args
-                    .get("id")
-                    .and_then(Value::as_str)
-                    .ok_or_else(|| {
-                        let msg = "missing 'id' for focus".to_owned();
-                        self.record_failure("focus", &msg);
-                        msg
-                    })?;
+                let id = args.get("id").and_then(Value::as_str).ok_or_else(|| {
+                    let msg = "missing 'id' for focus".to_owned();
+                    self.record_failure("focus", &msg);
+                    msg
+                })?;
                 let agent = self.focus(id)?;
                 serde_json::to_value(agent).map_err(|e| e.to_string())
             }
@@ -1605,7 +1636,9 @@ impl OrchestrationService {
                     .get("root")
                     .and_then(Value::as_str)
                     .map(PathBuf::from)
-                    .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+                    .unwrap_or_else(|| {
+                        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+                    });
                 let task = args
                     .get("task")
                     .and_then(Value::as_str)
@@ -1643,23 +1676,19 @@ impl OrchestrationService {
                     .get("root")
                     .and_then(Value::as_str)
                     .map(PathBuf::from)
-                    .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
-                let task = args
-                    .get("task")
-                    .and_then(Value::as_str)
-                    .ok_or_else(|| {
-                        let msg = "missing 'task' for approve".to_owned();
-                        self.record_failure("approve", &msg);
-                        msg
-                    })?;
-                let target = args
-                    .get("target")
-                    .and_then(Value::as_str)
-                    .ok_or_else(|| {
-                        let msg = "missing 'target' for approve".to_owned();
-                        self.record_failure("approve", &msg);
-                        msg
-                    })?;
+                    .unwrap_or_else(|| {
+                        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+                    });
+                let task = args.get("task").and_then(Value::as_str).ok_or_else(|| {
+                    let msg = "missing 'task' for approve".to_owned();
+                    self.record_failure("approve", &msg);
+                    msg
+                })?;
+                let target = args.get("target").and_then(Value::as_str).ok_or_else(|| {
+                    let msg = "missing 'target' for approve".to_owned();
+                    self.record_failure("approve", &msg);
+                    msg
+                })?;
                 self.approve(root, task, target)
             }
             "reject" | "reject_gate" => {
@@ -1667,23 +1696,19 @@ impl OrchestrationService {
                     .get("root")
                     .and_then(Value::as_str)
                     .map(PathBuf::from)
-                    .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
-                let task = args
-                    .get("task")
-                    .and_then(Value::as_str)
-                    .ok_or_else(|| {
-                        let msg = "missing 'task' for reject".to_owned();
-                        self.record_failure("reject", &msg);
-                        msg
-                    })?;
-                let target = args
-                    .get("target")
-                    .and_then(Value::as_str)
-                    .ok_or_else(|| {
-                        let msg = "missing 'target' for reject".to_owned();
-                        self.record_failure("reject", &msg);
-                        msg
-                    })?;
+                    .unwrap_or_else(|| {
+                        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+                    });
+                let task = args.get("task").and_then(Value::as_str).ok_or_else(|| {
+                    let msg = "missing 'task' for reject".to_owned();
+                    self.record_failure("reject", &msg);
+                    msg
+                })?;
+                let target = args.get("target").and_then(Value::as_str).ok_or_else(|| {
+                    let msg = "missing 'target' for reject".to_owned();
+                    self.record_failure("reject", &msg);
+                    msg
+                })?;
                 let reason = args.get("reason").and_then(Value::as_str);
                 self.reject(root, task, target, reason)
             }
@@ -1702,8 +1727,13 @@ impl OrchestrationService {
                     .get("root")
                     .and_then(Value::as_str)
                     .map(PathBuf::from)
-                    .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
-                let archived = args.get("archived").and_then(Value::as_bool).unwrap_or(false);
+                    .unwrap_or_else(|| {
+                        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+                    });
+                let archived = args
+                    .get("archived")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
                 let tasks = crate::list_tasks(&root, archived).map_err(|e| e.to_string())?;
                 serde_json::to_value(tasks).map_err(|e| e.to_string())
             }
@@ -1712,7 +1742,9 @@ impl OrchestrationService {
                     .get("root")
                     .and_then(Value::as_str)
                     .map(PathBuf::from)
-                    .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+                    .unwrap_or_else(|| {
+                        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+                    });
                 let title = args
                     .get("title")
                     .and_then(Value::as_str)
@@ -1726,12 +1758,22 @@ impl OrchestrationService {
                 let criteria: Vec<String> = args
                     .get("criteria")
                     .and_then(Value::as_array)
-                    .map(|a| a.iter().filter_map(Value::as_str).map(str::to_owned).collect())
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(Value::as_str)
+                            .map(str::to_owned)
+                            .collect()
+                    })
                     .unwrap_or_default();
                 let attachments: Vec<String> = args
                     .get("attachments")
                     .and_then(Value::as_array)
-                    .map(|a| a.iter().filter_map(Value::as_str).map(str::to_owned).collect())
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(Value::as_str)
+                            .map(str::to_owned)
+                            .collect()
+                    })
                     .unwrap_or_default();
                 let new_task = crate::NewTask {
                     id: 0,
@@ -1750,10 +1792,16 @@ impl OrchestrationService {
                     .get("root")
                     .and_then(Value::as_str)
                     .map(PathBuf::from)
-                    .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+                    .unwrap_or_else(|| {
+                        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+                    });
                 let id = args
                     .get("id")
-                    .and_then(|v| v.as_u64().map(|n| n.to_string()).or_else(|| v.as_str().map(str::to_owned)))
+                    .and_then(|v| {
+                        v.as_u64()
+                            .map(|n| n.to_string())
+                            .or_else(|| v.as_str().map(str::to_owned))
+                    })
                     .ok_or_else(|| "missing 'id' for task_archive".to_owned())?;
                 let path = crate::archive_task(&root, &id).map_err(|e| e.to_string())?;
                 Ok(serde_json::json!({ "archived": true, "path": path.display().to_string() }))
@@ -1763,7 +1811,9 @@ impl OrchestrationService {
                     .get("root")
                     .and_then(Value::as_str)
                     .map(PathBuf::from)
-                    .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+                    .unwrap_or_else(|| {
+                        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+                    });
                 let cat = crate::skills::Catalog::load(Some(&root), None);
                 let all = cat.all();
                 serde_json::to_value(all).map_err(|e| e.to_string())
@@ -1773,8 +1823,11 @@ impl OrchestrationService {
                     .get("root")
                     .and_then(Value::as_str)
                     .map(PathBuf::from)
-                    .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
-                let list = crate::patterns::list_patterns(&root, None).map_err(|e| e.to_string())?;
+                    .unwrap_or_else(|| {
+                        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+                    });
+                let list =
+                    crate::patterns::list_patterns(&root, None).map_err(|e| e.to_string())?;
                 serde_json::to_value(list).map_err(|e| e.to_string())
             }
             "pattern_get" => {
@@ -1786,7 +1839,9 @@ impl OrchestrationService {
                     .get("root")
                     .and_then(Value::as_str)
                     .map(PathBuf::from)
-                    .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+                    .unwrap_or_else(|| {
+                        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+                    });
                 let (pattern, source, path) =
                     crate::patterns::load_pattern(name, &root, None).map_err(|e| e.to_string())?;
                 let config = load_config(&root).unwrap_or_default();
@@ -1810,10 +1865,14 @@ impl OrchestrationService {
                     .get("root")
                     .and_then(Value::as_str)
                     .map(PathBuf::from)
-                    .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+                    .unwrap_or_else(|| {
+                        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+                    });
                 let config = load_config(&root).unwrap_or_default();
                 let problems = crate::patterns::validate(&pattern, &config);
-                let has_errors = problems.iter().any(|p| p.severity == crate::patterns::Severity::Error);
+                let has_errors = problems
+                    .iter()
+                    .any(|p| p.severity == crate::patterns::Severity::Error);
                 if has_errors {
                     return Err(format!(
                         "pattern validation failed: {}",
@@ -1839,9 +1898,11 @@ impl OrchestrationService {
                     .get("root")
                     .and_then(Value::as_str)
                     .map(PathBuf::from)
-                    .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
-                let source =
-                    crate::patterns::delete_pattern(name, &root, None).map_err(|e| e.to_string())?;
+                    .unwrap_or_else(|| {
+                        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+                    });
+                let source = crate::patterns::delete_pattern(name, &root, None)
+                    .map_err(|e| e.to_string())?;
                 Ok(serde_json::json!({
                     "ok": true,
                     "name": name,
@@ -1853,20 +1914,24 @@ impl OrchestrationService {
                     .get("root")
                     .and_then(Value::as_str)
                     .map(PathBuf::from)
-                    .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+                    .unwrap_or_else(|| {
+                        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+                    });
                 let config = load_config(&root).unwrap_or_default();
                 let pattern = if let Some(pat_val) = args.get("pattern") {
                     serde_json::from_value::<crate::patterns::Pattern>(pat_val.clone())
                         .map_err(|e| format!("invalid pattern json: {e}"))?
                 } else if let Some(name) = args.get("name").and_then(Value::as_str) {
-                    let (pat, _, _) =
-                        crate::patterns::load_pattern(name, &root, None).map_err(|e| e.to_string())?;
+                    let (pat, _, _) = crate::patterns::load_pattern(name, &root, None)
+                        .map_err(|e| e.to_string())?;
                     pat
                 } else {
                     return Err("missing 'pattern' or 'name' for pattern_validate".to_owned());
                 };
                 let problems = crate::patterns::validate(&pattern, &config);
-                let valid = !problems.iter().any(|p| p.severity == crate::patterns::Severity::Error);
+                let valid = !problems
+                    .iter()
+                    .any(|p| p.severity == crate::patterns::Severity::Error);
                 Ok(serde_json::json!({
                     "valid": valid,
                     "problems": problems,
@@ -1877,7 +1942,9 @@ impl OrchestrationService {
                     .get("root")
                     .and_then(Value::as_str)
                     .map(PathBuf::from)
-                    .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+                    .unwrap_or_else(|| {
+                        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+                    });
                 let tasks = crate::list_tasks(&root, false).unwrap_or_default();
                 let runs: Vec<serde_json::Value> = tasks
                     .into_iter()
@@ -1885,7 +1952,12 @@ impl OrchestrationService {
                         let has_plan = t.directory.join("plan.md").is_file();
                         let pending_gate = if t.status.waiting == "plan" {
                             Some(serde_json::json!("plan"))
-                        } else if let Some(subtask) = t.status.subtasks.iter().find(|s| s.state == "awaiting-approval") {
+                        } else if let Some(subtask) = t
+                            .status
+                            .subtasks
+                            .iter()
+                            .find(|s| s.state == "awaiting-approval")
+                        {
                             Some(serde_json::json!({
                                 "kind": "push_pr",
                                 "subtask": subtask.number,
@@ -1894,19 +1966,29 @@ impl OrchestrationService {
                             None
                         };
                         let total = t.status.subtasks.len();
-                        let done_count = t.status.subtasks.iter().filter(|s| matches!(s.state.as_str(), "pr" | "done")).count();
-                        let subtasks: Vec<serde_json::Value> = t.status.subtasks.iter().map(|s| {
-                            serde_json::json!({
-                                "n": s.number,
-                                "title": s.title,
-                                "state": s.state,
-                                "branch": s.branch,
-                                "pr": s.pr,
-                                "note": s.note,
-                                "coder": s.coder,
-                                "reviewer": s.reviewer,
+                        let done_count = t
+                            .status
+                            .subtasks
+                            .iter()
+                            .filter(|s| matches!(s.state.as_str(), "pr" | "done"))
+                            .count();
+                        let subtasks: Vec<serde_json::Value> = t
+                            .status
+                            .subtasks
+                            .iter()
+                            .map(|s| {
+                                serde_json::json!({
+                                    "n": s.number,
+                                    "title": s.title,
+                                    "state": s.state,
+                                    "branch": s.branch,
+                                    "pr": s.pr,
+                                    "note": s.note,
+                                    "coder": s.coder,
+                                    "reviewer": s.reviewer,
+                                })
                             })
-                        }).collect();
+                            .collect();
                         serde_json::json!({
                             "task_id": t.status.id,
                             "task_title": t.status.title,
@@ -1927,11 +2009,17 @@ impl OrchestrationService {
                     .get("root")
                     .and_then(Value::as_str)
                     .map(PathBuf::from)
-                    .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+                    .unwrap_or_else(|| {
+                        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+                    });
                 let registry = self.load_registry().unwrap_or_default();
                 let base_worktrees = self.terminals.list_worktrees(&root).ok();
-                let status = crate::git::collect_git_status_with_base(&root, &registry.agents, base_worktrees)
-                    .map_err(|e| e.to_string())?;
+                let status = crate::git::collect_git_status_with_base(
+                    &root,
+                    &registry.agents,
+                    base_worktrees,
+                )
+                .map_err(|e| e.to_string())?;
                 serde_json::to_value(status).map_err(|e| e.to_string())
             }
             "topics" => {
@@ -1944,12 +2032,11 @@ impl OrchestrationService {
                     .get("name")
                     .and_then(Value::as_str)
                     .ok_or_else(|| "missing 'name' for topic_create".to_owned())?;
-                let partitions = args
-                    .get("partitions")
-                    .and_then(Value::as_u64)
-                    .unwrap_or(1) as u32;
+                let partitions = args.get("partitions").and_then(Value::as_u64).unwrap_or(1) as u32;
                 let bus = self.bus()?;
-                let topic = bus.topic_create(name, partitions).map_err(|e| e.to_string())?;
+                let topic = bus
+                    .topic_create(name, partitions)
+                    .map_err(|e| e.to_string())?;
                 serde_json::to_value(topic).map_err(|e| e.to_string())
             }
             "publish" => {
@@ -1962,10 +2049,15 @@ impl OrchestrationService {
                     .and_then(Value::as_str)
                     .ok_or_else(|| "missing 'content' for publish".to_owned())?;
                 let key = args.get("key").and_then(Value::as_str);
-                let partition = args.get("partition").and_then(Value::as_u64).map(|p| p as u32);
+                let partition = args
+                    .get("partition")
+                    .and_then(Value::as_u64)
+                    .map(|p| p as u32);
                 let from = args.get("from").and_then(Value::as_str).unwrap_or("user");
                 let bus = self.bus()?;
-                let msg = bus.publish(topic, content, key, partition, from).map_err(|e| e.to_string())?;
+                let msg = bus
+                    .publish(topic, content, key, partition, from)
+                    .map_err(|e| e.to_string())?;
                 serde_json::to_value(msg).map_err(|e| e.to_string())
             }
             "topic_tail" | "topic_replay" => {
@@ -1973,15 +2065,23 @@ impl OrchestrationService {
                     .get("topic")
                     .and_then(Value::as_str)
                     .ok_or_else(|| "missing 'topic' for topic_tail/replay".to_owned())?;
-                let partition = args.get("partition").and_then(Value::as_u64).map(|p| p as u32);
+                let partition = args
+                    .get("partition")
+                    .and_then(Value::as_u64)
+                    .map(|p| p as u32);
                 let from_offset = args
                     .get("from_offset")
                     .or_else(|| args.get("from"))
                     .and_then(Value::as_u64)
                     .unwrap_or(0);
-                let limit = args.get("limit").and_then(Value::as_u64).map(|l| l as usize);
+                let limit = args
+                    .get("limit")
+                    .and_then(Value::as_u64)
+                    .map(|l| l as usize);
                 let bus = self.bus()?;
-                let msgs = bus.replay(topic, partition, from_offset, limit).map_err(|e| e.to_string())?;
+                let msgs = bus
+                    .replay(topic, partition, from_offset, limit)
+                    .map_err(|e| e.to_string())?;
                 serde_json::to_value(msgs).map_err(|e| e.to_string())
             }
             "consumer_groups" => {
@@ -2068,21 +2168,34 @@ impl OrchestrationService {
 
             // 2. Deliver subscribed topic events for live non-MCP agents
             let groups = bus.consumer_groups(None).unwrap_or_default();
-            let live_ids: Vec<String> = reg_snapshot.live().into_iter().map(|a| a.id.clone()).collect();
+            let live_ids: Vec<String> = reg_snapshot
+                .live()
+                .into_iter()
+                .map(|a| a.id.clone())
+                .collect();
             for grp_info in groups {
                 if grp_info.members.contains(&agent.id) {
                     if !self.is_pane_free_for_delivery(agent) {
                         break;
                     }
-                    if let Ok(topic_msgs) = bus.poll_active(&agent.id, &grp_info.topic, Some(10), Some(&live_ids)) {
+                    if let Ok(topic_msgs) =
+                        bus.poll_active(&agent.id, &grp_info.topic, Some(10), Some(&live_ids))
+                    {
                         for t_msg in topic_msgs {
                             if !self.is_pane_free_for_delivery(agent) {
                                 break;
                             }
                             let line = format_shep_topic_message(&t_msg, &reg_snapshot);
-                            let delivered = self.deliver_single_message_with_retries(agent, &target, t_msg.id, &line);
+                            let delivered = self.deliver_single_message_with_retries(
+                                agent, &target, t_msg.id, &line,
+                            );
                             if delivered {
-                                let _ = bus.ack(&agent.id, &t_msg.topic, Some(t_msg.partition), Some(t_msg.offset));
+                                let _ = bus.ack(
+                                    &agent.id,
+                                    &t_msg.topic,
+                                    Some(t_msg.partition),
+                                    Some(t_msg.offset),
+                                );
                             } else {
                                 break;
                             }
@@ -2185,7 +2298,9 @@ impl OrchestrationService {
                 false
             }
             Err(crate::terminals::TerminalError::Api { ref code, .. })
-                if code == "agent_not_ready" || code == "agent_not_found" || code == "not_found" =>
+                if code == "agent_not_ready"
+                    || code == "agent_not_found"
+                    || code == "not_found" =>
             {
                 // Fallback: The pane has no agent detected by runtime (e.g. raw shell).
                 // Falls back to typing with `send_text` and screen verification.
@@ -2399,13 +2514,7 @@ mod tests {
         }
     }
 
-    fn test_service(
-        dir: &Path,
-    ) -> (
-        OrchestrationService,
-        InMemoryTerminals,
-        ManualClock,
-    ) {
+    fn test_service(dir: &Path) -> (OrchestrationService, InMemoryTerminals, ManualClock) {
         let state_dir = dir.join("state");
         std::fs::create_dir_all(&state_dir).unwrap();
         let terminals = InMemoryTerminals::new();
@@ -2459,7 +2568,10 @@ mod tests {
         {
             use std::os::unix::fs::PermissionsExt;
             let mode = std::fs::metadata(&reg_path).unwrap().permissions().mode() & 0o777;
-            assert_eq!(mode, 0o600, "agents.json must be written with 0600 permissions");
+            assert_eq!(
+                mode, 0o600,
+                "agents.json must be written with 0600 permissions"
+            );
         }
 
         let mut reloaded = load_agent_registry(&reg_path).unwrap();
@@ -2756,7 +2868,11 @@ mod tests {
             "blocked state must be announced only once per episode on the bus"
         );
         let notices = terminals.notifications();
-        assert_eq!(notices.len(), 1, "notification must be emitted only once per blocked episode");
+        assert_eq!(
+            notices.len(),
+            1,
+            "notification must be emitted only once per blocked episode"
+        );
         assert!(notices[0].0.contains(&mcp_agent.id));
 
         // MCP agent becomes "idle" -> stays "idle" (not "done", because MCP agents finish via submit_result)
@@ -2990,7 +3106,12 @@ mod tests {
         let (service, terminals, _clock) = test_service(tmp.path());
 
         // 1. Pre-populate a Shepherd leftover pane for "coder-1" (`coder·codex·old-task`, not in registry)
-        terminals.put_open_pane("coder-1", "pane-leftover", "tab-leftover", "coder·codex·old-task");
+        terminals.put_open_pane(
+            "coder-1",
+            "pane-leftover",
+            "tab-leftover",
+            "coder·codex·old-task",
+        );
 
         let coder1 = service
             .spawn(ServiceSpawnRequest {
@@ -3155,7 +3276,12 @@ mod tests {
         ];
         crate::save_task_status(t2.directory.join("status.json"), &t2.status).unwrap();
 
-        let runs_val = service.handle_call("runs", serde_json::json!({ "root": tmp.path().to_str().unwrap() })).unwrap();
+        let runs_val = service
+            .handle_call(
+                "runs",
+                serde_json::json!({ "root": tmp.path().to_str().unwrap() }),
+            )
+            .unwrap();
         let runs = runs_val.as_array().unwrap();
         assert_eq!(runs.len(), 2);
 
@@ -3166,7 +3292,10 @@ mod tests {
 
         // Task 2: pending_gate == {"kind":"push_pr", "subtask": 2}
         let r2 = runs.iter().find(|r| r["task_id"] == 2).unwrap();
-        assert_eq!(r2["pending_gate"], serde_json::json!({ "kind": "push_pr", "subtask": 2 }));
+        assert_eq!(
+            r2["pending_gate"],
+            serde_json::json!({ "kind": "push_pr", "subtask": 2 })
+        );
         assert_eq!(r2["subtasks_progress"], serde_json::json!([1, 2]));
         let subs = r2["subtasks"].as_array().unwrap();
         assert_eq!(subs.len(), 2);
@@ -3192,16 +3321,25 @@ mod tests {
         service.handle_call("task_create", create_args).unwrap();
         let mut t1 = crate::find_task(tmp.path(), "1").unwrap();
         t1.status.waiting = "plan".into();
-        std::fs::write(t1.directory.join("plan.md"), "# Plan\n\n### 1. Subtask 1\nBody\n").unwrap();
+        std::fs::write(
+            t1.directory.join("plan.md"),
+            "# Plan\n\n### 1. Subtask 1\nBody\n",
+        )
+        .unwrap();
         crate::save_task_status(t1.directory.join("status.json"), &t1.status).unwrap();
 
         // 1. Reject plan
-        let rej_res = service.handle_call("reject", serde_json::json!({
-            "root": tmp.path().to_str().unwrap(),
-            "task": "1",
-            "target": "plan",
-            "reason": "plan needs more details"
-        })).unwrap();
+        let rej_res = service
+            .handle_call(
+                "reject",
+                serde_json::json!({
+                    "root": tmp.path().to_str().unwrap(),
+                    "task": "1",
+                    "target": "plan",
+                    "reason": "plan needs more details"
+                }),
+            )
+            .unwrap();
         assert_eq!(rej_res["ok"], true);
         assert_eq!(rej_res["rejected"], "plan");
         let t1_reloaded = crate::find_task(tmp.path(), "1").unwrap();
@@ -3209,11 +3347,16 @@ mod tests {
         assert!(t1_reloaded.status.note.contains("plan needs more details"));
 
         // 2. Approve plan
-        let app_res = service.handle_call("approve", serde_json::json!({
-            "root": tmp.path().to_str().unwrap(),
-            "task": "1",
-            "target": "plan"
-        })).unwrap();
+        let app_res = service
+            .handle_call(
+                "approve",
+                serde_json::json!({
+                    "root": tmp.path().to_str().unwrap(),
+                    "task": "1",
+                    "target": "plan"
+                }),
+            )
+            .unwrap();
         assert_eq!(app_res["ok"], true);
         assert_eq!(app_res["approved"], "plan");
         let mut t1_reloaded2 = crate::find_task(tmp.path(), "1").unwrap();
@@ -3221,21 +3364,34 @@ mod tests {
 
         // 3. Reject subtask in awaiting-approval
         t1_reloaded2.status.subtasks[0].state = "awaiting-approval".into();
-        crate::save_task_status(t1_reloaded2.directory.join("status.json"), &t1_reloaded2.status).unwrap();
+        crate::save_task_status(
+            t1_reloaded2.directory.join("status.json"),
+            &t1_reloaded2.status,
+        )
+        .unwrap();
 
-        let rej_sub = service.handle_call("reject", serde_json::json!({
-            "root": tmp.path().to_str().unwrap(),
-            "task": "1",
-            "target": "1",
-            "reason": "flaky test"
-        })).unwrap();
+        let rej_sub = service
+            .handle_call(
+                "reject",
+                serde_json::json!({
+                    "root": tmp.path().to_str().unwrap(),
+                    "task": "1",
+                    "target": "1",
+                    "reason": "flaky test"
+                }),
+            )
+            .unwrap();
         assert_eq!(rej_sub["ok"], true);
         assert_eq!(rej_sub["rejected"], 1);
 
         let t1_reloaded3 = crate::find_task(tmp.path(), "1").unwrap();
         // Subtask must have transitioned to "pending" (non-terminal, retryable)
         assert_eq!(t1_reloaded3.status.subtasks[0].state, "pending");
-        assert!(t1_reloaded3.status.subtasks[0].note.as_ref().unwrap().contains("flaky test"));
+        assert!(t1_reloaded3.status.subtasks[0]
+            .note
+            .as_ref()
+            .unwrap()
+            .contains("flaky test"));
     }
 
     #[test]
@@ -3287,7 +3443,11 @@ mod tests {
             .handle_call("agents", serde_json::json!({}))
             .unwrap();
         let elapsed = start.elapsed();
-        assert!(elapsed < Duration::from_secs(2), "agents call must not be blocked by running workflow; took {:?}", elapsed);
+        assert!(
+            elapsed < Duration::from_secs(2),
+            "agents call must not be blocked by running workflow; took {:?}",
+            elapsed
+        );
         let agents = agents_res.as_array().unwrap();
         assert!(!agents.is_empty());
         assert_eq!(agents[0]["id"], "brain-1");
@@ -3416,12 +3576,7 @@ mod tests {
             ))
             .unwrap();
         let _m4 = bus
-            .send(Message::directed(
-                "brain-1",
-                "user",
-                "msg",
-                "for user",
-            ))
+            .send(Message::directed("brain-1", "user", "msg", "for user"))
             .unwrap();
 
         // Run reconcile tick
@@ -3449,7 +3604,9 @@ mod tests {
 
         // 2. Neither MCP agent nor user received prompts
         assert!(
-            !bus_prompts.iter().any(|(t, _)| t == &mcp.pane || t == &mcp.id),
+            !bus_prompts
+                .iter()
+                .any(|(t, _)| t == &mcp.pane || t == &mcp.id),
             "MCP agents must NOT receive prompts in terminal"
         );
         assert!(
@@ -3474,8 +3631,7 @@ mod tests {
             .filter(|(_, text)| text.starts_with("[shep]"))
             .count();
         assert_eq!(
-            bus_prompts_len_after,
-            bus_prompts_len_before,
+            bus_prompts_len_after, bus_prompts_len_before,
             "messages must be delivered only once"
         );
 
@@ -3689,8 +3845,8 @@ mod tests {
         );
 
         // Check service log has the failure recorded
-        let log_content =
-            std::fs::read_to_string(tmp.path().join("state").join("service.log")).unwrap_or_default();
+        let log_content = std::fs::read_to_string(tmp.path().join("state").join("service.log"))
+            .unwrap_or_default();
         assert!(log_content.contains("was not verified on screen"));
 
         // Now enable echo on send_text and run next tick -> succeeds and advances cursor!
@@ -3709,7 +3865,10 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let root = std::env::temp_dir().join(format!("shepherd-test-pat-svc-{}-{nonce}", std::process::id()));
+        let root = std::env::temp_dir().join(format!(
+            "shepherd-test-pat-svc-{}-{nonce}",
+            std::process::id()
+        ));
         let state_dir = root.join("state");
         std::fs::create_dir_all(&state_dir).unwrap();
         std::fs::create_dir_all(root.join(".shepherd")).unwrap();
@@ -3718,12 +3877,8 @@ mod tests {
         let clock = ManualClock::new();
         let svc_cfg = ServiceConfig::for_state_dir(&state_dir);
         let shep_cfg = Config::default();
-        let service = OrchestrationService::new(
-            svc_cfg,
-            shep_cfg,
-            Arc::new(terminals),
-            Arc::new(clock),
-        );
+        let service =
+            OrchestrationService::new(svc_cfg, shep_cfg, Arc::new(terminals), Arc::new(clock));
 
         let root_str = root.display().to_string();
 
@@ -3937,10 +4092,12 @@ mod tests {
 
         // Subscribe docs-1 to topic "docs-tasks" in group "docs-pool"
         let bus = service.bus().unwrap();
-        bus.subscribe(&non_mcp.id, "docs-tasks", Some("docs-pool")).unwrap();
+        bus.subscribe(&non_mcp.id, "docs-tasks", Some("docs-pool"))
+            .unwrap();
 
         // Publish event to "docs-tasks"
-        bus.publish("docs-tasks", "document new API", None, Some(0), "brain-1").unwrap();
+        bus.publish("docs-tasks", "document new API", None, Some(0), "brain-1")
+            .unwrap();
 
         // Reconcile once -> delivers topic event via agent.prompt
         let _reg_after = service.reconcile_once().unwrap();

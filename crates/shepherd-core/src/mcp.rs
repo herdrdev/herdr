@@ -47,10 +47,7 @@ impl State {
         }
     }
 
-    fn resolve_terminals(
-        &self,
-        root: &Path,
-    ) -> Result<Box<dyn Terminals>, String> {
+    fn resolve_terminals(&self, root: &Path) -> Result<Box<dyn Terminals>, String> {
         if let Some(t) = &self.terminals {
             return Ok(Box::new(SharedTerminals(Arc::clone(t))));
         }
@@ -76,11 +73,7 @@ impl Terminals for SharedTerminals {
     ) -> Result<crate::terminals::PromptOutcome, crate::terminals::TerminalError> {
         self.0.prompt(agent_or_pane, text, wait)
     }
-    fn send_text(
-        &self,
-        pane: &str,
-        text: &str,
-    ) -> Result<(), crate::terminals::TerminalError> {
+    fn send_text(&self, pane: &str, text: &str) -> Result<(), crate::terminals::TerminalError> {
         self.0.send_text(pane, text)
     }
     fn send_keys(
@@ -351,20 +344,21 @@ fn rpc(state: &State, token: &str, request: &Value) -> RpcReply {
         }),
         "ping" => json!({}),
         "tools/list" => tool_list(),
-        "tools/call" => match call_tool(state, &agent, request.get("params").unwrap_or(&Value::Null))
-        {
-            Ok(result) => result,
-            Err(error) => {
-                return RpcReply::Json(json!({
-                    "jsonrpc": "2.0",
-                    "id": id,
-                    "result": {
-                        "content": [{"type": "text", "text": error}],
-                        "isError": true
-                    }
-                }))
+        "tools/call" => {
+            match call_tool(state, &agent, request.get("params").unwrap_or(&Value::Null)) {
+                Ok(result) => result,
+                Err(error) => {
+                    return RpcReply::Json(json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "result": {
+                            "content": [{"type": "text", "text": error}],
+                            "isError": true
+                        }
+                    }))
+                }
             }
-        },
+        }
         _ => return rpc_error(id.clone(), -32601, "method not found"),
     };
     RpcReply::Json(json!({"jsonrpc": "2.0", "id": id, "result": result}))
@@ -854,8 +848,7 @@ fn call_tool(state: &State, agent: &crate::Agent, params: &Value) -> Result<Valu
             if agent.task_id.is_empty() {
                 return Err("this agent has no task context".into());
             }
-            let task =
-                find_task(&agent.root, &agent.task_id).map_err(|error| error.to_string())?;
+            let task = find_task(&agent.root, &agent.task_id).map_err(|error| error.to_string())?;
             match args
                 .get("section")
                 .and_then(Value::as_str)
@@ -969,13 +962,8 @@ fn call_tool(state: &State, agent: &crate::Agent, params: &Value) -> Result<Valu
                 .get("content")
                 .and_then(Value::as_str)
                 .ok_or("content is required")?;
-            let task =
-                find_task(&agent.root, &agent.task_id).map_err(|error| error.to_string())?;
-            let content = if args
-                .get("append")
-                .and_then(Value::as_bool)
-                .unwrap_or(false)
-            {
+            let task = find_task(&agent.root, &agent.task_id).map_err(|error| error.to_string())?;
+            let content = if args.get("append").and_then(Value::as_bool).unwrap_or(false) {
                 let previous = read_task_section(&task, section).unwrap_or_default();
                 format!("{}\n\n{}\n", previous.trim_end(), content)
             } else {
@@ -1031,7 +1019,9 @@ fn call_tool(state: &State, agent: &crate::Agent, params: &Value) -> Result<Valu
                 .ok_or("content is required")?;
             let key = args.get("key").and_then(Value::as_str);
             let bus = MessageBus::open(&state.bus_path).map_err(|e| e.to_string())?;
-            let msg = bus.publish(topic, content, key, None, &agent.id).map_err(|e| e.to_string())?;
+            let msg = bus
+                .publish(topic, content, key, None, &agent.id)
+                .map_err(|e| e.to_string())?;
             serde_json::to_string(&msg).map_err(|e| e.to_string())?
         }
         "subscribe" => {
@@ -1042,7 +1032,9 @@ fn call_tool(state: &State, agent: &crate::Agent, params: &Value) -> Result<Valu
                 .ok_or("topic is required")?;
             let group = args.get("group").and_then(Value::as_str);
             let bus = MessageBus::open(&state.bus_path).map_err(|e| e.to_string())?;
-            let grp = bus.subscribe(&agent.id, topic, group).map_err(|e| e.to_string())?;
+            let grp = bus
+                .subscribe(&agent.id, topic, group)
+                .map_err(|e| e.to_string())?;
             serde_json::to_string(&json!({
                 "status": "subscribed",
                 "agent": agent.id,
@@ -1059,7 +1051,8 @@ fn call_tool(state: &State, agent: &crate::Agent, params: &Value) -> Result<Valu
                 .ok_or("topic is required")?;
             let max = args.get("max").and_then(Value::as_u64).map(|m| m as usize);
             let registry = load_agent_registry(&state.registry).map_err(|e| e.to_string())?;
-            let active_members: Vec<String> = registry.live().into_iter().map(|a| a.id.clone()).collect();
+            let active_members: Vec<String> =
+                registry.live().into_iter().map(|a| a.id.clone()).collect();
             let bus = MessageBus::open(&state.bus_path).map_err(|e| e.to_string())?;
             let messages = bus
                 .poll_active(&agent.id, topic, max, Some(&active_members))
@@ -1076,10 +1069,18 @@ fn call_tool(state: &State, agent: &crate::Agent, params: &Value) -> Result<Valu
                 .and_then(Value::as_str)
                 .filter(|s| !s.trim().is_empty())
                 .ok_or("topic is required")?;
-            let partition = args.get("partition").and_then(Value::as_u64).map(|p| p as u32);
-            let offset = args.get("offset").or_else(|| args.get("through")).and_then(Value::as_u64);
+            let partition = args
+                .get("partition")
+                .and_then(Value::as_u64)
+                .map(|p| p as u32);
+            let offset = args
+                .get("offset")
+                .or_else(|| args.get("through"))
+                .and_then(Value::as_u64);
             let bus = MessageBus::open(&state.bus_path).map_err(|e| e.to_string())?;
-            let committed = bus.ack(&agent.id, topic, partition, offset).map_err(|e| e.to_string())?;
+            let committed = bus
+                .ack(&agent.id, topic, partition, offset)
+                .map_err(|e| e.to_string())?;
             serde_json::to_string(&json!({
                 "status": "ok",
                 "topic": topic,
@@ -1094,10 +1095,18 @@ fn call_tool(state: &State, agent: &crate::Agent, params: &Value) -> Result<Valu
                 .filter(|s| !s.trim().is_empty())
                 .ok_or("topic is required")?;
             let from_offset = args.get("from_offset").and_then(Value::as_u64).unwrap_or(0);
-            let partition = args.get("partition").and_then(Value::as_u64).map(|p| p as u32);
-            let limit = args.get("limit").and_then(Value::as_u64).map(|l| l as usize);
+            let partition = args
+                .get("partition")
+                .and_then(Value::as_u64)
+                .map(|p| p as u32);
+            let limit = args
+                .get("limit")
+                .and_then(Value::as_u64)
+                .map(|l| l as usize);
             let bus = MessageBus::open(&state.bus_path).map_err(|e| e.to_string())?;
-            let messages = bus.replay(topic, partition, from_offset, limit).map_err(|e| e.to_string())?;
+            let messages = bus
+                .replay(topic, partition, from_offset, limit)
+                .map_err(|e| e.to_string())?;
             serde_json::to_string(&json!({
                 "topic": topic,
                 "from_offset": from_offset,
@@ -1274,7 +1283,10 @@ mod tests {
             "replay",
             "list_topics",
         ] {
-            assert!(tool_names.contains(&expected), "missing MCP tool {expected}");
+            assert!(
+                tool_names.contains(&expected),
+                "missing MCP tool {expected}"
+            );
         }
         let RpcReply::Json(submitted) = rpc(
             &state,
@@ -1688,7 +1700,10 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let root = std::env::temp_dir().join(format!("shepherd-mcp-events-{}-{nonce}", std::process::id()));
+        let root = std::env::temp_dir().join(format!(
+            "shepherd-mcp-events-{}-{nonce}",
+            std::process::id()
+        ));
         std::fs::create_dir_all(&root).unwrap();
 
         let registry_path = root.join("agents.json");
@@ -1740,9 +1755,16 @@ mod tests {
                 }
             }),
         );
-        let RpcReply::Json(pub_json) = pub_reply else { panic!("expected pub json") };
+        let RpcReply::Json(pub_json) = pub_reply else {
+            panic!("expected pub json")
+        };
         assert_eq!(pub_json["result"]["isError"], false);
-        let pub_data: Value = serde_json::from_str(pub_json["result"]["structuredContent"]["text"].as_str().unwrap()).unwrap();
+        let pub_data: Value = serde_json::from_str(
+            pub_json["result"]["structuredContent"]["text"]
+                .as_str()
+                .unwrap(),
+        )
+        .unwrap();
         assert_eq!(pub_data["topic"], "orders");
         assert_eq!(pub_data["from"], "brain-1");
         assert_eq!(pub_data["offset"], 0);
@@ -1761,9 +1783,16 @@ mod tests {
                 }
             }),
         );
-        let RpcReply::Json(list_json) = list_reply else { panic!("expected list json") };
+        let RpcReply::Json(list_json) = list_reply else {
+            panic!("expected list json")
+        };
         assert_eq!(list_json["result"]["isError"], false);
-        let list_data: Value = serde_json::from_str(list_json["result"]["structuredContent"]["text"].as_str().unwrap()).unwrap();
+        let list_data: Value = serde_json::from_str(
+            list_json["result"]["structuredContent"]["text"]
+                .as_str()
+                .unwrap(),
+        )
+        .unwrap();
         let topics = list_data["topics"].as_array().unwrap();
         assert_eq!(topics.len(), 1);
         assert_eq!(topics[0]["name"], "orders");
@@ -1786,9 +1815,16 @@ mod tests {
                 }
             }),
         );
-        let RpcReply::Json(sub_json) = sub_reply else { panic!("expected sub json") };
+        let RpcReply::Json(sub_json) = sub_reply else {
+            panic!("expected sub json")
+        };
         assert_eq!(sub_json["result"]["isError"], false);
-        let sub_data: Value = serde_json::from_str(sub_json["result"]["structuredContent"]["text"].as_str().unwrap()).unwrap();
+        let sub_data: Value = serde_json::from_str(
+            sub_json["result"]["structuredContent"]["text"]
+                .as_str()
+                .unwrap(),
+        )
+        .unwrap();
         assert_eq!(sub_data["status"], "subscribed");
         assert_eq!(sub_data["group"], "workers");
         assert_eq!(sub_data["agent"], "coder-1");
@@ -1809,9 +1845,16 @@ mod tests {
                 }
             }),
         );
-        let RpcReply::Json(poll_json) = poll_reply else { panic!("expected poll json") };
+        let RpcReply::Json(poll_json) = poll_reply else {
+            panic!("expected poll json")
+        };
         assert_eq!(poll_json["result"]["isError"], false);
-        let poll_data: Value = serde_json::from_str(poll_json["result"]["structuredContent"]["text"].as_str().unwrap()).unwrap();
+        let poll_data: Value = serde_json::from_str(
+            poll_json["result"]["structuredContent"]["text"]
+                .as_str()
+                .unwrap(),
+        )
+        .unwrap();
         let msgs = poll_data["messages"].as_array().unwrap();
         assert_eq!(msgs.len(), 1);
         assert_eq!(msgs[0]["content"], "create login form");
@@ -1833,7 +1876,9 @@ mod tests {
                 }
             }),
         );
-        let RpcReply::Json(ack_json) = ack_reply else { panic!("expected ack json") };
+        let RpcReply::Json(ack_json) = ack_reply else {
+            panic!("expected ack json")
+        };
         assert_eq!(ack_json["result"]["isError"], false);
 
         // Next poll returns no messages
@@ -1852,8 +1897,15 @@ mod tests {
                 }
             }),
         );
-        let RpcReply::Json(poll2_json) = poll2_reply else { panic!("expected poll2 json") };
-        let poll2_data: Value = serde_json::from_str(poll2_json["result"]["structuredContent"]["text"].as_str().unwrap()).unwrap();
+        let RpcReply::Json(poll2_json) = poll2_reply else {
+            panic!("expected poll2 json")
+        };
+        let poll2_data: Value = serde_json::from_str(
+            poll2_json["result"]["structuredContent"]["text"]
+                .as_str()
+                .unwrap(),
+        )
+        .unwrap();
         assert!(poll2_data["messages"].as_array().unwrap().is_empty());
 
         // 6. replay from offset 0 retrieves historical messages without advancing consumer offsets
@@ -1873,8 +1925,15 @@ mod tests {
                 }
             }),
         );
-        let RpcReply::Json(replay_json) = replay_reply else { panic!("expected replay json") };
-        let replay_data: Value = serde_json::from_str(replay_json["result"]["structuredContent"]["text"].as_str().unwrap()).unwrap();
+        let RpcReply::Json(replay_json) = replay_reply else {
+            panic!("expected replay json")
+        };
+        let replay_data: Value = serde_json::from_str(
+            replay_json["result"]["structuredContent"]["text"]
+                .as_str()
+                .unwrap(),
+        )
+        .unwrap();
         assert_eq!(replay_data["messages"].as_array().unwrap().len(), 1);
 
         std::fs::remove_dir_all(root).unwrap();

@@ -3,17 +3,17 @@
 //! This crate is intentionally independent of terminal, filesystem, and AI vendor
 //! integrations. Those are adapters around the same workflow rules.
 
-pub mod shepherd;
-pub mod terminals;
 pub mod bus;
 pub mod cli;
 pub mod config;
 pub mod git;
-pub mod service;
-pub mod skills;
-pub mod spawn;
 pub mod mcp;
 pub mod patterns;
+pub mod service;
+pub mod shepherd;
+pub mod skills;
+pub mod spawn;
+pub mod terminals;
 pub mod workflow;
 
 pub use git::{
@@ -72,14 +72,23 @@ pub struct ScheduleRound {
 
 /// Choose the next dependency-safe subtasks, matching the Go workflow engine's runAll policy.
 /// `running` contains subtask numbers already assigned to workers.
-pub fn schedule_subtasks(subtasks: &mut [Subtask], running: &[u32], max_parallel: usize) -> ScheduleRound {
-    let states: HashMap<u32, &str> = subtasks.iter().map(|s| (s.number, s.state.as_str())).collect();
+pub fn schedule_subtasks(
+    subtasks: &mut [Subtask],
+    running: &[u32],
+    max_parallel: usize,
+) -> ScheduleRound {
+    let states: HashMap<u32, &str> = subtasks
+        .iter()
+        .map(|s| (s.number, s.state.as_str()))
+        .collect();
     let running: HashSet<u32> = running.iter().copied().collect();
     let mut round = ScheduleRound::default();
     let mut pending_left = false;
 
     for subtask in subtasks.iter() {
-        if subtask.state != "pending" || running.contains(&subtask.number) { continue; }
+        if subtask.state != "pending" || running.contains(&subtask.number) {
+            continue;
+        }
         pending_left = true;
         let mut failed_dependency = None;
         let mut waiting = false;
@@ -137,13 +146,28 @@ impl Subtask {
 
 /// Derive the task-level state shown to the user from its subtasks.
 pub fn aggregate_task_state(subtasks: &[Subtask], previous: &str) -> String {
-    if subtasks.is_empty() { return previous.to_owned(); }
+    if subtasks.is_empty() {
+        return previous.to_owned();
+    }
     let has = |states: &[&str]| subtasks.iter().any(|s| states.contains(&s.state.as_str()));
-    if has(&["coding", "fixing"]) { return "coding".into(); }
-    if has(&["reviewing", "checks"]) { return "reviewing".into(); }
-    if has(&["awaiting-approval"]) { return "pr".into(); }
-    if has(&["pending"]) { return "coding".into(); }
-    if subtasks.iter().all(|s| matches!(s.state.as_str(), "pr" | "done")) { return "done".into(); }
+    if has(&["coding", "fixing"]) {
+        return "coding".into();
+    }
+    if has(&["reviewing", "checks"]) {
+        return "reviewing".into();
+    }
+    if has(&["awaiting-approval"]) {
+        return "pr".into();
+    }
+    if has(&["pending"]) {
+        return "coding".into();
+    }
+    if subtasks
+        .iter()
+        .all(|s| matches!(s.state.as_str(), "pr" | "done"))
+    {
+        return "done".into();
+    }
     previous.to_owned()
 }
 
@@ -304,9 +328,17 @@ pub struct Agent {
 }
 
 impl Agent {
-    pub fn terminal(&self) -> bool { matches!(self.state.as_str(), "done" | "exited" | "killed" | "failed") }
-    pub fn gone(&self) -> bool { matches!(self.state.as_str(), "exited" | "killed" | "failed") }
-    pub fn public(&self) -> Self { let mut agent = self.clone(); agent.token.clear(); agent }
+    pub fn terminal(&self) -> bool {
+        matches!(self.state.as_str(), "done" | "exited" | "killed" | "failed")
+    }
+    pub fn gone(&self) -> bool {
+        matches!(self.state.as_str(), "exited" | "killed" | "failed")
+    }
+    pub fn public(&self) -> Self {
+        let mut agent = self.clone();
+        agent.token.clear();
+        agent
+    }
 }
 
 /// On-disk `agents.json`; older Go versions wrote a bare JSON array, which is still accepted.
@@ -357,7 +389,9 @@ impl AgentRegistryFile {
 
     /// Store the agent's final MCP result and mark it done, matching Go's SubmitResult transition.
     pub fn submit_result(&mut self, id: &str, summary: &str, now: &str) -> Result<(), String> {
-        if summary.trim().is_empty() { return Err("result summary is empty".into()); }
+        if summary.trim().is_empty() {
+            return Err("result summary is empty".into());
+        }
         let Some(agent) = self.agents.iter_mut().find(|agent| agent.id == id) else {
             return Err(format!("unknown agent {id:?}"));
         };
@@ -373,7 +407,9 @@ impl AgentRegistryFile {
     }
 
     pub fn clear_result(&mut self, id: &str, now: &str) -> Result<(), String> {
-        let Some(agent) = self.agents.iter_mut().find(|agent| agent.id == id) else { return Err(format!("unknown agent {id:?}")); };
+        let Some(agent) = self.agents.iter_mut().find(|agent| agent.id == id) else {
+            return Err(format!("unknown agent {id:?}"));
+        };
         agent.result.clear();
         agent.has_result = false;
         agent.error.clear();
@@ -382,10 +418,17 @@ impl AgentRegistryFile {
         Ok(())
     }
 
-    pub fn live(&self) -> Vec<&Agent> { self.agents.iter().filter(|agent| !agent.terminal()).collect() }
+    pub fn live(&self) -> Vec<&Agent> {
+        self.agents
+            .iter()
+            .filter(|agent| !agent.terminal())
+            .collect()
+    }
 
     pub fn by_token(&self, token: &str) -> Option<&Agent> {
-        if token.is_empty() { return None; }
+        if token.is_empty() {
+            return None;
+        }
         self.agents.iter().find(|agent| agent.token == token)
     }
 }
@@ -394,19 +437,29 @@ pub fn new_agent_token() -> Result<String, getrandom::Error> {
     let mut bytes = [0u8; 24];
     getrandom::fill(&mut bytes)?;
     let mut token = String::with_capacity(bytes.len() * 2);
-    for byte in bytes { use std::fmt::Write; let _ = write!(token, "{byte:02x}"); }
+    for byte in bytes {
+        use std::fmt::Write;
+        let _ = write!(token, "{byte:02x}");
+    }
     Ok(token)
 }
 
-pub fn load_agent_registry(path: impl AsRef<Path>) -> Result<AgentRegistryFile, Box<dyn std::error::Error + Send + Sync>> {
+pub fn load_agent_registry(
+    path: impl AsRef<Path>,
+) -> Result<AgentRegistryFile, Box<dyn std::error::Error + Send + Sync>> {
     let path = path.as_ref();
     let bytes = match std::fs::read(path) {
         Ok(bytes) => bytes,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(AgentRegistryFile::default()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(AgentRegistryFile::default())
+        }
         Err(error) => return Err(error.into()),
     };
     let mut registry = if bytes.iter().copied().find(|b| !b.is_ascii_whitespace()) == Some(b'[') {
-        AgentRegistryFile { agents: serde_json::from_slice(&bytes)?, ..AgentRegistryFile::default() }
+        AgentRegistryFile {
+            agents: serde_json::from_slice(&bytes)?,
+            ..AgentRegistryFile::default()
+        }
     } else {
         serde_json::from_slice(&bytes)?
     };
@@ -418,16 +471,28 @@ impl AgentRegistryFile {
     fn recover_counters(&mut self) {
         for agent in &self.agents {
             self.seq = self.seq.max(agent.seq);
-            if let Some(number) = agent.id.strip_prefix(&format!("{}-", agent.role)).and_then(|n| n.parse::<u64>().ok()) {
-                self.next.entry(agent.role.clone()).and_modify(|n| *n = (*n).max(number)).or_insert(number);
+            if let Some(number) = agent
+                .id
+                .strip_prefix(&format!("{}-", agent.role))
+                .and_then(|n| n.parse::<u64>().ok())
+            {
+                self.next
+                    .entry(agent.role.clone())
+                    .and_modify(|n| *n = (*n).max(number))
+                    .or_insert(number);
             }
         }
     }
 }
 
-pub fn save_agent_registry(path: impl AsRef<Path>, registry: &AgentRegistryFile) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+pub fn save_agent_registry(
+    path: impl AsRef<Path>,
+    registry: &AgentRegistryFile,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let path = path.as_ref();
-    if let Some(parent) = path.parent() { std::fs::create_dir_all(parent)?; }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
     let mut registry = registry.clone();
     registry.recover_counters();
     registry.agents.sort_by_key(|agent| agent.seq);
@@ -454,16 +519,23 @@ pub fn save_agent_registry(path: impl AsRef<Path>, registry: &AgentRegistryFile)
     Ok(())
 }
 
-fn is_zero(value: &u32) -> bool { *value == 0 }
+fn is_zero(value: &u32) -> bool {
+    *value == 0
+}
 
 /// Read a task status JSON file produced by either the Go or Rust implementation.
-pub fn load_task_status(path: impl AsRef<Path>) -> Result<TaskStatus, Box<dyn std::error::Error + Send + Sync>> {
+pub fn load_task_status(
+    path: impl AsRef<Path>,
+) -> Result<TaskStatus, Box<dyn std::error::Error + Send + Sync>> {
     let bytes = std::fs::read(path)?;
     Ok(serde_json::from_slice(&bytes)?)
 }
 
 /// Atomically write task status using the same temp-file-and-rename strategy as Go.
-pub fn save_task_status(path: impl AsRef<Path>, status: &TaskStatus) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+pub fn save_task_status(
+    path: impl AsRef<Path>,
+    status: &TaskStatus,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let path = path.as_ref();
     let mut bytes = serde_json::to_vec_pretty(status)?;
     bytes.push(b'\n');
@@ -497,9 +569,14 @@ pub struct CreatedTask {
     pub directory: std::path::PathBuf,
 }
 
-pub fn list_tasks(root: impl AsRef<Path>, archived: bool) -> Result<Vec<CreatedTask>, Box<dyn std::error::Error + Send + Sync>> {
+pub fn list_tasks(
+    root: impl AsRef<Path>,
+    archived: bool,
+) -> Result<Vec<CreatedTask>, Box<dyn std::error::Error + Send + Sync>> {
     let mut directory = root.as_ref().join(".shepherd").join("tasks");
-    if archived { directory.push("_archive"); }
+    if archived {
+        directory.push("_archive");
+    }
     let entries = match std::fs::read_dir(directory) {
         Ok(entries) => entries,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -507,43 +584,76 @@ pub fn list_tasks(root: impl AsRef<Path>, archived: bool) -> Result<Vec<CreatedT
     };
     let mut tasks = Vec::new();
     for entry in entries.flatten() {
-        if !entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false) { continue; }
-        if entry.file_name().to_string_lossy().starts_with('_') { continue; }
+        if !entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false) {
+            continue;
+        }
+        if entry.file_name().to_string_lossy().starts_with('_') {
+            continue;
+        }
         let path = entry.path();
         if let Ok(status) = load_task_status(path.join("status.json")) {
-            tasks.push(CreatedTask { status, directory: path });
+            tasks.push(CreatedTask {
+                status,
+                directory: path,
+            });
         }
     }
     tasks.sort_by_key(|task| task.status.id);
     Ok(tasks)
 }
 
-pub fn find_task(root: impl AsRef<Path>, reference: &str) -> Result<CreatedTask, Box<dyn std::error::Error + Send + Sync>> {
+pub fn find_task(
+    root: impl AsRef<Path>,
+    reference: &str,
+) -> Result<CreatedTask, Box<dyn std::error::Error + Send + Sync>> {
     let tasks = list_tasks(root, false)?;
     let mut prefix_matches = Vec::new();
     for task in tasks {
         let name = format!("{}-{}", task.status.id, task.status.slug);
-        if task.status.id.to_string() == reference || name == reference { return Ok(task); }
-        if name.starts_with(reference) { prefix_matches.push(task); }
+        if task.status.id.to_string() == reference || name == reference {
+            return Ok(task);
+        }
+        if name.starts_with(reference) {
+            prefix_matches.push(task);
+        }
     }
     match prefix_matches.len() {
         1 => Ok(prefix_matches.remove(0)),
-        0 => Err(std::io::Error::new(std::io::ErrorKind::NotFound, format!("no task {reference:?}")).into()),
-        n => Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("task {reference:?} is ambiguous ({n} matches)")).into()),
+        0 => Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("no task {reference:?}"),
+        )
+        .into()),
+        n => Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("task {reference:?} is ambiguous ({n} matches)"),
+        )
+        .into()),
     }
 }
 
 const TASK_SECTIONS: [&str; 5] = ["issue", "spec", "acceptance", "links", "plan"];
 
-pub fn task_section_path(task: &CreatedTask, section: &str) -> Result<std::path::PathBuf, std::io::Error> {
+pub fn task_section_path(
+    task: &CreatedTask,
+    section: &str,
+) -> Result<std::path::PathBuf, std::io::Error> {
     if !TASK_SECTIONS.contains(&section) {
-        return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput,
-            format!("unknown section {section:?} (have: {})", TASK_SECTIONS.join(", "))));
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!(
+                "unknown section {section:?} (have: {})",
+                TASK_SECTIONS.join(", ")
+            ),
+        ));
     }
     Ok(task.directory.join(format!("{section}.md")))
 }
 
-pub fn read_task_section(task: &CreatedTask, section: &str) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+pub fn read_task_section(
+    task: &CreatedTask,
+    section: &str,
+) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     let path = task_section_path(task, section)?;
     match std::fs::read_to_string(path) {
         Ok(content) => Ok(content),
@@ -552,7 +662,11 @@ pub fn read_task_section(task: &CreatedTask, section: &str) -> Result<String, Bo
     }
 }
 
-pub fn write_task_section(task: &CreatedTask, section: &str, content: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+pub fn write_task_section(
+    task: &CreatedTask,
+    section: &str,
+    content: &str,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let path = task_section_path(task, section)?;
     atomic_write(&path, content.as_bytes())?;
     Ok(())
@@ -560,28 +674,56 @@ pub fn write_task_section(task: &CreatedTask, section: &str, content: &str) -> R
 
 pub fn task_context(task: &CreatedTask, limit_bytes: usize) -> String {
     let mut full = format!("# Task {}-{}\n\n", task.status.id, task.status.slug);
-    let mut index = format!("# Task {}-{}\n\nRead these files (or call get_task_context(section)):\n\n", task.status.id, task.status.slug);
+    let mut index = format!(
+        "# Task {}-{}\n\nRead these files (or call get_task_context(section)):\n\n",
+        task.status.id, task.status.slug
+    );
     for section in TASK_SECTIONS {
-        let Ok(content) = read_task_section(task, section) else { continue };
-        if content.trim().is_empty() { continue; }
+        let Ok(content) = read_task_section(task, section) else {
+            continue;
+        };
+        if content.trim().is_empty() {
+            continue;
+        }
         full.push_str(content.trim());
         full.push_str("\n\n");
         if let Ok(path) = task_section_path(task, section) {
-            index.push_str(&format!("- {section} ({} bytes): {}\n", content.len(), path.display()));
+            index.push_str(&format!(
+                "- {section} ({} bytes): {}\n",
+                content.len(),
+                path.display()
+            ));
         }
     }
-    index.push_str(&format!("- attachments: {}\n", task.directory.join("attachments").display()));
-    if limit_bytes > 0 && full.len() > limit_bytes { index } else { full }
+    index.push_str(&format!(
+        "- attachments: {}\n",
+        task.directory.join("attachments").display()
+    ));
+    if limit_bytes > 0 && full.len() > limit_bytes {
+        index
+    } else {
+        full
+    }
 }
 
-pub fn archive_task(root: impl AsRef<Path>, reference: &str) -> Result<std::path::PathBuf, Box<dyn std::error::Error + Send + Sync>> {
+pub fn archive_task(
+    root: impl AsRef<Path>,
+    reference: &str,
+) -> Result<std::path::PathBuf, Box<dyn std::error::Error + Send + Sync>> {
     let task = find_task(root.as_ref(), reference)?;
-    let archive_dir = root.as_ref().join(".shepherd").join("tasks").join("_archive");
+    let archive_dir = root
+        .as_ref()
+        .join(".shepherd")
+        .join("tasks")
+        .join("_archive");
     std::fs::create_dir_all(&archive_dir)?;
     let destination = archive_dir.join(task.directory.file_name().unwrap_or_default());
     if destination.exists() {
-        return Err(std::io::Error::new(std::io::ErrorKind::AlreadyExists,
-            format!("{} already exists", destination.display())).into());
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            format!("{} already exists", destination.display()),
+        )
+        .into());
     }
     std::fs::rename(task.directory, &destination)?;
     Ok(destination)
@@ -591,18 +733,30 @@ pub fn task_slug(title: &str) -> String {
     let mut slug = String::new();
     let mut separator = false;
     for ch in title.nfd().flat_map(char::to_lowercase) {
-        if is_combining_mark(ch) { continue; }
+        if is_combining_mark(ch) {
+            continue;
+        }
         if ch.is_ascii_alphanumeric() {
-            if separator && !slug.is_empty() { slug.push('-'); }
+            if separator && !slug.is_empty() {
+                slug.push('-');
+            }
             slug.push(ch);
             separator = false;
         } else {
             separator = true;
         }
     }
-    if slug.len() > 40 { slug.truncate(40); }
-    while slug.ends_with('-') { slug.pop(); }
-    if slug.is_empty() { "task".into() } else { slug }
+    if slug.len() > 40 {
+        slug.truncate(40);
+    }
+    while slug.ends_with('-') {
+        slug.pop();
+    }
+    if slug.is_empty() {
+        "task".into()
+    } else {
+        slug
+    }
 }
 
 pub fn acceptance_markdown(criteria: &[String]) -> String {
@@ -621,15 +775,32 @@ pub fn acceptance_markdown(criteria: &[String]) -> String {
 }
 
 /// Create a task directory and files using the same layout as Go's task.Create.
-pub fn create_task(root: impl AsRef<Path>, mut input: NewTask) -> Result<CreatedTask, Box<dyn std::error::Error + Send + Sync>> {
+pub fn create_task(
+    root: impl AsRef<Path>,
+    mut input: NewTask,
+) -> Result<CreatedTask, Box<dyn std::error::Error + Send + Sync>> {
     if input.title.trim().is_empty() {
-        return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "a task needs a title").into());
+        return Err(
+            std::io::Error::new(std::io::ErrorKind::InvalidInput, "a task needs a title").into(),
+        );
     }
     let tasks_dir = root.as_ref().join(".shepherd").join("tasks");
-    if input.id == 0 { input.id = next_task_id(&tasks_dir); }
-    if let Some(existing) = list_tasks(root.as_ref(), false)?.into_iter().find(|t| t.status.id == input.id) {
-        return Err(std::io::Error::new(std::io::ErrorKind::AlreadyExists,
-            format!("task {} already exists ({})", input.id, existing.directory.display())).into());
+    if input.id == 0 {
+        input.id = next_task_id(&tasks_dir);
+    }
+    if let Some(existing) = list_tasks(root.as_ref(), false)?
+        .into_iter()
+        .find(|t| t.status.id == input.id)
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            format!(
+                "task {} already exists ({})",
+                input.id,
+                existing.directory.display()
+            ),
+        )
+        .into());
     }
     let slug = task_slug(&input.title);
     let directory = tasks_dir.join(format!("{}-{}", input.id, slug));
@@ -637,10 +808,16 @@ pub fn create_task(root: impl AsRef<Path>, mut input: NewTask) -> Result<Created
     std::fs::create_dir(&directory)?;
     std::fs::create_dir(directory.join("attachments"))?;
 
-    let issue = input.issue_markdown.unwrap_or_else(|| format!("# {}\n\n{}\n", input.title, input.description.trim()));
+    let issue = input
+        .issue_markdown
+        .unwrap_or_else(|| format!("# {}\n\n{}\n", input.title, input.description.trim()));
     let mut links = String::from("# Links\n\n");
-    if let Some(issue_ref) = &input.issue { links.push_str(&format!("- Issue: {}\n", issue_ref.url)); }
-    for link in input.links { links.push_str(&format!("- {}\n", link)); }
+    if let Some(issue_ref) = &input.issue {
+        links.push_str(&format!("- Issue: {}\n", issue_ref.url));
+    }
+    for link in input.links {
+        links.push_str(&format!("- {}\n", link));
+    }
     for (name, content) in [
         ("issue.md", issue),
         ("spec.md", "# Spec\n\nDesign decisions, constraints, interfaces. Agents read this before coding.\n".to_owned()),
@@ -673,7 +850,9 @@ pub fn create_task(root: impl AsRef<Path>, mut input: NewTask) -> Result<Created
 fn next_task_id(tasks_dir: &Path) -> u32 {
     let mut max_id = 0;
     for dir in [tasks_dir.to_path_buf(), tasks_dir.join("_archive")] {
-        let Ok(entries) = std::fs::read_dir(dir) else { continue };
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            continue;
+        };
         for entry in entries.flatten() {
             if let Some((id, _)) = entry.file_name().to_str().and_then(parse_task_name) {
                 max_id = max_id.max(id);
@@ -685,7 +864,9 @@ fn next_task_id(tasks_dir: &Path) -> u32 {
 
 fn parse_task_name(name: &str) -> Option<(u32, &str)> {
     let (number, slug) = name.split_once('-')?;
-    if number.is_empty() || slug.is_empty() { return None; }
+    if number.is_empty() || slug.is_empty() {
+        return None;
+    }
     Some((number.parse().ok()?, slug))
 }
 
@@ -698,7 +879,10 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 }
 
 fn now_rfc3339() -> String {
-    let seconds = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+    let seconds = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
     let days = (seconds / 86_400) as i64;
     let day_seconds = seconds % 86_400;
     let z = days + 719_468;
@@ -779,10 +963,16 @@ fn parse_subtask_heading(line: &str) -> Option<(u32, String)> {
     }
     let number = rest[..digit_count].parse().ok()?;
     let rest = rest[digit_count..].trim_start();
-    if !matches!(rest.chars().next()?, '.' | ')' | ':') { return None; }
+    if !matches!(rest.chars().next()?, '.' | ')' | ':') {
+        return None;
+    }
     let rest = rest[1..].trim_start();
     let title = rest.trim_end();
-    if title.is_empty() { None } else { Some((number, title.to_owned())) }
+    if title.is_empty() {
+        None
+    } else {
+        Some((number, title.to_owned()))
+    }
 }
 
 fn field_value<'a>(line: &'a str, field: &str) -> Option<&'a str> {
@@ -798,14 +988,21 @@ fn field_value<'a>(line: &'a str, field: &str) -> Option<&'a str> {
     while let Some(stripped) = value.strip_prefix('*').or_else(|| value.strip_prefix('_')) {
         value = stripped.trim_start();
     }
-    while let Some(stripped) = value.strip_suffix("**").or_else(|| value.strip_suffix("__")) {
+    while let Some(stripped) = value
+        .strip_suffix("**")
+        .or_else(|| value.strip_suffix("__"))
+    {
         value = stripped.trim_end();
     }
     Some(value)
 }
 
 fn strip_backticks(value: &str) -> &str {
-    value.strip_prefix('`').and_then(|s| s.strip_suffix('`')).unwrap_or(value).trim()
+    value
+        .strip_prefix('`')
+        .and_then(|s| s.strip_suffix('`'))
+        .unwrap_or(value)
+        .trim()
 }
 
 fn digit_runs(value: &str) -> Vec<u32> {
@@ -815,7 +1012,9 @@ fn digit_runs(value: &str) -> Vec<u32> {
         if ch.is_ascii_digit() {
             current.push(ch);
         } else if !current.is_empty() {
-            if let Ok(n) = current.parse() { numbers.push(n); }
+            if let Ok(n) = current.parse() {
+                numbers.push(n);
+            }
             current.clear();
         }
     }
@@ -830,7 +1029,11 @@ pub fn validate_plan(subtasks: &[Subtask]) -> Result<(), PlanError> {
             return Err(PlanError::DuplicateSubtask(subtask.number));
         }
     }
-    fn visit(n: u32, by_id: &HashMap<u32, &Subtask>, marks: &mut HashMap<u32, u8>) -> Result<(), PlanError> {
+    fn visit(
+        n: u32,
+        by_id: &HashMap<u32, &Subtask>,
+        marks: &mut HashMap<u32, u8>,
+    ) -> Result<(), PlanError> {
         match marks.get(&n).copied().unwrap_or(0) {
             1 => return Err(PlanError::DependencyCycle(n)),
             2 => return Ok(()),
@@ -839,28 +1042,49 @@ pub fn validate_plan(subtasks: &[Subtask]) -> Result<(), PlanError> {
         marks.insert(n, 1);
         if let Some(subtask) = by_id.get(&n) {
             for dep in &subtask.depends_on {
-                if by_id.contains_key(dep) { visit(*dep, by_id, marks)?; }
+                if by_id.contains_key(dep) {
+                    visit(*dep, by_id, marks)?;
+                }
             }
         }
         marks.insert(n, 2);
         Ok(())
     }
     let mut marks = HashMap::new();
-    for n in by_id.keys() { visit(*n, &by_id, &mut marks)?; }
+    for n in by_id.keys() {
+        visit(*n, &by_id, &mut marks)?;
+    }
     Ok(())
 }
 
 /// Count acceptance checklist items, excluding the empty-task template line.
 pub fn count_criteria(acceptance: &str) -> usize {
-    acceptance.lines().filter_map(parse_checklist).filter(|(_, text)| !text.starts_with("(add checkable criteria")).count()
+    acceptance
+        .lines()
+        .filter_map(parse_checklist)
+        .filter(|(_, text)| !text.starts_with("(add checkable criteria"))
+        .count()
 }
 
 /// Parse reviewer output and downgrade APPROVE unless every requested criterion is answered and met.
 pub fn parse_review(text: &str, want_criteria: usize) -> Verdict {
-    let mut verdict = Verdict { approve: false, found: false, criteria: Vec::new(), downgraded: None, text: text.trim().to_owned() };
-    let Some(value) = text.lines().find_map(|line| field_value(line, "verdict")) else { return verdict };
+    let mut verdict = Verdict {
+        approve: false,
+        found: false,
+        criteria: Vec::new(),
+        downgraded: None,
+        text: text.trim().to_owned(),
+    };
+    let Some(value) = text.lines().find_map(|line| field_value(line, "verdict")) else {
+        return verdict;
+    };
     let value = value.trim_matches('*').trim().to_ascii_lowercase();
-    if !(value.starts_with("approve") || value.starts_with("request_changes") || value.starts_with("request changes")) { return verdict; }
+    if !(value.starts_with("approve")
+        || value.starts_with("request_changes")
+        || value.starts_with("request changes"))
+    {
+        return verdict;
+    }
     verdict.found = true;
     verdict.approve = value.starts_with("approve");
 
@@ -869,19 +1093,28 @@ pub fn parse_review(text: &str, want_criteria: usize) -> Verdict {
     let mut section_end = text.len();
     for marker in ["COMMENTS", "SUMMARY"] {
         if let Some(pos) = upper[section_start..].find(marker) {
-            if pos > 0 { section_end = section_end.min(section_start + pos); }
+            if pos > 0 {
+                section_end = section_end.min(section_start + pos);
+            }
         }
     }
     for line in text[section_start..section_end].lines() {
         if let Some((met, text)) = parse_checklist(line) {
-            verdict.criteria.push(Criterion { met, text: text.to_owned() });
+            verdict.criteria.push(Criterion {
+                met,
+                text: text.to_owned(),
+            });
         }
     }
     if verdict.approve && want_criteria > 0 {
         let met = verdict.criteria.iter().filter(|c| c.met).count();
         if verdict.criteria.len() < want_criteria {
             verdict.approve = false;
-            verdict.downgraded = Some(format!("the review answered {} of {} acceptance criteria", verdict.criteria.len(), want_criteria));
+            verdict.downgraded = Some(format!(
+                "the review answered {} of {} acceptance criteria",
+                verdict.criteria.len(),
+                want_criteria
+            ));
         } else if met < verdict.criteria.len() {
             verdict.approve = false;
             verdict.downgraded = Some("approved with unmet criteria".into());
@@ -892,10 +1125,15 @@ pub fn parse_review(text: &str, want_criteria: usize) -> Verdict {
 
 fn parse_checklist(line: &str) -> Option<(bool, &str)> {
     let line = line.trim_start();
-    let line = line.strip_prefix('-').or_else(|| line.strip_prefix('*'))?.trim_start();
+    let line = line
+        .strip_prefix('-')
+        .or_else(|| line.strip_prefix('*'))?
+        .trim_start();
     let line = line.strip_prefix('[')?;
     let (mark, rest) = line.split_once(']')?;
-    if mark.len() != 1 || !matches!(mark.as_bytes()[0], b' ' | b'x' | b'X') { return None; }
+    if mark.len() != 1 || !matches!(mark.as_bytes()[0], b' ' | b'x' | b'X') {
+        return None;
+    }
     let text = rest.trim();
     (!text.is_empty()).then_some((mark != " ", text))
 }
@@ -1064,28 +1302,76 @@ mod tests {
     fn field_value_tolerates_markdown_bold_and_list_markers() {
         assert_eq!(field_value("- **Verify:** `cmd`", "verify"), Some("`cmd`"));
         assert_eq!(field_value("**Verify**: cmd", "verify"), Some("cmd"));
-        assert_eq!(field_value("* **Depends on:** 1, 2", "depends on"), Some("1, 2"));
+        assert_eq!(
+            field_value("* **Depends on:** 1, 2", "depends on"),
+            Some("1, 2")
+        );
         assert_eq!(field_value("Verify: cmd", "verify"), Some("cmd"));
         assert_eq!(field_value("- Verify: `cmd`", "verify"), Some("`cmd`"));
         assert_eq!(field_value("- Verify: cmd", "verify"), Some("cmd"));
-        assert_eq!(field_value("* Depends on: 1, 2", "depends on"), Some("1, 2"));
+        assert_eq!(
+            field_value("* Depends on: 1, 2", "depends on"),
+            Some("1, 2")
+        );
         assert_eq!(field_value("Depends on: 1, 2", "depends on"), Some("1, 2"));
-        assert_eq!(field_value("* **Depends on**: 1, 2", "depends on"), Some("1, 2"));
-        assert_eq!(field_value("- **Depends on**: 1, 2", "depends on"), Some("1, 2"));
-        assert_eq!(field_value("**Depends on:** 1, 2", "depends on"), Some("1, 2"));
-        assert_eq!(field_value("**Depends on**: 1, 2", "depends on"), Some("1, 2"));
-        assert_eq!(field_value("- **Depends on:** none", "depends on"), Some("none"));
-        assert_eq!(field_value("- **Depends on:** **none**", "depends on"), Some("none"));
-        assert_eq!(field_value("- **Verify:** `printf 'hello from shepherd' | cmp - hello.txt && echo OK`", "verify"), Some("`printf 'hello from shepherd' | cmp - hello.txt && echo OK`"));
+        assert_eq!(
+            field_value("* **Depends on**: 1, 2", "depends on"),
+            Some("1, 2")
+        );
+        assert_eq!(
+            field_value("- **Depends on**: 1, 2", "depends on"),
+            Some("1, 2")
+        );
+        assert_eq!(
+            field_value("**Depends on:** 1, 2", "depends on"),
+            Some("1, 2")
+        );
+        assert_eq!(
+            field_value("**Depends on**: 1, 2", "depends on"),
+            Some("1, 2")
+        );
+        assert_eq!(
+            field_value("- **Depends on:** none", "depends on"),
+            Some("none")
+        );
+        assert_eq!(
+            field_value("- **Depends on:** **none**", "depends on"),
+            Some("none")
+        );
+        assert_eq!(
+            field_value(
+                "- **Verify:** `printf 'hello from shepherd' | cmp - hello.txt && echo OK`",
+                "verify"
+            ),
+            Some("`printf 'hello from shepherd' | cmp - hello.txt && echo OK`")
+        );
         assert_eq!(field_value("Verify: ls *", "verify"), Some("ls *"));
-        assert_eq!(field_value("Verify: echo 'a: b'", "verify"), Some("echo 'a: b'"));
-        assert_eq!(field_value("- **Verify:** **`cmd`**", "verify"), Some("`cmd`"));
+        assert_eq!(
+            field_value("Verify: echo 'a: b'", "verify"),
+            Some("echo 'a: b'")
+        );
+        assert_eq!(
+            field_value("- **Verify:** **`cmd`**", "verify"),
+            Some("`cmd`")
+        );
         assert_eq!(field_value("__Verify:__ `cmd`", "verify"), Some("`cmd`"));
         assert_eq!(field_value("__Verify__: cmd", "verify"), Some("cmd"));
-        assert_eq!(field_value("**VERDICT:** APPROVE", "verdict"), Some("APPROVE"));
-        assert_eq!(field_value("**VERDICT**: APPROVE", "verdict"), Some("APPROVE"));
-        assert_eq!(field_value("VERDICT: **APPROVE**", "verdict"), Some("APPROVE"));
-        assert_eq!(field_value("**VERDICT:** **APPROVE**", "verdict"), Some("APPROVE"));
+        assert_eq!(
+            field_value("**VERDICT:** APPROVE", "verdict"),
+            Some("APPROVE")
+        );
+        assert_eq!(
+            field_value("**VERDICT**: APPROVE", "verdict"),
+            Some("APPROVE")
+        );
+        assert_eq!(
+            field_value("VERDICT: **APPROVE**", "verdict"),
+            Some("APPROVE")
+        );
+        assert_eq!(
+            field_value("**VERDICT:** **APPROVE**", "verdict"),
+            Some("APPROVE")
+        );
     }
 
     #[test]
@@ -1104,7 +1390,10 @@ Depends on: 1, 2
 "#;
         let parsed = parse_plan(plan, "fallback");
         assert_eq!(parsed.len(), 3);
-        assert_eq!(parsed[0].verify, ["printf 'hello from shepherd' | cmp - hello.txt && echo OK"]);
+        assert_eq!(
+            parsed[0].verify,
+            ["printf 'hello from shepherd' | cmp - hello.txt && echo OK"]
+        );
         assert_eq!(parsed[1].verify, ["cmd"]);
         assert_eq!(parsed[1].depends_on, [1]);
         assert_eq!(parsed[2].verify, ["plain_cmd"]);
@@ -1117,8 +1406,14 @@ Depends on: 1, 2
         let mut b = Subtask::pending(2, "b", "");
         a.depends_on = vec![2];
         b.depends_on = vec![1];
-        assert!(matches!(validate_plan(&[a.clone(), b.clone()]), Err(PlanError::DependencyCycle(_))));
-        assert_eq!(validate_plan(&[a.clone(), a]), Err(PlanError::DuplicateSubtask(1)));
+        assert!(matches!(
+            validate_plan(&[a.clone(), b.clone()]),
+            Err(PlanError::DependencyCycle(_))
+        ));
+        assert_eq!(
+            validate_plan(&[a.clone(), a]),
+            Err(PlanError::DuplicateSubtask(1))
+        );
     }
 
     #[test]
@@ -1126,12 +1421,18 @@ Depends on: 1, 2
         let review = "VERDICT: APPROVE\n\nCRITERIA\n- [x] login works\n- [ ] refresh works\n\nSUMMARY\nLooks good";
         let verdict = parse_review(review, 2);
         assert!(!verdict.approve);
-        assert_eq!(verdict.downgraded.as_deref(), Some("approved with unmet criteria"));
+        assert_eq!(
+            verdict.downgraded.as_deref(),
+            Some("approved with unmet criteria")
+        );
     }
 
     #[test]
     fn ignores_acceptance_template_placeholder() {
-        assert_eq!(count_criteria("- [ ] (add checkable criteria; reviewer verifies)"), 0);
+        assert_eq!(
+            count_criteria("- [ ] (add checkable criteria; reviewer verifies)"),
+            0
+        );
         assert_eq!(count_criteria("- [ ] first\n- [x] second"), 2);
     }
 
@@ -1141,7 +1442,10 @@ Depends on: 1, 2
         let mut second = Subtask::pending(2, "second", "");
         first.state = "pr".into();
         second.state = "reviewing".into();
-        assert_eq!(aggregate_task_state(&[first.clone(), second.clone()], "new"), "reviewing");
+        assert_eq!(
+            aggregate_task_state(&[first.clone(), second.clone()], "new"),
+            "reviewing"
+        );
         second.state = "awaiting-approval".into();
         assert_eq!(aggregate_task_state(&[first.clone(), second], "new"), "pr");
         assert_eq!(aggregate_task_state(&[first], "new"), "done");
@@ -1158,7 +1462,10 @@ Depends on: 1, 2
         assert_eq!(prepare_resume(&mut subs), 1);
         assert_eq!(subs[0].state, "pr");
         assert_eq!(subs[1].state, "pending");
-        assert_eq!(subs[1].note.as_deref(), Some("resumed after an interruption"));
+        assert_eq!(
+            subs[1].note.as_deref(),
+            Some("resumed after an interruption")
+        );
     }
 
     #[test]
@@ -1170,7 +1477,8 @@ Depends on: 1, 2
                 {"n": 1, "title": "done", "state": "pr", "pr": "https://example.test/pr/1"},
                 {"n": 2, "title": "interrupted", "state": "awaiting-approval"}
             ]
-        })).unwrap();
+        }))
+        .unwrap();
         assert_eq!(prepare_task_resume(&mut status), 1);
         assert!(status.waiting.is_empty());
         assert_eq!(status.state, "coding");
@@ -1193,7 +1501,8 @@ Depends on: 1, 2
         assert_eq!(status.subtasks[0].number, 1);
         assert_eq!(status.subtasks[0].verify, ["cargo test"]);
 
-        let path = std::env::temp_dir().join(format!("shepherd-status-{}.json", std::process::id()));
+        let path =
+            std::env::temp_dir().join(format!("shepherd-status-{}.json", std::process::id()));
         save_task_status(&path, &status).unwrap();
         let saved = std::fs::read_to_string(&path).unwrap();
         let value: serde_json::Value = serde_json::from_str(&saved).unwrap();
@@ -1208,17 +1517,26 @@ Depends on: 1, 2
     #[test]
     fn creates_go_compatible_task_layout_and_unicode_slug() {
         assert_eq!(task_slug("Añadir OAuth: sesión"), "anadir-oauth-sesion");
-        let root = std::env::temp_dir().join(format!("shepherd-create-task-{}", std::process::id()));
+        let root =
+            std::env::temp_dir().join(format!("shepherd-create-task-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
-        let task = create_task(&root, NewTask {
-            id: 0,
-            title: "Añadir OAuth: sesión".into(),
-            description: "Support login".into(),
-            criteria: vec!["login works".into(), "  ".into()],
-            issue: Some(IssueRef { number: 5, url: "https://example.test/issues/5".into(), repo: String::new() }),
-            issue_markdown: None,
-            links: vec!["design doc".into()],
-        }).unwrap();
+        let task = create_task(
+            &root,
+            NewTask {
+                id: 0,
+                title: "Añadir OAuth: sesión".into(),
+                description: "Support login".into(),
+                criteria: vec!["login works".into(), "  ".into()],
+                issue: Some(IssueRef {
+                    number: 5,
+                    url: "https://example.test/issues/5".into(),
+                    repo: String::new(),
+                }),
+                issue_markdown: None,
+                links: vec!["design doc".into()],
+            },
+        )
+        .unwrap();
 
         assert_eq!(task.status.id, 1);
         assert_eq!(task.directory.file_name().unwrap(), "1-anadir-oauth-sesion");
@@ -1229,29 +1547,39 @@ Depends on: 1, 2
         let links = std::fs::read_to_string(task.directory.join("links.md")).unwrap();
         assert!(links.contains("https://example.test/issues/5"));
         assert!(links.contains("design doc"));
-        let duplicate = create_task(&root, NewTask {
-            id: 1,
-            title: "Different slug".into(),
-            description: String::new(),
-            criteria: Vec::new(),
-            issue: None,
-            issue_markdown: None,
-            links: Vec::new(),
-        });
-        assert!(duplicate.unwrap_err().to_string().contains("task 1 already exists"));
+        let duplicate = create_task(
+            &root,
+            NewTask {
+                id: 1,
+                title: "Different slug".into(),
+                description: String::new(),
+                criteria: Vec::new(),
+                issue: None,
+                issue_markdown: None,
+                links: Vec::new(),
+            },
+        );
+        assert!(duplicate
+            .unwrap_err()
+            .to_string()
+            .contains("task 1 already exists"));
         let archived = archive_task(&root, "1").unwrap();
         assert!(archived.join("status.json").is_file());
         assert!(list_tasks(&root, false).unwrap().is_empty());
         assert_eq!(list_tasks(&root, true).unwrap().len(), 1);
-        let next = create_task(&root, NewTask {
-            id: 0,
-            title: "Next task".into(),
-            description: String::new(),
-            criteria: Vec::new(),
-            issue: None,
-            issue_markdown: None,
-            links: Vec::new(),
-        }).unwrap();
+        let next = create_task(
+            &root,
+            NewTask {
+                id: 0,
+                title: "Next task".into(),
+                description: String::new(),
+                criteria: Vec::new(),
+                issue: None,
+                issue_markdown: None,
+                links: Vec::new(),
+            },
+        )
+        .unwrap();
         assert_eq!(next.status.id, 2);
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -1276,7 +1604,9 @@ Depends on: 1, 2
             verify: Vec<String>,
         }
 
-        let fixture: Fixture = serde_json::from_str(include_str!("../assets/testdata/workflow-conformance.json")).unwrap();
+        let fixture: Fixture =
+            serde_json::from_str(include_str!("../assets/testdata/workflow-conformance.json"))
+                .unwrap();
         let parsed = parse_plan(&fixture.plan, &fixture.fallback_title);
         assert_eq!(parsed.len(), fixture.subtasks.len());
         for (got, want) in parsed.iter().zip(&fixture.subtasks) {
@@ -1319,7 +1649,8 @@ Depends on: 1, 2
 
     #[test]
     fn loads_legacy_agent_arrays_recovers_ids_and_saves_private_registry() {
-        let path = std::env::temp_dir().join(format!("shepherd-agents-{}.json", std::process::id()));
+        let path =
+            std::env::temp_dir().join(format!("shepherd-agents-{}.json", std::process::id()));
         let _ = std::fs::remove_file(&path);
         let legacy = r#"[{"id":"coder-4","seq":4,"role":"coder","vendor":"codex","root":"/repo","mcp":true,"state":"done","token":"secret","started":"2026-11-03T10:00:00Z","updated":"2026-11-03T10:01:00Z"}]"#;
         std::fs::write(&path, legacy).unwrap();
@@ -1329,7 +1660,16 @@ Depends on: 1, 2
         assert!(registry.agents[0].terminal());
         assert_eq!(registry.agents[0].public().token, "");
 
-        let created = registry.create(Agent { role: "coder".into(), vendor: "claude".into(), root: "/repo".into(), ..Agent::default() }, "fresh-secret".into(), "2026-11-03T10:02:00Z");
+        let created = registry.create(
+            Agent {
+                role: "coder".into(),
+                vendor: "claude".into(),
+                root: "/repo".into(),
+                ..Agent::default()
+            },
+            "fresh-secret".into(),
+            "2026-11-03T10:02:00Z",
+        );
         assert_eq!(created.id, "coder-5");
         assert_eq!(created.seq, 5);
         assert_eq!(created.state, "starting");
@@ -1337,14 +1677,31 @@ Depends on: 1, 2
         assert!(registry.by_token("fresh-secret").is_some());
         assert!(registry.by_token("").is_none());
         assert!(registry.remove("coder-5"));
-        assert_eq!(registry.create(Agent { role: "coder".into(), ..Agent::default() }, "another-secret".into(), "now").id, "coder-6");
+        assert_eq!(
+            registry
+                .create(
+                    Agent {
+                        role: "coder".into(),
+                        ..Agent::default()
+                    },
+                    "another-secret".into(),
+                    "now"
+                )
+                .id,
+            "coder-6"
+        );
         save_agent_registry(&path, &registry).unwrap();
-        let saved: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        let saved: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         assert!(saved.is_object());
         assert_eq!(saved["seq"], 6);
-        #[cfg(unix)] {
+        #[cfg(unix)]
+        {
             use std::os::unix::fs::PermissionsExt;
-            assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+            assert_eq!(
+                std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
         }
         let _ = std::fs::remove_file(path);
     }
@@ -1352,7 +1709,15 @@ Depends on: 1, 2
     #[test]
     fn generated_agent_tokens_are_random_hex_and_redacted_from_public_agents() {
         let mut registry = AgentRegistryFile::default();
-        let agent = registry.create_secure(Agent { role: "reviewer".into(), ..Agent::default() }, "now").unwrap();
+        let agent = registry
+            .create_secure(
+                Agent {
+                    role: "reviewer".into(),
+                    ..Agent::default()
+                },
+                "now",
+            )
+            .unwrap();
         assert_eq!(agent.token.len(), 48);
         assert!(agent.token.bytes().all(|b| b.is_ascii_hexdigit()));
         assert_eq!(agent.public().token, "");
@@ -1361,16 +1726,32 @@ Depends on: 1, 2
     #[test]
     fn submit_result_records_summary_once_as_a_terminal_done_state() {
         let mut registry = AgentRegistryFile::default();
-        let agent = registry.create(Agent { role: "coder".into(), root: "/repo".into(), ..Agent::default() }, "token".into(), "start");
-        assert!(registry.submit_result(&agent.id, "  implemented and tested  ", "finish").is_ok());
+        let agent = registry.create(
+            Agent {
+                role: "coder".into(),
+                root: "/repo".into(),
+                ..Agent::default()
+            },
+            "token".into(),
+            "start",
+        );
+        assert!(registry
+            .submit_result(&agent.id, "  implemented and tested  ", "finish")
+            .is_ok());
         let result = registry.result(&agent.id).unwrap();
         assert_eq!(result.state, "done");
         assert!(result.terminal());
         assert!(result.has_result);
         assert_eq!(result.result, "implemented and tested");
         assert_eq!(result.updated, "finish");
-        assert_eq!(registry.submit_result("missing-1", "result", "finish"), Err("unknown agent \"missing-1\"".into()));
-        assert_eq!(registry.submit_result(&agent.id, "  ", "finish"), Err("result summary is empty".into()));
+        assert_eq!(
+            registry.submit_result("missing-1", "result", "finish"),
+            Err("unknown agent \"missing-1\"".into())
+        );
+        assert_eq!(
+            registry.submit_result(&agent.id, "  ", "finish"),
+            Err("result summary is empty".into())
+        );
     }
 
     #[test]

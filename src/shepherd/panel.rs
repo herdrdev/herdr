@@ -106,7 +106,11 @@ impl SpawnFormState {
     }
 
     pub fn cycle_field_backward(&mut self) {
-        self.active_field = if self.active_field == 0 { 4 } else { self.active_field - 1 };
+        self.active_field = if self.active_field == 0 {
+            4
+        } else {
+            self.active_field - 1
+        };
     }
 
     pub fn insert_char(&mut self, c: char) {
@@ -122,11 +126,21 @@ impl SpawnFormState {
 
     pub fn delete_char(&mut self) {
         match self.active_field {
-            0 => { self.role.pop(); }
-            1 => { self.task.pop(); }
-            2 => { self.vendor.pop(); }
-            3 => { self.model.pop(); }
-            4 => { self.extra_skills.pop(); }
+            0 => {
+                self.role.pop();
+            }
+            1 => {
+                self.task.pop();
+            }
+            2 => {
+                self.vendor.pop();
+            }
+            3 => {
+                self.model.pop();
+            }
+            4 => {
+                self.extra_skills.pop();
+            }
             _ => {}
         }
     }
@@ -149,8 +163,8 @@ pub struct ShepherdAgentRow {
 impl ShepherdAgentRow {
     pub fn from_agent(agent: &shepherd_core::Agent) -> Self {
         let notice = agent.notice.trim().to_owned();
-        let needs_you = matches!(agent.state.as_str(), "blocked" | "needs-human")
-            || !notice.is_empty();
+        let needs_you =
+            matches!(agent.state.as_str(), "blocked" | "needs-human") || !notice.is_empty();
         Self {
             id: agent.id.clone(),
             role: agent.role.clone(),
@@ -377,7 +391,9 @@ impl ShepherdAgentsPanelState {
                 self.last_action = Some(action.clone());
                 Some(action)
             }
-            AgentsSubModal::ConfirmCleanAll { count, workspace, .. } => {
+            AgentsSubModal::ConfirmCleanAll {
+                count, workspace, ..
+            } => {
                 let action = ShepherdAgentsAction::CleanAllFinished { count, workspace };
                 self.last_action = Some(action.clone());
                 Some(action)
@@ -639,7 +655,13 @@ pub fn render_shepherd_agents_panel(
     // Header action buttons: [s Lanzar] [K Matar] [x Quitar] [X Limpiar (n)]
     let mut btn_x = button_bar_area.x;
     let spawn_btn_rect = Rect::new(btn_x, button_bar_area.y, 14, 1);
-    render_button(buffer, spawn_btn_rect, "+ Lanzar (s)", palette.accent, palette);
+    render_button(
+        buffer,
+        spawn_btn_rect,
+        "+ Lanzar (s)",
+        palette.accent,
+        palette,
+    );
     btn_x = btn_x.saturating_add(16);
 
     let kill_btn_rect = Rect::new(btn_x, button_bar_area.y, 13, 1);
@@ -647,13 +669,25 @@ pub fn render_shepherd_agents_panel(
     btn_x = btn_x.saturating_add(15);
 
     let clean_btn_rect = Rect::new(btn_x, button_bar_area.y, 14, 1);
-    render_button(buffer, clean_btn_rect, "⌫ Quitar (x)", palette.surface_dim, palette);
+    render_button(
+        buffer,
+        clean_btn_rect,
+        "⌫ Quitar (x)",
+        palette.surface_dim,
+        palette,
+    );
     btn_x = btn_x.saturating_add(16);
 
     let clean_all_label = format!("🧹 Limpiar ({def_count}) (X)");
     let clean_all_width = (clean_all_label.chars().count() as u16).max(18);
     let clean_all_btn_rect = Rect::new(btn_x, button_bar_area.y, clean_all_width, 1);
-    render_button(buffer, clean_all_btn_rect, &clean_all_label, palette.surface_dim, palette);
+    render_button(
+        buffer,
+        clean_all_btn_rect,
+        &clean_all_label,
+        palette.surface_dim,
+        palette,
+    );
 
     let close_rect = crate::ui::release_notes_close_button_rect(Rect::new(
         stack.header.x,
@@ -731,7 +765,10 @@ pub fn render_shepherd_agents_panel(
             Span::styled("quitar  ·  ", base.fg(palette.overlay0)),
             Span::styled(" X ", base.fg(palette.mauve).add_modifier(Modifier::BOLD)),
             Span::styled("limpiar definitivos  ·  ", base.fg(palette.overlay0)),
-            Span::styled(" Enter ", base.fg(palette.teal).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                " Enter ",
+                base.fg(palette.teal).add_modifier(Modifier::BOLD),
+            ),
             Span::styled("enfocar pane  ·  ", base.fg(palette.overlay0)),
             Span::styled(" Esc ", base.fg(palette.text).add_modifier(Modifier::BOLD)),
             Span::styled("cerrar", base.fg(palette.overlay0)),
@@ -755,7 +792,11 @@ pub fn render_shepherd_agents_panel(
             cancel_button = canc;
             form_fields = fields;
         }
-        AgentsSubModal::ConfirmKill { agent_id, state: _, message } => {
+        AgentsSubModal::ConfirmKill {
+            agent_id,
+            state: _,
+            message,
+        } => {
             let (conf, canc) = render_confirm_modal(
                 buffer,
                 inner,
@@ -768,7 +809,11 @@ pub fn render_shepherd_agents_panel(
             confirm_button = conf;
             cancel_button = canc;
         }
-        AgentsSubModal::ConfirmClean { agent_id, state: _, message } => {
+        AgentsSubModal::ConfirmClean {
+            agent_id,
+            state: _,
+            message,
+        } => {
             let (conf, canc) = render_confirm_modal(
                 buffer,
                 inner,
@@ -781,7 +826,11 @@ pub fn render_shepherd_agents_panel(
             confirm_button = conf;
             cancel_button = canc;
         }
-        AgentsSubModal::ConfirmCleanAll { count: _, workspace: _, message } => {
+        AgentsSubModal::ConfirmCleanAll {
+            count: _,
+            workspace: _,
+            message,
+        } => {
             let (conf, canc) = render_confirm_modal(
                 buffer,
                 inner,
@@ -812,7 +861,13 @@ pub fn render_shepherd_agents_panel(
     })
 }
 
-fn render_button(buffer: &mut Buffer, rect: Rect, label: &str, bg: ratatui::style::Color, palette: &Palette) {
+fn render_button(
+    buffer: &mut Buffer,
+    rect: Rect,
+    label: &str,
+    bg: ratatui::style::Color,
+    palette: &Palette,
+) {
     if rect.width < 2 || rect.height < 1 {
         return;
     }
@@ -897,7 +952,9 @@ fn render_spawn_modal(
             Style::default().fg(palette.text).bg(palette.surface_dim)
         };
         for ix in input_rect.x..input_rect.right() {
-            buffer[(ix, input_rect.y)].set_symbol(" ").set_style(input_style);
+            buffer[(ix, input_rect.y)]
+                .set_symbol(" ")
+                .set_style(input_style);
         }
         let display_val = if is_active {
             format!("{val}█")
@@ -936,7 +993,13 @@ fn render_spawn_modal(
     let cancel_btn = Rect::new(inner.x + 20, btn_y, 16, 1);
 
     render_button(buffer, confirm_btn, " ↵ Lanzar ", palette.accent, palette);
-    render_button(buffer, cancel_btn, " esc Cancelar ", palette.surface_dim, palette);
+    render_button(
+        buffer,
+        cancel_btn,
+        " esc Cancelar ",
+        palette.surface_dim,
+        palette,
+    );
 
     (confirm_btn, cancel_btn, field_rects)
 }
@@ -989,7 +1052,13 @@ fn render_confirm_modal(
     let cancel_btn = Rect::new(inner.x + 4 + conf_w, btn_y, 16, 1);
 
     render_button(buffer, confirm_btn, confirm_label, confirm_color, palette);
-    render_button(buffer, cancel_btn, " esc Cancelar ", palette.surface_dim, palette);
+    render_button(
+        buffer,
+        cancel_btn,
+        " esc Cancelar ",
+        palette.surface_dim,
+        palette,
+    );
 
     (confirm_btn, cancel_btn)
 }
@@ -1068,10 +1137,7 @@ fn build_agent_lines<'a>(
         };
         let mut spans = vec![
             Span::styled(" ", row_base),
-            Span::styled(
-                icon,
-                row_base.fg(state_color).add_modifier(Modifier::BOLD),
-            ),
+            Span::styled(icon, row_base.fg(state_color).add_modifier(Modifier::BOLD)),
             Span::styled(" ", row_base),
             Span::styled(
                 entry.id.clone(),
@@ -1134,9 +1200,7 @@ fn draw_modal_box(
     if area.width < 2 || area.height < 2 {
         return None;
     }
-    let background = Style::default()
-        .bg(bg)
-        .remove_modifier(Modifier::DIM);
+    let background = Style::default().bg(bg).remove_modifier(Modifier::DIM);
     let border = Style::default()
         .fg(border_color)
         .bg(bg)
@@ -1275,10 +1339,19 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
 
-        assert!(text.contains("NEEDS YOU"), "Should highlight NEEDS YOU badge");
-        assert!(text.contains("approval to execute"), "Should contain part 1 of notice");
+        assert!(
+            text.contains("NEEDS YOU"),
+            "Should highlight NEEDS YOU badge"
+        );
+        assert!(
+            text.contains("approval to execute"),
+            "Should contain part 1 of notice"
+        );
         assert!(text.contains("npm"), "Should contain command from notice");
-        assert!(text.contains("inspect the command"), "Should contain full wrapped notice text");
+        assert!(
+            text.contains("inspect the command"),
+            "Should contain full wrapped notice text"
+        );
     }
 
     #[test]
@@ -1381,10 +1454,18 @@ mod tests {
         assert_eq!(panel.last_action, None);
 
         // Check confirmation message explains done closes tab
-        if let AgentsSubModal::ConfirmKill { ref agent_id, ref state, ref message } = panel.sub_modal {
+        if let AgentsSubModal::ConfirmKill {
+            ref agent_id,
+            ref state,
+            ref message,
+        } = panel.sub_modal
+        {
             assert_eq!(agent_id, "coder-1");
             assert_eq!(state, "done");
-            assert!(message.contains("cerrará su pestaña"), "Expected explanation of tab closing");
+            assert!(
+                message.contains("cerrará su pestaña"),
+                "Expected explanation of tab closing"
+            );
         } else {
             panic!("Expected ConfirmKill submodal");
         }
@@ -1393,7 +1474,10 @@ mod tests {
         let esc_act = panel.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::empty()));
         assert_eq!(esc_act, None);
         assert_eq!(panel.sub_modal, AgentsSubModal::None);
-        assert_eq!(panel.last_action, None, "Kill must not execute after cancel");
+        assert_eq!(
+            panel.last_action, None,
+            "Kill must not execute after cancel"
+        );
 
         // Press 'K' again and confirm with Enter
         panel.handle_key(KeyEvent::new(KeyCode::Char('K'), KeyModifiers::empty()));
@@ -1430,7 +1514,12 @@ mod tests {
         assert_eq!(act, None);
         assert_eq!(panel.last_action, None);
 
-        if let AgentsSubModal::ConfirmClean { ref agent_id, ref message, .. } = panel.sub_modal {
+        if let AgentsSubModal::ConfirmClean {
+            ref agent_id,
+            ref message,
+            ..
+        } = panel.sub_modal
+        {
             assert_eq!(agent_id, "brain-1");
             assert!(message.contains("cerrará su pestaña"));
         } else {
@@ -1455,19 +1544,47 @@ mod tests {
     #[test]
     fn test_clean_all_requires_confirmation_with_count() {
         let mut reg = AgentRegistryFile::default();
-        let mut a1 = reg.create(Agent { role: "a".into(), ..Agent::default() }, "t".into(), "now".into());
+        let mut a1 = reg.create(
+            Agent {
+                role: "a".into(),
+                ..Agent::default()
+            },
+            "t".into(),
+            "now".into(),
+        );
         a1.state = "working".into();
         reg.agents[0] = a1;
 
-        let mut a2 = reg.create(Agent { role: "b".into(), ..Agent::default() }, "t".into(), "now".into());
+        let mut a2 = reg.create(
+            Agent {
+                role: "b".into(),
+                ..Agent::default()
+            },
+            "t".into(),
+            "now".into(),
+        );
         a2.state = "exited".into();
         reg.agents[1] = a2;
 
-        let mut a3 = reg.create(Agent { role: "c".into(), ..Agent::default() }, "t".into(), "now".into());
+        let mut a3 = reg.create(
+            Agent {
+                role: "c".into(),
+                ..Agent::default()
+            },
+            "t".into(),
+            "now".into(),
+        );
         a3.state = "killed".into();
         reg.agents[2] = a3;
 
-        let mut a4 = reg.create(Agent { role: "d".into(), ..Agent::default() }, "t".into(), "now".into());
+        let mut a4 = reg.create(
+            Agent {
+                role: "d".into(),
+                ..Agent::default()
+            },
+            "t".into(),
+            "now".into(),
+        );
         a4.state = "failed".into();
         reg.agents[3] = a4;
 
@@ -1479,7 +1596,10 @@ mod tests {
         let act = panel.handle_key(KeyEvent::new(KeyCode::Char('X'), KeyModifiers::empty()));
         assert_eq!(act, None);
 
-        if let AgentsSubModal::ConfirmCleanAll { count, ref message, .. } = panel.sub_modal {
+        if let AgentsSubModal::ConfirmCleanAll {
+            count, ref message, ..
+        } = panel.sub_modal
+        {
             assert_eq!(count, 3);
             assert!(message.contains("3 agentes definitivos"));
         } else {
@@ -1505,7 +1625,15 @@ mod tests {
     #[test]
     fn test_one_modal_at_a_time_and_esc_cancels() {
         let mut reg = AgentRegistryFile::default();
-        reg.create(Agent { id: "a1".into(), state: "working".into(), ..Agent::default() }, "t".into(), "now".into());
+        reg.create(
+            Agent {
+                id: "a1".into(),
+                state: "working".into(),
+                ..Agent::default()
+            },
+            "t".into(),
+            "now".into(),
+        );
 
         let mut panel = ShepherdAgentsPanelState::from_registry(&reg);
         panel.open = true;
@@ -1530,8 +1658,24 @@ mod tests {
     #[test]
     fn test_mouse_clicks_and_double_click_focus() {
         let mut reg = AgentRegistryFile::default();
-        let _a1 = reg.create(Agent { role: "coder".into(), pane: "p1".into(), ..Agent::default() }, "t".into(), "now".into());
-        let _a2 = reg.create(Agent { role: "coder".into(), pane: "p2".into(), ..Agent::default() }, "t".into(), "now".into());
+        let _a1 = reg.create(
+            Agent {
+                role: "coder".into(),
+                pane: "p1".into(),
+                ..Agent::default()
+            },
+            "t".into(),
+            "now".into(),
+        );
+        let _a2 = reg.create(
+            Agent {
+                role: "coder".into(),
+                pane: "p2".into(),
+                ..Agent::default()
+            },
+            "t".into(),
+            "now".into(),
+        );
 
         let mut panel = ShepherdAgentsPanelState::from_registry(&reg);
         panel.open = true;
@@ -1560,7 +1704,11 @@ mod tests {
 
         // Reopen and test close button click
         panel.open = true;
-        let act = panel.handle_click(rendered.close_button.x + 1, rendered.close_button.y, &rendered);
+        let act = panel.handle_click(
+            rendered.close_button.x + 1,
+            rendered.close_button.y,
+            &rendered,
+        );
         assert_eq!(act, None);
         assert!(!panel.open, "Close button must close panel");
     }

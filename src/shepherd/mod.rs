@@ -34,12 +34,12 @@ pub use overlay::{
 pub use panel::ShepherdAgentsPanelState;
 #[allow(unused_imports)]
 pub use runs::ShepherdRunsState;
+#[allow(unused_imports)] // Re-exported for server runtime and API dispatch in F2
+pub use service::{ShepherdCallJob, ShepherdRuntimeService};
 #[allow(unused_imports)]
 pub use skills::ShepherdSkillsState;
 #[allow(unused_imports)]
 pub use tasks::ShepherdTasksState;
-#[allow(unused_imports)] // Re-exported for server runtime and API dispatch in F2
-pub use service::{ShepherdCallJob, ShepherdRuntimeService};
 
 use serde_json::{json, Value};
 use shepherd_core::{
@@ -70,10 +70,7 @@ const WAIT_POLL_INTERVAL: Duration = Duration::from_millis(25);
 /// - `Method::AgentPrompt` is routed to `App::handle_deferred_agent_api_request`
 /// - `Method::WorktreeCreate` is routed to `App::handle_deferred_worktree_api_request`
 /// - All other `Method`s are routed to `App::handle_api_request_after_internal_events_drained`
-pub(crate) fn dispatch_api_message_on_app(
-    app: &mut crate::app::App,
-    msg: ApiRequestMessage,
-) {
+pub(crate) fn dispatch_api_message_on_app(app: &mut crate::app::App, msg: ApiRequestMessage) {
     match &msg.request.method {
         Method::AgentPrompt(_) => {
             app.handle_deferred_agent_api_request(msg.request, msg.respond_to);
@@ -157,10 +154,7 @@ pub fn in_process_from_app_channel(
 }
 
 /// Construct a `ShepherdInProcess` adapter backed by Shepherd's internal `ApiClient` (`src/api/client.rs`).
-pub fn in_process_from_api_client(
-    client: ApiClient,
-    session: Option<&str>,
-) -> ShepherdInProcess {
+pub fn in_process_from_api_client(client: ApiClient, session: Option<&str>) -> ShepherdInProcess {
     let seq = AtomicU64::new(1);
     let session_name = session.unwrap_or("shepherd").to_owned();
     ShepherdInProcess::new(session_name, move |method, params| {
@@ -229,14 +223,14 @@ pub fn run_cli(args: &[String]) -> std::io::Result<i32> {
         None
     };
 
-    let terminals: Option<Arc<dyn Terminals>> = match shepherd_core::terminals::select_backend(&config)
-    {
-        Ok(BackendKind::Hc) => None,
-        Ok(BackendKind::InProcess | BackendKind::Socket) | Err(_) => {
-            try_connect_local_in_process(session_name)
-                .map(|adapter| Arc::new(adapter) as Arc<dyn Terminals>)
-        }
-    };
+    let terminals: Option<Arc<dyn Terminals>> =
+        match shepherd_core::terminals::select_backend(&config) {
+            Ok(BackendKind::Hc) => None,
+            Ok(BackendKind::InProcess | BackendKind::Socket) | Err(_) => {
+                try_connect_local_in_process(session_name)
+                    .map(|adapter| Arc::new(adapter) as Arc<dyn Terminals>)
+            }
+        };
 
     let cli_args: Vec<String> = if args.first().map(|s| s.as_str()) == Some("shepherd") {
         args.iter().skip(1).cloned().collect()
@@ -323,11 +317,7 @@ fn register_default_in_process_factory() {
     })));
 }
 
-fn decode_schema_request(
-    id: &str,
-    method: &str,
-    params: Value,
-) -> Result<Request, ShepherdError> {
+fn decode_schema_request(id: &str, method: &str, params: Value) -> Result<Request, ShepherdError> {
     let envelope = json!({
         "id": id,
         "method": method,
@@ -547,10 +537,7 @@ mod tests {
         let snapshot = terminals.client().snapshot().unwrap();
         let workspaces = snapshot["workspaces"].as_array().unwrap();
         assert_eq!(workspaces.len(), 1);
-        let pane_id = snapshot["panes"][0]["pane_id"]
-            .as_str()
-            .unwrap()
-            .to_owned();
+        let pane_id = snapshot["panes"][0]["pane_id"].as_str().unwrap().to_owned();
 
         // 2. Rename and label pane via Terminals::label in-process
         terminals
@@ -648,8 +635,10 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let temp_dir = std::env::temp_dir()
-            .join(format!("shepherd-shepherd-cli-test-{}-{nonce}", std::process::id()));
+        let temp_dir = std::env::temp_dir().join(format!(
+            "shepherd-shepherd-cli-test-{}-{nonce}",
+            std::process::id()
+        ));
         std::fs::create_dir_all(temp_dir.join("shepherd")).unwrap();
         let orig_xdg = std::env::var_os("XDG_STATE_HOME");
         let orig_home = std::env::var_os("HOME");
@@ -790,13 +779,7 @@ mod tests {
         let mut enabled_cfg = Config::default();
         enabled_cfg.shepherd.enabled = true;
         let (_dummy_tx2, dummy_rx2) = tokio_mpsc::unbounded_channel();
-        let mut app_enabled = App::new(
-            &enabled_cfg,
-            AppPolicy::TEST,
-            None,
-            dummy_rx2,
-            event_hub,
-        );
+        let mut app_enabled = App::new(&enabled_cfg, AppPolicy::TEST, None, dummy_rx2, event_hub);
         app_enabled.start_shepherd_service_if_enabled(Some(api_tx));
         assert!(app_enabled.shepherd_service.is_some());
         assert!(app_enabled.shepherd_service.as_ref().unwrap().is_running());

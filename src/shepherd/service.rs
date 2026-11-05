@@ -308,7 +308,6 @@ impl Drop for ShepherdRuntimeService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Duration;
     use shepherd_core::{
         service::ManualClock,
         terminals::{InMemoryTerminals, TerminalAgentStatus},
@@ -316,6 +315,7 @@ mod tests {
     };
     use std::io::{Read, Write};
     use std::net::TcpStream;
+    use std::time::Duration;
 
     #[test]
     fn runtime_service_resumes_on_startup_serves_in_process_mcp_and_stops_cleanly() {
@@ -496,7 +496,9 @@ mod tests {
         // Cached registry must be served immediately as-is
         let cached = svc.cached_registry();
         assert_eq!(cached.agents.len(), 1);
-        let coder = cached.result("coder-1").expect("coder-1 in cached registry");
+        let coder = cached
+            .result("coder-1")
+            .expect("coder-1 in cached registry");
         assert_eq!(coder.state, "blocked");
         assert_eq!(coder.notice, "trust dialog: open tab and accept");
 
