@@ -27,7 +27,9 @@ pub enum PatternRunState {
     Paused,
     Stopped,
     Failed,
-    Completed,
+    #[serde(alias = "completed")]
+    Done,
+    Degraded,
 }
 
 impl std::fmt::Display for PatternRunState {
@@ -37,7 +39,8 @@ impl std::fmt::Display for PatternRunState {
             Self::Paused => write!(f, "paused"),
             Self::Stopped => write!(f, "stopped"),
             Self::Failed => write!(f, "failed"),
-            Self::Completed => write!(f, "completed"),
+            Self::Done => write!(f, "done"),
+            Self::Degraded => write!(f, "degraded"),
         }
     }
 }
@@ -111,7 +114,8 @@ pub fn load_pattern_runs(path: &Path) -> Result<Vec<PatternRun>, String> {
     if data.is_empty() {
         return Ok(Vec::new());
     }
-    serde_json::from_slice(&data).map_err(|e| format!("invalid pattern runs json in {}: {e}", path.display()))
+    serde_json::from_slice(&data)
+        .map_err(|e| format!("invalid pattern runs json in {}: {e}", path.display()))
 }
 
 /// Atomically save pattern runs to disk.
@@ -133,4 +137,395 @@ pub fn save_pattern_runs(path: &Path, runs: &[PatternRun]) -> Result<(), String>
         .map_err(|e| format!("cannot rename to {}: {e}", path.display()))?;
 
     Ok(())
+}
+
+use super::{load_config, OrchestrationService};
+
+impl OrchestrationService {
+    pub fn start_pattern_run(
+        &self,
+        root: &Path,
+        pattern_name: Option<&str>,
+        pattern_obj: Option<crate::patterns::Pattern>,
+        task: Option<&str>,
+        worktree: Option<&str>,
+        confirm_over_limit: bool,
+    ) -> Result<PatternRun, String> {
+        let pattern = if let Some(pat) = pattern_obj {
+            pat
+        } else if let Some(name) = pattern_name {
+            if let Some(builtin) = crate::patterns::get_builtin_pattern(name) {
+                builtin
+            } else {
+                match crate::patterns::load_pattern(name, root, None) {
+                    Ok((pat, _, _)) => pat,
+                    Err(e) => return Err(format!("cannot load pattern {name:?}: {e}")),
+                }
+            }
+        } else {
+            return Err("missing 'pattern' or 'pattern_obj' for pattern run".to_owned());
+        };
+
+        let config = load_config(root).unwrap_or_default();
+        let problems = crate::patterns::validate(&pattern, &config);
+        let errors: Vec<_> = problems
+            .iter()
+            .filter(|p| p.severity == crate::patterns::Severity::Error)
+            .collect();
+        if !errors.is_empty() {
+            let msg = errors
+                .iter()
+                .map(|e| format!("{}: {}", e.path, e.message))
+                .collect::<Vec<_>>()
+                .join("; ");
+            return Err(format!(
+                "validation failed for pattern '{}': {msg}",
+                pattern.name
+            ));
+        }
+
+        // Limits check: hierarchical depth
+        if pattern.kind == crate::patterns::PatternKind::Hierarchical {
+            for ag in &pattern.agents {
+                let lvl = ag.level.unwrap_or(0);
+                if lvl > config.limits.max_spawn_depth && !confirm_over_limit {
+                    return Err(format!(
+                        "confirmation_required: agent '{}' level {} exceeds max_spawn_depth ({}); pass confirm_over_limit to proceed",
+                        ag.id, lvl, config.limits.max_spawn_depth
+                    ));
+                }
+            }
+        }
+
+        // Limits check: max concurrent agents
+        let total_new: usize = pattern.agents.iter().map(|a| a.count.max(1) as usize).sum();
+        let registry = self.load_registry()?;
+        let live_count = registry.live().len();
+        if live_count + total_new > config.limits.max_concurrent_agents && !confirm_over_limit {
+            return Err(format!(
+                "confirmation_required: max_concurrent_agents ({}) reached ({} live + {} new); pass confirm_over_limit to proceed",
+                config.limits.max_concurrent_agents, live_count, total_new
+            ));
+        }
+
+        // Create pattern topics in bus
+        let bus = self.bus()?;
+        for topic in &pattern.topics {
+            let _ = bus.topic_create(&topic.name, topic.partitions);
+        }
+
+        let run_id = format!("run-{}-{}", pattern.name, self.clock.now_ms());
+        let now = self.clock.now_rfc3339();
+        let task_desc = task.unwrap_or("Execute pattern workflow").to_string();
+
+        let abs_root = if root.is_absolute() {
+            root.to_path_buf()
+        } else {
+            std::fs::canonicalize(root)
+                .unwrap_or_else(|_| std::env::current_dir().unwrap_or_default().join(root))
+        };
+
+        let mut run_agents = Vec::new();
+        for agent_def in &pattern.agents {
+            let count = agent_def.count.max(1);
+            for idx in 0..count {
+                let agent_slot_id = if count == 1 {
+                    agent_def.id.clone()
+                } else {
+                    format!("{}-{}", agent_def.id, idx + 1)
+                };
+
+                let mut prompt = format!(
+                    "You are operating as role '{}' in Shepherd multi-agent pattern '{}' (topology: {}).\nTask: {}\nPublishes to topics: {:?}\nConsumes from topics: {:?}\nUse the 'shepherd-events' skill or MCP event tools (publish, poll, subscribe, ack) to collaborate with other agents.\n",
+                    agent_def.role, pattern.name, pattern.kind, task_desc, agent_def.publishes, agent_def.consumes
+                );
+                if let Some(ref custom_prompt) = agent_def.prompt {
+                    prompt.push_str(&format!("\nPersona instructions:\n{}\n", custom_prompt));
+                }
+
+                let spawn_req = crate::service::ServiceSpawnRequest {
+                    root: abs_root.clone(),
+                    role: agent_def.role.clone(),
+                    task: prompt,
+                    task_id: Some(run_id.clone()),
+                    vendor: agent_def.vendor.clone(),
+                    model: agent_def.model.clone(),
+                    parent_id: None,
+                    worktree: worktree.map(|w| !w.is_empty()),
+                    skills: Default::default(),
+                    mcp_url: self.mcp_url(),
+                    confirm_over_limit,
+                    deliver_prompt: true,
+                };
+
+                let spawned = match self.spawn(spawn_req) {
+                    Ok(ag) => ag,
+                    Err(e) => {
+                        let failed_run = PatternRun {
+                            id: run_id.clone(),
+                            pattern: pattern.name.clone(),
+                            kind: pattern.kind.to_string(),
+                            task: task_desc.clone(),
+                            worktree: worktree.map(|w| w.to_string()),
+                            topics: pattern.topics.iter().map(|t| t.name.clone()).collect(),
+                            agents: run_agents,
+                            state: PatternRunState::Failed,
+                            created_at: now.clone(),
+                            updated_at: now.clone(),
+                            finished_at: Some(now),
+                            error: Some(e.clone()),
+                        };
+                        let runs_file = pattern_runs_path(root, &self.service_config.state_dir);
+                        let mut existing = load_pattern_runs(&runs_file).unwrap_or_default();
+                        existing.push(failed_run);
+                        let _ = save_pattern_runs(&runs_file, &existing);
+                        return Err(format!("failed to spawn agent {agent_slot_id}: {e}"));
+                    }
+                };
+
+                for topic_name in &agent_def.consumes {
+                    let group = agent_def.group.as_deref().unwrap_or(&agent_def.role);
+                    let _ = bus.subscribe(&spawned.id, topic_name, Some(group));
+                }
+
+                run_agents.push(PatternRunAgent {
+                    id: spawned.id,
+                    role: agent_def.role.clone(),
+                    vendor: Some(spawned.vendor.clone()),
+                    model: Some(spawned.model.clone()),
+                    level: agent_def.level,
+                    state: spawned.state.clone(),
+                    publishes: agent_def.publishes.clone(),
+                    consumes: agent_def.consumes.clone(),
+                });
+            }
+        }
+
+        let run = PatternRun {
+            id: run_id,
+            pattern: pattern.name.clone(),
+            kind: pattern.kind.to_string(),
+            task: task_desc,
+            worktree: worktree.map(|w| w.to_string()),
+            topics: pattern.topics.iter().map(|t| t.name.clone()).collect(),
+            agents: run_agents,
+            state: PatternRunState::Running,
+            created_at: now.clone(),
+            updated_at: now,
+            finished_at: None,
+            error: None,
+        };
+
+        let runs_file = pattern_runs_path(root, &self.service_config.state_dir);
+        let mut existing = load_pattern_runs(&runs_file).unwrap_or_default();
+        existing.push(run.clone());
+        save_pattern_runs(&runs_file, &existing)?;
+        Ok(run)
+    }
+
+    pub fn reconcile_pattern_runs(
+        &self,
+        registry: &crate::AgentRegistryFile,
+        root: Option<&Path>,
+    ) -> Result<(), String> {
+        let mut paths = vec![pattern_runs_path(
+            &self.service_config.state_dir,
+            &self.service_config.state_dir,
+        )];
+        if let Some(r) = root {
+            paths.push(pattern_runs_path(r, &self.service_config.state_dir));
+        }
+        for ag in &registry.agents {
+            if !ag.root.is_empty() {
+                paths.push(pattern_runs_path(
+                    Path::new(&ag.root),
+                    &self.service_config.state_dir,
+                ));
+            }
+        }
+        paths.sort();
+        paths.dedup();
+
+        let now = self.clock.now_rfc3339();
+
+        for path in paths {
+            if !path.exists() {
+                continue;
+            }
+            let mut runs = match load_pattern_runs(&path) {
+                Ok(r) => r,
+                Err(_) => continue,
+            };
+            let mut dirty = false;
+
+            for run in &mut runs {
+                if run.state != PatternRunState::Running && run.state != PatternRunState::Paused {
+                    continue;
+                }
+
+                for ag in &mut run.agents {
+                    if let Some(live_agent) = registry.agents.iter().find(|a| a.id == ag.id) {
+                        ag.state = live_agent.state.clone();
+                    } else {
+                        ag.state = "exited".to_string();
+                    }
+                }
+
+                let live_count = run
+                    .agents
+                    .iter()
+                    .filter(|a| {
+                        !matches!(a.state.as_str(), "done" | "exited" | "killed" | "failed")
+                    })
+                    .count();
+
+                if live_count == 0 {
+                    let all_done =
+                        !run.agents.is_empty() && run.agents.iter().all(|a| a.state == "done");
+                    let all_failed = !run.agents.is_empty()
+                        && run
+                            .agents
+                            .iter()
+                            .all(|a| matches!(a.state.as_str(), "exited" | "killed" | "failed"));
+
+                    if all_done {
+                        run.state = PatternRunState::Done;
+                    } else if all_failed {
+                        run.state = PatternRunState::Failed;
+                    } else {
+                        run.state = PatternRunState::Degraded;
+                    }
+
+                    if run.finished_at.is_none() {
+                        run.finished_at = Some(now.clone());
+                    }
+                    run.updated_at = now.clone();
+                    dirty = true;
+                }
+            }
+
+            if dirty {
+                save_pattern_runs(&path, &runs)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn list_pattern_runs(&self, root: &Path) -> Result<Vec<PatternRunSummary>, String> {
+        let registry = self.load_registry().unwrap_or_default();
+        let _ = self.reconcile_pattern_runs(&registry, Some(root));
+        let runs_file = pattern_runs_path(root, &self.service_config.state_dir);
+        let runs = load_pattern_runs(&runs_file)?;
+        let live_ids: std::collections::HashSet<String> =
+            registry.live().into_iter().map(|a| a.id.clone()).collect();
+
+        let summaries = runs
+            .into_iter()
+            .map(|r| {
+                let live_count = r.agents.iter().filter(|a| live_ids.contains(&a.id)).count();
+                r.summary(live_count)
+            })
+            .collect();
+        Ok(summaries)
+    }
+
+    pub fn get_pattern_run(&self, root: &Path, id: &str) -> Result<PatternRun, String> {
+        let registry = self.load_registry().unwrap_or_default();
+        let _ = self.reconcile_pattern_runs(&registry, Some(root));
+        let runs_file = pattern_runs_path(root, &self.service_config.state_dir);
+        let runs = load_pattern_runs(&runs_file)?;
+        let mut run = runs
+            .into_iter()
+            .find(|r| r.id == id)
+            .ok_or_else(|| format!("pattern run '{id}' not found"))?;
+
+        for ag in &mut run.agents {
+            if let Some(live_agent) = registry.agents.iter().find(|a| a.id == ag.id) {
+                ag.state = live_agent.state.clone();
+            }
+        }
+        Ok(run)
+    }
+
+    pub fn pause_pattern_run(&self, root: &Path, id: &str) -> Result<PatternRun, String> {
+        let runs_file = pattern_runs_path(root, &self.service_config.state_dir);
+        let mut runs = load_pattern_runs(&runs_file)?;
+        let run = runs
+            .iter_mut()
+            .find(|r| r.id == id)
+            .ok_or_else(|| format!("pattern run '{id}' not found"))?;
+
+        if run.state != PatternRunState::Stopped && run.state != PatternRunState::Failed {
+            run.state = PatternRunState::Paused;
+            run.updated_at = self.clock.now_rfc3339();
+            let bus = self.bus()?;
+            for topic in &run.topics {
+                let _ = bus.pause_topic(topic);
+            }
+        }
+        let result = run.clone();
+        save_pattern_runs(&runs_file, &runs)?;
+        Ok(result)
+    }
+
+    pub fn resume_pattern_run(&self, root: &Path, id: &str) -> Result<PatternRun, String> {
+        let runs_file = pattern_runs_path(root, &self.service_config.state_dir);
+        let mut runs = load_pattern_runs(&runs_file)?;
+        let run = runs
+            .iter_mut()
+            .find(|r| r.id == id)
+            .ok_or_else(|| format!("pattern run '{id}' not found"))?;
+
+        if run.state == PatternRunState::Paused {
+            run.state = PatternRunState::Running;
+            run.updated_at = self.clock.now_rfc3339();
+            let bus = self.bus()?;
+            for topic in &run.topics {
+                let _ = bus.resume_topic(topic);
+            }
+        }
+        let result = run.clone();
+        save_pattern_runs(&runs_file, &runs)?;
+        Ok(result)
+    }
+
+    pub fn stop_pattern_run(
+        &self,
+        root: &Path,
+        id: &str,
+        confirm: bool,
+    ) -> Result<PatternRun, String> {
+        if !confirm {
+            return Err(format!(
+                "confirmation_required: stopping pattern run '{id}' kills all its agents; pass confirm: true to proceed"
+            ));
+        }
+        let runs_file = pattern_runs_path(root, &self.service_config.state_dir);
+        let mut runs = load_pattern_runs(&runs_file)?;
+        let run = runs
+            .iter_mut()
+            .find(|r| r.id == id)
+            .ok_or_else(|| format!("pattern run '{id}' not found"))?;
+
+        run.state = PatternRunState::Stopped;
+        let now = self.clock.now_rfc3339();
+        run.finished_at = Some(now.clone());
+        run.updated_at = now;
+
+        for ag in &mut run.agents {
+            let _ = self.kill(&ag.id);
+            ag.state = "stopped".to_string();
+        }
+
+        if let Ok(bus) = self.bus() {
+            for topic in &run.topics {
+                let _ = bus.resume_topic(topic);
+            }
+        }
+
+        let result = run.clone();
+        save_pattern_runs(&runs_file, &runs)?;
+        Ok(result)
+    }
 }

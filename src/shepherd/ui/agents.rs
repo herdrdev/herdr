@@ -5,14 +5,16 @@ use ratatui::{
     style::{Modifier, Style},
 };
 
-use crate::app::state::Palette;
 use super::components::{
     confirm_stripe::{render_confirm_stripe, ConfirmStripeHits},
-    detail_view::{render_detail_view, AlertLevel, DetailContentBlock, DetailHeader, DetailViewHits},
+    detail_view::{
+        render_detail_view, AlertLevel, DetailContentBlock, DetailHeader, DetailViewHits,
+    },
     empty_state::{render_empty_state, EmptyStateHits},
     inline_form::{render_inline_form, FormField, InlineFormHits, InlineFormState},
     list_view::{render_list_view, ListViewHits, ListViewItem},
 };
+use crate::app::state::Palette;
 pub use crate::shepherd::panel::{ShepherdAgentRow, ShepherdAgentsAction};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -128,10 +130,22 @@ impl ShepherdAgentsSectionState {
             "NUEVO AGENTE (Formulario en línea)",
             vec![
                 FormField::new("Rol obligatorio", "ej. coder"),
-                FormField::new("Tarea asignada (ID o descripción)", "ej. 12 - Soporte para banderas booleanas"),
-                FormField::new("Vendor / Modelo (opcional)", "ej. anthropic/claude-3-7-sonnet"),
-                FormField::new("Worktree / Directorio (opcional)", "ej. .shepherd/worktrees/task-12"),
-                FormField::new("Skills adicionales (separadas por coma)", "ej. git-safe, rust-tools"),
+                FormField::new(
+                    "Tarea asignada (ID o descripción)",
+                    "ej. 12 - Soporte para banderas booleanas",
+                ),
+                FormField::new(
+                    "Vendor / Modelo (opcional)",
+                    "ej. anthropic/claude-3-7-sonnet",
+                ),
+                FormField::new(
+                    "Worktree / Directorio (opcional)",
+                    "ej. .shepherd/worktrees/task-12",
+                ),
+                FormField::new(
+                    "Skills adicionales (separadas por coma)",
+                    "ej. git-safe, rust-tools",
+                ),
             ],
         ));
         self.confirm_kill = None;
@@ -341,17 +355,15 @@ impl ShepherdAgentsSectionState {
                     form.cycle_backward();
                     return (true, None);
                 }
-                KeyCode::Enter => {
-                    match self.submit_spawn() {
-                        Ok(act) => return (true, act),
-                        Err(e) => {
-                            if let Some(ref mut f) = self.spawn_form {
-                                f.error = Some(e);
-                            }
-                            return (true, None);
+                KeyCode::Enter => match self.submit_spawn() {
+                    Ok(act) => return (true, act),
+                    Err(e) => {
+                        if let Some(ref mut f) = self.spawn_form {
+                            f.error = Some(e);
                         }
+                        return (true, None);
                     }
-                }
+                },
                 KeyCode::Backspace => {
                     let idx = form.active_field;
                     if idx < form.fields.len() {
@@ -359,7 +371,10 @@ impl ShepherdAgentsSectionState {
                     }
                     return (true, None);
                 }
-                KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) && !key.modifiers.contains(KeyModifiers::ALT) => {
+                KeyCode::Char(c)
+                    if !key.modifiers.contains(KeyModifiers::CONTROL)
+                        && !key.modifiers.contains(KeyModifiers::ALT) =>
+                {
                     let idx = form.active_field;
                     if idx < form.fields.len() {
                         form.fields[idx].value.push(c);
@@ -400,6 +415,7 @@ impl ShepherdAgentsSectionState {
                 self.start_clean_all();
                 (true, None)
             }
+            KeyCode::Char('r') | KeyCode::Char('R') => (true, Some(ShepherdAgentsAction::Refresh)),
             _ => (false, None),
         }
     }
@@ -420,7 +436,9 @@ pub fn render_agents_section(
     let list_w = if is_compact {
         area.width
     } else {
-        (area.width * 34 / 100).max(24).min(area.width.saturating_sub(24))
+        (area.width * 34 / 100)
+            .max(24)
+            .min(area.width.saturating_sub(24))
     };
     let list_area = Rect::new(area.x, area.y, list_w, area.height);
 
@@ -467,9 +485,7 @@ pub fn render_agents_section(
     // Vertical divider
     let div_x = list_area.right();
     for y in area.y..area.bottom() {
-        buffer[(div_x, y)]
-            .set_char('│')
-            .set_fg(palette.surface_dim);
+        buffer[(div_x, y)].set_char('│').set_fg(palette.surface_dim);
     }
 
     let detail_x = div_x + 1;
@@ -492,7 +508,9 @@ pub fn render_agents_section(
 
     // 2. Confirm kill stripe
     if let Some(ref agent_id) = state.confirm_kill {
-        let msg = format!("¿Enviar SIGKILL al proceso del agente '{agent_id}'? Se detendrá inmediatamente.");
+        let msg = format!(
+            "¿Enviar SIGKILL al proceso del agente '{agent_id}'? Se detendrá inmediatamente."
+        );
         hits.stripe_hits = Some(render_confirm_stripe(
             buffer,
             detail_area,
@@ -522,7 +540,9 @@ pub fn render_agents_section(
 
     // 4. Confirm clean all stripe
     if let Some(count) = state.confirm_clean_all {
-        let msg = format!("¿Limpiar todos los agentes finalizados ({count})? Se eliminarán de la sesión.");
+        let msg = format!(
+            "¿Limpiar todos los agentes finalizados ({count})? Se eliminarán de la sesión."
+        );
         hits.stripe_hits = Some(render_confirm_stripe(
             buffer,
             detail_area,
@@ -542,7 +562,7 @@ pub fn render_agents_section(
             detail_area,
             "NO HAY AGENTES ACTIVOS",
             "No hay ningún agente en ejecución en esta sesión de Shepherd.\nPuedes lanzar el primer agente con un rol y tarea específicos.",
-            &[("+ Lanzar Primer Agente", Some("s"))],
+            &[("+ Lanzar Primer Agente", Some("s")), ("Refrescar", Some("r"))],
             palette,
         ));
         return hits;
@@ -561,17 +581,33 @@ pub fn render_agents_section(
 
         let mut badges = vec![
             (state_str.to_string(), Style::default().fg(state_color)),
-            (format!("[{}]", agent.role), Style::default().fg(palette.accent)),
+            (
+                format!("[{}]", agent.role),
+                Style::default().fg(palette.accent),
+            ),
         ];
         if agent.needs_you {
-            badges.push(("[NEEDS YOU]".to_string(), Style::default().fg(palette.yellow).add_modifier(Modifier::BOLD)));
+            badges.push((
+                "[NEEDS YOU]".to_string(),
+                Style::default()
+                    .fg(palette.yellow)
+                    .add_modifier(Modifier::BOLD),
+            ));
         }
 
         let meta_line = format!(
             "Vendor: {} | Modelo: {} | Terminal Pane: {}",
             agent.vendor,
-            if agent.model.is_empty() { "default" } else { &agent.model },
-            if agent.pane.is_empty() { "ninguno" } else { &agent.pane }
+            if agent.model.is_empty() {
+                "default"
+            } else {
+                &agent.model
+            },
+            if agent.pane.is_empty() {
+                "ninguno"
+            } else {
+                &agent.pane
+            }
         );
 
         let header = DetailHeader {
@@ -687,19 +723,17 @@ mod tests {
 
     #[test]
     fn test_agents_section_destructive_guards_kill_and_clean() {
-        let mut state = ShepherdAgentsSectionState::new(vec![
-            ShepherdAgentRow {
-                id: "ag-1".into(),
-                role: "coder".into(),
-                vendor: "claude".into(),
-                model: "sonnet".into(),
-                state: "working".into(),
-                needs_you: false,
-                notice: "".into(),
-                pane: "pane-1".into(),
-                task_text: "Task 1".into(),
-            },
-        ]);
+        let mut state = ShepherdAgentsSectionState::new(vec![ShepherdAgentRow {
+            id: "ag-1".into(),
+            role: "coder".into(),
+            vendor: "claude".into(),
+            model: "sonnet".into(),
+            state: "working".into(),
+            needs_you: false,
+            notice: "".into(),
+            pane: "pane-1".into(),
+            task_text: "Task 1".into(),
+        }]);
 
         // 1. Kill requires confirmation
         state.handle_key(&KeyEvent::new(KeyCode::Char('K'), KeyModifiers::NONE));
@@ -761,5 +795,51 @@ mod tests {
                 extra_skills: Vec::new(),
             })
         );
+    }
+
+    #[test]
+    fn test_agents_section_manual_refresh_key() {
+        let mut state = ShepherdAgentsSectionState::default();
+        let (handled, act) =
+            state.handle_key(&KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE));
+        assert!(handled);
+        assert_eq!(act, Some(ShepherdAgentsAction::Refresh));
+
+        let (handled_upper, act_upper) =
+            state.handle_key(&KeyEvent::new(KeyCode::Char('R'), KeyModifiers::NONE));
+        assert!(handled_upper);
+        assert_eq!(act_upper, Some(ShepherdAgentsAction::Refresh));
+    }
+
+    #[test]
+    fn test_agents_section_render_transition_empty_to_populated() {
+        let palette = Palette::terminal();
+        let area = Rect::new(0, 0, 100, 30);
+        let mut buffer = Buffer::empty(area);
+
+        // 1. Initial state: empty
+        let mut state = ShepherdAgentsSectionState::default();
+        assert!(state.agents.is_empty());
+        let hits = render_agents_section(&mut buffer, area, &state, &palette);
+        assert!(hits.empty_hits.is_some());
+
+        // 2. Agents arrive (e.g. from pattern run or server snapshot)
+        let sample_agent = shepherd_core::Agent {
+            id: "coder-1".into(),
+            role: "coder".into(),
+            vendor: "codex".into(),
+            state: "working".into(),
+            task_text: "Process order 1".into(),
+            ..shepherd_core::Agent::default()
+        };
+        state.update_from_agents(&[sample_agent]);
+        assert_eq!(state.agents.len(), 1);
+
+        let mut buffer2 = Buffer::empty(area);
+        let hits2 = render_agents_section(&mut buffer2, area, &state, &palette);
+        // Empty state is gone, populated detail view rendered
+        assert!(hits2.empty_hits.is_none());
+        assert_eq!(state.agents[0].id, "coder-1");
+        assert_eq!(state.agents[0].state, "working");
     }
 }

@@ -470,3 +470,38 @@ fn test_toggle_shepherd_keybind() {
     );
     assert!(state.is_shepherd_tab_active());
 }
+
+#[test]
+fn test_tick_shepherd_auto_refreshes_on_snapshot_and_interval() {
+    let mut state = ClientShellState::new(test_config(true));
+    state.set_endpoint_status(&ClientEndpointId::Local, ClientEndpointStatus::Online);
+    state.set_snapshot(Box::new(test_snapshot_with_two_tabs()));
+
+    let now = std::time::Instant::now();
+    let mut outcome = ClientShellInput::default();
+
+    // 1. First tick refreshes views because last_shepherd_refresh was None
+    let refreshed = state.tick_shepherd(now, &mut outcome);
+    assert!(refreshed);
+    assert!(!outcome.actions.is_empty());
+
+    // 2. Immediate subsequent tick within 100ms does NOT re-trigger
+    let mut outcome2 = ClientShellInput::default();
+    let refreshed2 = state.tick_shepherd(now + std::time::Duration::from_millis(100), &mut outcome2);
+    assert!(!refreshed2);
+
+    // 3. New snapshot arrives (e.g. from server when agents or panes are created)
+    state.set_snapshot(Box::new(test_snapshot_with_two_tabs()));
+    assert!(state.pending_shepherd_refresh);
+
+    // 4. Tick immediately executes the pending refresh from the snapshot
+    let mut outcome3 = ClientShellInput::default();
+    let refreshed3 = state.tick_shepherd(now + std::time::Duration::from_millis(200), &mut outcome3);
+    assert!(refreshed3);
+    assert!(!state.pending_shepherd_refresh);
+
+    // 5. Periodic tick after 2s fires
+    let mut outcome4 = ClientShellInput::default();
+    let refreshed4 = state.tick_shepherd(now + std::time::Duration::from_millis(2500), &mut outcome4);
+    assert!(refreshed4);
+}

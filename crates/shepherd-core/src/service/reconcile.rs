@@ -80,6 +80,7 @@ impl OrchestrationService {
                 }
             }
             self.save_registry(&registry)?;
+            let _ = self.reconcile_pattern_runs(&registry, None);
             Ok(registry)
         })();
         self.log_err("resume", result)
@@ -240,6 +241,8 @@ impl OrchestrationService {
             }
 
             self.deliver_pending_non_mcp_messages(&mut registry);
+            self.wake_dormant_topic_subscribers(&mut registry, None);
+            let _ = self.reconcile_pattern_runs(&registry, None);
 
             Ok(registry)
         })();

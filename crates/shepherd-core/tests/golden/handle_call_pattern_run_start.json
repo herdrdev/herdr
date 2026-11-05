@@ -1,0 +1,67 @@
+{
+  "agents": [
+    {
+      "consumes": [
+        "results"
+      ],
+      "id": "brain-1",
+      "model": "opus",
+      "publishes": [
+        "orders"
+      ],
+      "role": "brain",
+      "state": "<STATE_DIR_PATH>",
+      "vendor": "claude"
+    },
+    {
+      "consumes": [
+        "orders"
+      ],
+      "id": "coder-1",
+      "model": "",
+      "publishes": [
+        "results"
+      ],
+      "role": "coder",
+      "state": "<STATE_DIR_PATH>",
+      "vendor": "codex"
+    },
+    {
+      "consumes": [
+        "orders"
+      ],
+      "id": "coder-2",
+      "model": "",
+      "publishes": [
+        "results"
+      ],
+      "role": "coder",
+      "state": "<STATE_DIR_PATH>",
+      "vendor": "codex"
+    },
+    {
+      "consumes": [
+        "orders"
+      ],
+      "id": "coder-3",
+      "model": "",
+      "publishes": [
+        "results"
+      ],
+      "role": "coder",
+      "state": "<STATE_DIR_PATH>",
+      "vendor": "codex"
+    }
+  ],
+  "created_at": "<TIMESTAMP>",
+  "id": "run-orchestrator-worker-0",
+  "kind": "orchestrator-worker",
+  "pattern": "orchestrator-worker",
+  "state": "<STATE_DIR_PATH>",
+  "task": "Process user orders",
+  "topics": [
+    "orders",
+    "results"
+  ],
+  "updated_at": "<TIMESTAMP>"
+}

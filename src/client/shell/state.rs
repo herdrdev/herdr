@@ -915,6 +915,8 @@ pub(crate) struct ClientShellState {
     pub(super) overlay: Option<ClientShellOverlay>,
     pub(super) shepherd_section: Option<crate::shepherd::ui::ShepherdSectionState>,
     pub(super) shepherd_tab_active: HashMap<String, bool>,
+    pub(super) pending_shepherd_refresh: bool,
+    pub(super) last_shepherd_refresh: Option<std::time::Instant>,
     pub(super) previous_pane_id: Option<String>,
     pub(super) pane_mouse_gesture: Option<ClientPaneMouseGesture>,
     pub(super) link_hover: Option<super::link_hover::LinkHover>,
@@ -1095,6 +1097,8 @@ impl ClientShellState {
             overlay,
             shepherd_section: Some(crate::shepherd::ui::state::ShepherdSectionState::default()),
             shepherd_tab_active,
+            pending_shepherd_refresh: false,
+            last_shepherd_refresh: None,
             previous_pane_id: None,
             pane_mouse_gesture: None,
             link_hover: None,
@@ -1621,6 +1625,9 @@ impl ClientShellState {
         }
         self.resume_mobile_switcher_if_ready();
         self.reconcile_input_source();
+        if self.config.shepherd_enabled && self.is_shepherd_tab_active() {
+            self.pending_shepherd_refresh = true;
+        }
     }
 
     pub(crate) fn has_presented_surface(&self) -> bool {
@@ -1824,6 +1831,9 @@ impl ClientShellState {
         self.invalidate_link_hover();
         self.resume_mobile_switcher_if_ready();
         self.reconcile_input_source();
+        if self.config.shepherd_enabled && self.is_shepherd_tab_active() {
+            self.pending_shepherd_refresh = true;
+        }
     }
 
     pub(crate) fn tick_popup_pending(&mut self, now: std::time::Instant) {

@@ -5126,3 +5126,23 @@ Resultado con agentes reales:
 - No cubierto: pausa/reanudación y `stop` con agentes reales; pestaña Eventos con tráfico real; patrones jerárquico/blackboard/market.
 
 Limpieza: sesión aislada parada y reseteada, worktree eliminado.
+
+## Estado F8e — correcciones de la prueba real de patrones (2026-11-05)
+
+Continuación del trabajo de otro agente (cuota agotada); no se rehízo, se completó y verificó. Sin commits.
+
+**Causas raíz y arreglos** (cada uno con test: `test_reproduce_bug1_*`, `test_reproduce_bug2_*`, etc. en `service/tests.rs`)
+1. *Consumidor no despertado*: nadie volvía a avisar a un suscriptor ya inactivo. `delivery.rs::wake_dormant_topic_subscribers` envía por `agent.prompt` un aviso corto («hay N mensajes nuevos… usa poll») a miembros de grupos con mensajes sin leer. Semántica: no avisa dos veces por el mismo offset (`topic_wake_notified`, con límite de frecuencia); no despierta agentes `working`, con diálogo humano (`BLOCKED_HUMAN_NOTICE`), muertos/failed/exited/killed, ni de runs paused/stopped/failed/done; un `wait_for` activo (agente working) no se interfiere.
+2. *Estado del run*: `PatternRunState` ahora `running|paused|stopped|failed|done|degraded` (antes `completed`; cambio de esquema en `docs/next/api/shepherd-api.schema.json`, regenerado con `SHEPHERD_UPDATE_API_SCHEMA=1`). LIVE 0 → `done`; todos fallidos → `failed`; algunos → `degraded`. Se reconcilia también al arrancar el servidor (test `..._on_resume_on_startup`).
+3. *Pestaña Agentes vacía*: no se refrescaba la lista; se añade refresco automático (snapshot/intervalo, `tick_shepherd`) y tecla manual; tests de estado/render en `client::shell` y `ui/agents.rs`.
+4. *Golden*: 6 nuevos `handle_call_pattern_run*.json` (start/runs/show/pause/resume/stop), generados con `SHEPHERD_UPDATE_GOLDEN=1`; existentes intactos. Normalización de IDs `run-<patrón>-<ms>` estrechada (la primera versión rompía `handle_call_run`). No hay golden humanos/CLI de `pattern run`: esos comandos viven en el binario, no en `shepherd-core/src/cli`.
+5. *Partición*: `ui/patterns.rs` → `ui/patterns/{mod,state,gallery,diagram,editor,tests}.rs` (máx. 965 líneas); ejecutor movido a `service/patterns_run.rs` (546 líneas; `service/mod.rs` 1155).
+- Duplicados E0428 en `characterization.rs`: eliminado el bloque repetido; restaurado el golden de `pattern_validate` que había sobrescrito.
+
+**Archivos de herdr tocados**: `src/client/mod.rs`, `src/client/shell/{shepherd,state}.rs`, tests de `shepherd_virtual_tab.rs` (mínimo, para el refresco), más el esquema API.
+
+**Números reales**: shepherd-core 133 + 154 ok (testRepo=0, araquesebastian=0); `shepherd::` 89; `client::shell` 403 (2 ignored); `protocol::` 156; `api::` 318/319 + esquema regenerado; `server::` 318 (5 ignored). Intermitentes: `app::api::plugins::*` falla en conjunto, pasa solo (`plugin_pane_open_injects…` ok aislado); `explicit_approval_pushes…` ok aislado. `rename-from-herdr.sh --check` OK; rustfmt aplicado solo a archivos propios.
+
+**Verificación aislada**: `shepherd-iso.sh` arranca, `shepherd.pattern.run.list` responde `runs: []`, pestañas visibles incl. Agentes y Eventos. NO se lanzó ningún agente real; no se capturó la pestaña con agentes de patrón ni el aviso entregado en vivo (cubierto solo por tests).
+
+**No queda hecho**: golden CLI humanos de `pattern run`; prueba real con claude/codex (la hará el brain).

@@ -531,6 +531,9 @@ impl ClientShellState {
                     outcome,
                 );
             }
+            ShepherdAgentsAction::Refresh => {
+                self.refresh_shepherd_views(outcome);
+            }
         }
     }
 
@@ -1646,6 +1649,30 @@ impl ClientShellState {
                 }
                 outcome.repaint = true;
             }
+        }
+    }
+
+    pub(crate) fn tick_shepherd(
+        &mut self,
+        now: std::time::Instant,
+        outcome: &mut ClientShellInput,
+    ) -> bool {
+        if !self.config.shepherd_enabled || !self.is_shepherd_tab_active() {
+            return false;
+        }
+
+        let should_refresh = self.pending_shepherd_refresh
+            || self
+                .last_shepherd_refresh
+                .is_none_or(|last| now.saturating_duration_since(last) >= std::time::Duration::from_millis(1500));
+
+        if should_refresh {
+            self.refresh_shepherd_views(outcome);
+            self.last_shepherd_refresh = Some(now);
+            self.pending_shepherd_refresh = false;
+            true
+        } else {
+            false
         }
     }
 }

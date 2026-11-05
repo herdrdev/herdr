@@ -492,6 +492,172 @@ impl OrchestrationService {
         }
     }
 
+    pub(crate) fn wake_dormant_topic_subscribers(
+        &self,
+        registry: &mut AgentRegistryFile,
+        topic_filter: Option<&str>,
+    ) {
+        let bus = match self.bus() {
+            Ok(b) => b,
+            Err(e) => {
+                self.record_failure(
+                    "wake_dormant_topic_subscribers",
+                    &format!("cannot open message bus: {e}"),
+                );
+                return;
+            }
+        };
+
+        // Determine agents belonging to paused, stopped, failed, or finished pattern runs (must not wake them)
+        let paused_or_inactive_agent_ids: std::collections::HashSet<String> = {
+            let mut paths = vec![crate::service::patterns_run::pattern_runs_path(
+                &self.service_config.state_dir,
+                &self.service_config.state_dir,
+            )];
+            for ag in &registry.agents {
+                if !ag.root.is_empty() {
+                    paths.push(crate::service::patterns_run::pattern_runs_path(
+                        std::path::Path::new(&ag.root),
+                        &self.service_config.state_dir,
+                    ));
+                }
+            }
+            paths.sort();
+            paths.dedup();
+            paths
+                .into_iter()
+                .flat_map(|p| {
+                    crate::service::patterns_run::load_pattern_runs(&p)
+                        .unwrap_or_default()
+                        .into_iter()
+                        .filter(|r| {
+                            matches!(
+                                r.state,
+                                crate::service::patterns_run::PatternRunState::Paused
+                                    | crate::service::patterns_run::PatternRunState::Stopped
+                                    | crate::service::patterns_run::PatternRunState::Failed
+                                    | crate::service::patterns_run::PatternRunState::Done
+                            )
+                        })
+                        .flat_map(|r| r.agents.into_iter().map(|a| a.id))
+                })
+                .collect()
+        };
+
+        let groups = match bus.consumer_groups(topic_filter) {
+            Ok(g) => g,
+            Err(_) => return,
+        };
+
+        let now_ms = self.clock.now_ms();
+        let mut registry_dirty = false;
+
+        for grp in groups {
+            for member_id in &grp.members {
+                if paused_or_inactive_agent_ids.contains(member_id) {
+                    continue;
+                }
+
+                // Check agent status in registry
+                let Some(agent) = registry.agents.iter_mut().find(|a| &a.id == member_id) else {
+                    continue;
+                };
+
+                // Dead, exited, failed, killed agents must not be woken
+                if agent.gone()
+                    || agent.state == "failed"
+                    || agent.state == "exited"
+                    || agent.state == "killed"
+                {
+                    continue;
+                }
+
+                // If agent is actively working, do not interfere (e.g. active wait_for or generating)
+                if agent.state == "working" {
+                    continue;
+                }
+
+                // Never answer human intervention dialogs
+                if agent.notice == BLOCKED_HUMAN_NOTICE {
+                    continue;
+                }
+
+                // Query live terminal status: if working or finished, do not wake
+                let target = status_query_target(agent);
+                if !target.is_empty() {
+                    if let Ok(st) = self.terminals.agent_status(&target) {
+                        if st.state == "finished" || st.status == "working" {
+                            continue;
+                        }
+                    }
+                }
+
+                // Check unread messages on the topic
+                let unread = match bus.poll(member_id, &grp.topic, None) {
+                    Ok(msgs) if !msgs.is_empty() => msgs,
+                    _ => continue,
+                };
+
+                let count = unread.len();
+                let max_offset = unread.iter().map(|m| m.offset).max().unwrap_or(0);
+
+                let key = (member_id.clone(), grp.topic.clone());
+                {
+                    let wake_map = self.topic_wake_notified.lock().unwrap();
+                    if let Some(&(last_offset, last_time_ms)) = wake_map.get(&key) {
+                        if max_offset <= last_offset {
+                            // Idempotent: already notified for this or newer offset
+                            continue;
+                        }
+                        if now_ms.saturating_sub(last_time_ms) < 3000 {
+                            // Rate limit: at most 1 alert every 3 seconds
+                            continue;
+                        }
+                    }
+                }
+
+                let prompt_text = if count == 1 {
+                    format!("Hay 1 mensaje nuevo en '{}': usa poll", grp.topic)
+                } else {
+                    format!("Hay {} mensajes nuevos en '{}': usa poll", count, grp.topic)
+                };
+
+                let prompt_target = if !agent.pane.is_empty() {
+                    agent.pane.clone()
+                } else {
+                    agent.id.clone()
+                };
+
+                let delivered = self.deliver_single_message_with_retries(
+                    agent,
+                    &prompt_target,
+                    0,
+                    &prompt_text,
+                );
+                if delivered {
+                    self.topic_wake_notified
+                        .lock()
+                        .unwrap()
+                        .insert(key, (max_offset, now_ms));
+                    if agent.state == "done" || agent.state == "idle" {
+                        agent.state = "working".into();
+                    }
+                    agent.updated = self.clock.now_rfc3339();
+                    registry_dirty = true;
+                }
+            }
+        }
+
+        if registry_dirty {
+            if let Err(e) = self.save_registry(registry) {
+                self.record_failure(
+                    "wake_dormant_topic_subscribers",
+                    &format!("cannot save registry after waking dormant subscribers: {e}"),
+                );
+            }
+        }
+    }
+
     fn is_pane_free_for_delivery(&self, agent: &Agent) -> bool {
         if !agent.notice.is_empty() || agent.state == "blocked" {
             return false;

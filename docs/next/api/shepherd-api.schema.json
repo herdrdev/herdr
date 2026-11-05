@@ -10518,7 +10518,8 @@
             "paused",
             "stopped",
             "failed",
-            "completed"
+            "done",
+            "degraded"
           ],
           "type": "string"
         },

@@ -207,7 +207,7 @@ pub fn render_shepherd_section(
             } else {
                 format!("{total} agentes registrados")
             };
-            let help = "↑/↓: lista | Enter: terminal | s: nuevo | K: matar | x: limpiar | Esc: salir";
+            let help = "↑/↓: lista | Enter: terminal | s: nuevo | K: matar | x: limpiar | r: refrescar | Esc: salir";
             (sum, help)
         }
         ShepherdSectionTab::Tasks => {

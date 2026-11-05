@@ -278,6 +278,7 @@ pub struct OrchestrationService {
     pub(crate) blocked_announced: Arc<Mutex<HashSet<String>>>,
     pub(crate) quiet_screens: Arc<Mutex<HashMap<String, ScreenQuietTracker>>>,
     pub(crate) failed_requests: Arc<Mutex<Vec<FailedRequestLogEntry>>>,
+    pub(crate) topic_wake_notified: Arc<Mutex<HashMap<(String, String), (u64, u64)>>>,
 }
 
 impl OrchestrationService {
@@ -308,6 +309,7 @@ impl OrchestrationService {
             blocked_announced: Arc::new(Mutex::new(HashSet::new())),
             quiet_screens: Arc::new(Mutex::new(HashMap::new())),
             failed_requests: Arc::new(Mutex::new(Vec::new())),
+            topic_wake_notified: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -587,313 +589,6 @@ impl OrchestrationService {
         Ok((valid, problems))
     }
 
-    pub fn start_pattern_run(
-        &self,
-        root: &Path,
-        pattern_name: Option<&str>,
-        pattern_obj: Option<crate::patterns::Pattern>,
-        task: Option<&str>,
-        worktree: Option<&str>,
-        confirm_over_limit: bool,
-    ) -> Result<patterns_run::PatternRun, String> {
-        let pattern = if let Some(pat) = pattern_obj {
-            pat
-        } else if let Some(name) = pattern_name {
-            if let Some(builtin) = crate::patterns::get_builtin_pattern(name) {
-                builtin
-            } else {
-                match crate::patterns::load_pattern(name, root, None) {
-                    Ok((pat, _, _)) => pat,
-                    Err(e) => return Err(format!("cannot load pattern {name:?}: {e}")),
-                }
-            }
-        } else {
-            return Err("missing 'pattern' or 'pattern_obj' for pattern run".to_owned());
-        };
-
-        let config = load_config(root).unwrap_or_default();
-        let problems = crate::patterns::validate(&pattern, &config);
-        let errors: Vec<_> = problems
-            .iter()
-            .filter(|p| p.severity == crate::patterns::Severity::Error)
-            .collect();
-        if !errors.is_empty() {
-            let msg = errors
-                .iter()
-                .map(|e| format!("{}: {}", e.path, e.message))
-                .collect::<Vec<_>>()
-                .join("; ");
-            return Err(format!("validation failed for pattern '{}': {msg}", pattern.name));
-        }
-
-        // Limits check: hierarchical depth
-        if pattern.kind == crate::patterns::PatternKind::Hierarchical {
-            for ag in &pattern.agents {
-                let lvl = ag.level.unwrap_or(0);
-                if lvl > config.limits.max_spawn_depth && !confirm_over_limit {
-                    return Err(format!(
-                        "confirmation_required: agent '{}' level {} exceeds max_spawn_depth ({}); pass confirm_over_limit to proceed",
-                        ag.id, lvl, config.limits.max_spawn_depth
-                    ));
-                }
-            }
-        }
-
-        // Limits check: max concurrent agents
-        let total_new: usize = pattern.agents.iter().map(|a| a.count.max(1) as usize).sum();
-        let registry = self.load_registry()?;
-        let live_count = registry.live().len();
-        if live_count + total_new > config.limits.max_concurrent_agents && !confirm_over_limit {
-            return Err(format!(
-                "confirmation_required: max_concurrent_agents ({}) reached ({} live + {} new); pass confirm_over_limit to proceed",
-                config.limits.max_concurrent_agents, live_count, total_new
-            ));
-        }
-
-        // Create pattern topics in bus
-        let bus = self.bus()?;
-        for topic in &pattern.topics {
-            let _ = bus.topic_create(&topic.name, topic.partitions);
-        }
-
-        let run_id = format!("run-{}-{}", pattern.name, self.clock.now_ms());
-        let now = self.clock.now_rfc3339();
-        let task_desc = task.unwrap_or("Execute pattern workflow").to_string();
-
-        let abs_root = if root.is_absolute() {
-            root.to_path_buf()
-        } else {
-            std::fs::canonicalize(root)
-                .unwrap_or_else(|_| std::env::current_dir().unwrap_or_default().join(root))
-        };
-
-        let mut run_agents = Vec::new();
-        for agent_def in &pattern.agents {
-            let count = agent_def.count.max(1);
-            for idx in 0..count {
-                let agent_slot_id = if count == 1 {
-                    agent_def.id.clone()
-                } else {
-                    format!("{}-{}", agent_def.id, idx + 1)
-                };
-
-                let mut prompt = format!(
-                    "You are operating as role '{}' in Shepherd multi-agent pattern '{}' (topology: {}).\nTask: {}\nPublishes to topics: {:?}\nConsumes from topics: {:?}\nUse the 'shepherd-events' skill or MCP event tools (publish, poll, subscribe, ack) to collaborate with other agents.\n",
-                    agent_def.role, pattern.name, pattern.kind, task_desc, agent_def.publishes, agent_def.consumes
-                );
-                if let Some(ref custom_prompt) = agent_def.prompt {
-                    prompt.push_str(&format!("\nPersona instructions:\n{}\n", custom_prompt));
-                }
-
-                let spawn_req = crate::service::ServiceSpawnRequest {
-                    root: abs_root.clone(),
-                    role: agent_def.role.clone(),
-                    task: prompt,
-                    task_id: Some(run_id.clone()),
-                    vendor: agent_def.vendor.clone(),
-                    model: agent_def.model.clone(),
-                    parent_id: None,
-                    worktree: worktree.map(|w| !w.is_empty()),
-                    skills: Default::default(),
-                    mcp_url: self.mcp_url(),
-                    confirm_over_limit,
-                    deliver_prompt: true,
-                };
-
-                let spawned = match self.spawn(spawn_req) {
-                    Ok(ag) => ag,
-                    Err(e) => {
-                        let failed_run = patterns_run::PatternRun {
-                            id: run_id.clone(),
-                            pattern: pattern.name.clone(),
-                            kind: pattern.kind.to_string(),
-                            task: task_desc.clone(),
-                            worktree: worktree.map(|w| w.to_string()),
-                            topics: pattern.topics.iter().map(|t| t.name.clone()).collect(),
-                            agents: run_agents,
-                            state: patterns_run::PatternRunState::Failed,
-                            created_at: now.clone(),
-                            updated_at: now.clone(),
-                            finished_at: Some(now),
-                            error: Some(e.clone()),
-                        };
-                        let runs_file = patterns_run::pattern_runs_path(root, &self.service_config.state_dir);
-                        let mut existing = patterns_run::load_pattern_runs(&runs_file).unwrap_or_default();
-                        existing.push(failed_run);
-                        let _ = patterns_run::save_pattern_runs(&runs_file, &existing);
-                        return Err(format!("failed to spawn agent {agent_slot_id}: {e}"));
-                    }
-                };
-
-                for topic_name in &agent_def.consumes {
-                    let group = agent_def.group.as_deref().unwrap_or(&agent_def.role);
-                    let _ = bus.subscribe(&spawned.id, topic_name, Some(group));
-                }
-
-                run_agents.push(patterns_run::PatternRunAgent {
-                    id: spawned.id,
-                    role: agent_def.role.clone(),
-                    vendor: Some(spawned.vendor.clone()),
-                    model: Some(spawned.model.clone()),
-                    level: agent_def.level,
-                    state: spawned.state.clone(),
-                    publishes: agent_def.publishes.clone(),
-                    consumes: agent_def.consumes.clone(),
-                });
-            }
-        }
-
-        let run = patterns_run::PatternRun {
-            id: run_id,
-            pattern: pattern.name.clone(),
-            kind: pattern.kind.to_string(),
-            task: task_desc,
-            worktree: worktree.map(|w| w.to_string()),
-            topics: pattern.topics.iter().map(|t| t.name.clone()).collect(),
-            agents: run_agents,
-            state: patterns_run::PatternRunState::Running,
-            created_at: now.clone(),
-            updated_at: now,
-            finished_at: None,
-            error: None,
-        };
-
-        let runs_file = patterns_run::pattern_runs_path(root, &self.service_config.state_dir);
-        let mut existing = patterns_run::load_pattern_runs(&runs_file).unwrap_or_default();
-        existing.push(run.clone());
-        patterns_run::save_pattern_runs(&runs_file, &existing)?;
-        Ok(run)
-    }
-
-    pub fn list_pattern_runs(
-        &self,
-        root: &Path,
-    ) -> Result<Vec<patterns_run::PatternRunSummary>, String> {
-        let runs_file = patterns_run::pattern_runs_path(root, &self.service_config.state_dir);
-        let runs = patterns_run::load_pattern_runs(&runs_file)?;
-        let registry = self.load_registry().unwrap_or_default();
-        let live_ids: std::collections::HashSet<String> = registry.live().into_iter().map(|a| a.id.clone()).collect();
-
-        let summaries = runs
-            .into_iter()
-            .map(|r| {
-                let live_count = r.agents.iter().filter(|a| live_ids.contains(&a.id)).count();
-                r.summary(live_count)
-            })
-            .collect();
-        Ok(summaries)
-    }
-
-    pub fn get_pattern_run(
-        &self,
-        root: &Path,
-        id: &str,
-    ) -> Result<patterns_run::PatternRun, String> {
-        let runs_file = patterns_run::pattern_runs_path(root, &self.service_config.state_dir);
-        let runs = patterns_run::load_pattern_runs(&runs_file)?;
-        let mut run = runs
-            .into_iter()
-            .find(|r| r.id == id)
-            .ok_or_else(|| format!("pattern run '{id}' not found"))?;
-
-        let registry = self.load_registry().unwrap_or_default();
-        for ag in &mut run.agents {
-            if let Some(live_agent) = registry.agents.iter().find(|a| a.id == ag.id) {
-                ag.state = live_agent.state.clone();
-            }
-        }
-        Ok(run)
-    }
-
-    pub fn pause_pattern_run(
-        &self,
-        root: &Path,
-        id: &str,
-    ) -> Result<patterns_run::PatternRun, String> {
-        let runs_file = patterns_run::pattern_runs_path(root, &self.service_config.state_dir);
-        let mut runs = patterns_run::load_pattern_runs(&runs_file)?;
-        let run = runs
-            .iter_mut()
-            .find(|r| r.id == id)
-            .ok_or_else(|| format!("pattern run '{id}' not found"))?;
-
-        if run.state != patterns_run::PatternRunState::Stopped && run.state != patterns_run::PatternRunState::Failed {
-            run.state = patterns_run::PatternRunState::Paused;
-            run.updated_at = self.clock.now_rfc3339();
-            let bus = self.bus()?;
-            for topic in &run.topics {
-                let _ = bus.pause_topic(topic);
-            }
-        }
-        let result = run.clone();
-        patterns_run::save_pattern_runs(&runs_file, &runs)?;
-        Ok(result)
-    }
-
-    pub fn resume_pattern_run(
-        &self,
-        root: &Path,
-        id: &str,
-    ) -> Result<patterns_run::PatternRun, String> {
-        let runs_file = patterns_run::pattern_runs_path(root, &self.service_config.state_dir);
-        let mut runs = patterns_run::load_pattern_runs(&runs_file)?;
-        let run = runs
-            .iter_mut()
-            .find(|r| r.id == id)
-            .ok_or_else(|| format!("pattern run '{id}' not found"))?;
-
-        if run.state == patterns_run::PatternRunState::Paused {
-            run.state = patterns_run::PatternRunState::Running;
-            run.updated_at = self.clock.now_rfc3339();
-            let bus = self.bus()?;
-            for topic in &run.topics {
-                let _ = bus.resume_topic(topic);
-            }
-        }
-        let result = run.clone();
-        patterns_run::save_pattern_runs(&runs_file, &runs)?;
-        Ok(result)
-    }
-
-    pub fn stop_pattern_run(
-        &self,
-        root: &Path,
-        id: &str,
-        confirm: bool,
-    ) -> Result<patterns_run::PatternRun, String> {
-        if !confirm {
-            return Err(format!(
-                "confirmation_required: stopping pattern run '{id}' kills all its agents; pass confirm: true to proceed"
-            ));
-        }
-        let runs_file = patterns_run::pattern_runs_path(root, &self.service_config.state_dir);
-        let mut runs = patterns_run::load_pattern_runs(&runs_file)?;
-        let run = runs
-            .iter_mut()
-            .find(|r| r.id == id)
-            .ok_or_else(|| format!("pattern run '{id}' not found"))?;
-
-        run.state = patterns_run::PatternRunState::Stopped;
-        let now = self.clock.now_rfc3339();
-        run.finished_at = Some(now.clone());
-        run.updated_at = now;
-
-        for ag in &mut run.agents {
-            let _ = self.kill(&ag.id);
-            ag.state = "stopped".to_string();
-        }
-
-        if let Ok(bus) = self.bus() {
-            for topic in &run.topics {
-                let _ = bus.resume_topic(topic);
-            }
-        }
-
-        let result = run.clone();
-        patterns_run::save_pattern_runs(&runs_file, &runs)?;
-        Ok(result)
-    }
-
     pub fn list_topics(&self) -> Result<Vec<crate::bus::TopicSummary>, String> {
         let bus = self.bus()?;
         bus.list_topics().map_err(|e| e.to_string())
@@ -914,8 +609,13 @@ impl OrchestrationService {
         from: &str,
     ) -> Result<crate::bus::Message, String> {
         let bus = self.bus()?;
-        bus.publish(topic, content, key, partition, from)
-            .map_err(|e| e.to_string())
+        let msg = bus
+            .publish(topic, content, key, partition, from)
+            .map_err(|e| e.to_string())?;
+        if let Ok(mut reg) = self.load_registry() {
+            self.wake_dormant_topic_subscribers(&mut reg, Some(topic));
+        }
+        Ok(msg)
     }
 
     pub fn replay_topic(

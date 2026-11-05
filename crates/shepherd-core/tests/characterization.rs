@@ -236,6 +236,15 @@ fn normalize_recursive(
                 return Value::String("http://127.0.0.1:<PORT>/mcp".to_string());
             }
 
+            // Dynamic pattern run IDs (e.g. run-orchestrator-worker-12345)
+            if s.starts_with("run-")
+                && s.rsplit('-')
+                    .next()
+                    .is_some_and(|t| t.len() >= 6 && t.bytes().all(|b| b.is_ascii_digit()))
+            {
+                return Value::String("<PATTERN_RUN_ID>".to_string());
+            }
+
             Value::String(s)
         }
         Value::Array(arr) => Value::Array(
@@ -930,6 +939,182 @@ fn test_characterization_handle_call_pattern_validate() {
         .unwrap();
     let norm = normalize_json(&res, &env);
     assert_golden("handle_call_pattern_validate", &norm);
+}
+
+#[test]
+fn test_characterization_handle_call_pattern_run_start() {
+    let env = TestEnv::new("hc-pattern-run-start");
+    let res = env
+        .service
+        .handle_call(
+            "pattern_run_start",
+            json!({
+                "root": env.root.display().to_string(),
+                "pattern": "orchestrator-worker",
+                "task": "Process user orders",
+                "confirm_over_limit": true
+            }),
+        )
+        .unwrap();
+    let norm = normalize_json(&res, &env);
+    assert_golden("handle_call_pattern_run_start", &norm);
+}
+
+#[test]
+fn test_characterization_handle_call_pattern_runs() {
+    let env = TestEnv::new("hc-pattern-runs");
+    env.service
+        .handle_call(
+            "pattern_run_start",
+            json!({
+                "root": env.root.display().to_string(),
+                "pattern": "orchestrator-worker",
+                "task": "Process user orders",
+                "confirm_over_limit": true
+            }),
+        )
+        .unwrap();
+    let res = env
+        .service
+        .handle_call(
+            "pattern_runs",
+            json!({
+                "root": env.root.display().to_string()
+            }),
+        )
+        .unwrap();
+    let norm = normalize_json(&res, &env);
+    assert_golden("handle_call_pattern_runs", &norm);
+}
+
+#[test]
+fn test_characterization_handle_call_pattern_run_show() {
+    let env = TestEnv::new("hc-pattern-run-show");
+    let start_res = env
+        .service
+        .handle_call(
+            "pattern_run_start",
+            json!({
+                "root": env.root.display().to_string(),
+                "pattern": "orchestrator-worker",
+                "task": "Process user orders",
+                "confirm_over_limit": true
+            }),
+        )
+        .unwrap();
+    let run_id = start_res.get("id").and_then(Value::as_str).unwrap();
+    let res = env
+        .service
+        .handle_call(
+            "pattern_run_show",
+            json!({
+                "root": env.root.display().to_string(),
+                "id": run_id
+            }),
+        )
+        .unwrap();
+    let norm = normalize_json(&res, &env);
+    assert_golden("handle_call_pattern_run_show", &norm);
+}
+
+#[test]
+fn test_characterization_handle_call_pattern_run_pause() {
+    let env = TestEnv::new("hc-pattern-run-pause");
+    let start_res = env
+        .service
+        .handle_call(
+            "pattern_run_start",
+            json!({
+                "root": env.root.display().to_string(),
+                "pattern": "orchestrator-worker",
+                "task": "Process user orders",
+                "confirm_over_limit": true
+            }),
+        )
+        .unwrap();
+    let run_id = start_res.get("id").and_then(Value::as_str).unwrap();
+    let res = env
+        .service
+        .handle_call(
+            "pattern_run_pause",
+            json!({
+                "root": env.root.display().to_string(),
+                "id": run_id
+            }),
+        )
+        .unwrap();
+    let norm = normalize_json(&res, &env);
+    assert_golden("handle_call_pattern_run_pause", &norm);
+}
+
+#[test]
+fn test_characterization_handle_call_pattern_run_resume() {
+    let env = TestEnv::new("hc-pattern-run-resume");
+    let start_res = env
+        .service
+        .handle_call(
+            "pattern_run_start",
+            json!({
+                "root": env.root.display().to_string(),
+                "pattern": "orchestrator-worker",
+                "task": "Process user orders",
+                "confirm_over_limit": true
+            }),
+        )
+        .unwrap();
+    let run_id = start_res.get("id").and_then(Value::as_str).unwrap();
+    env.service
+        .handle_call(
+            "pattern_run_pause",
+            json!({
+                "root": env.root.display().to_string(),
+                "id": run_id
+            }),
+        )
+        .unwrap();
+    let res = env
+        .service
+        .handle_call(
+            "pattern_run_resume",
+            json!({
+                "root": env.root.display().to_string(),
+                "id": run_id
+            }),
+        )
+        .unwrap();
+    let norm = normalize_json(&res, &env);
+    assert_golden("handle_call_pattern_run_resume", &norm);
+}
+
+#[test]
+fn test_characterization_handle_call_pattern_run_stop() {
+    let env = TestEnv::new("hc-pattern-run-stop");
+    let start_res = env
+        .service
+        .handle_call(
+            "pattern_run_start",
+            json!({
+                "root": env.root.display().to_string(),
+                "pattern": "orchestrator-worker",
+                "task": "Process user orders",
+                "confirm_over_limit": true
+            }),
+        )
+        .unwrap();
+    let run_id = start_res.get("id").and_then(Value::as_str).unwrap();
+    let res = env
+        .service
+        .handle_call(
+            "pattern_run_stop",
+            json!({
+                "root": env.root.display().to_string(),
+                "id": run_id,
+                "confirm": true
+            }),
+        )
+        .unwrap();
+    let norm = normalize_json(&res, &env);
+    assert_golden("handle_call_pattern_run_stop", &norm);
 }
 
 #[test]

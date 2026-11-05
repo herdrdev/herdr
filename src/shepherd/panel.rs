@@ -47,6 +47,7 @@ pub enum ShepherdAgentsAction {
         count: usize,
         workspace: Option<String>,
     },
+    Refresh,
 }
 
 /// Sub-modals displayed within the Shepherd agents panel.

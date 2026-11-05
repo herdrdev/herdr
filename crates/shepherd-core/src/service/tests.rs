@@ -1499,7 +1499,9 @@ fn test_pattern_run_executor_all_four_topologies_and_lifecycle() {
     assert_eq!(agents.len(), 4); // planner, coder, tester, reviewer
 
     // Verify topics created in bus
-    let topics_val = service.handle_call("topics", serde_json::json!({})).unwrap();
+    let topics_val = service
+        .handle_call("topics", serde_json::json!({}))
+        .unwrap();
     let topics_list = topics_val.as_array().unwrap();
     let topic_names: Vec<&str> = topics_list
         .iter()
@@ -1548,7 +1550,9 @@ fn test_pattern_run_executor_all_four_topologies_and_lifecycle() {
         serde_json::json!({ "id": run_id, "root": root_str, "confirm": false }),
     );
     assert!(stop_unconfirmed.is_err());
-    assert!(stop_unconfirmed.unwrap_err().contains("confirmation_required"));
+    assert!(stop_unconfirmed
+        .unwrap_err()
+        .contains("confirmation_required"));
 
     // Stop with confirmation succeeds and kills agents
     let stop_res = service
@@ -1664,7 +1668,9 @@ fn test_pattern_run_limits_and_validation_guard() {
         }),
     );
     assert!(over_limit_res.is_err());
-    assert!(over_limit_res.unwrap_err().contains("confirmation_required: max_concurrent_agents"));
+    assert!(over_limit_res
+        .unwrap_err()
+        .contains("confirmation_required: max_concurrent_agents"));
 }
 
 #[test]
@@ -1829,4 +1835,323 @@ fn test_deliver_topic_messages_to_non_mcp_agent() {
     // Next reconcile does NOT re-deliver because offset 0 was acked upon successful delivery
     service.reconcile_once().unwrap();
     assert_eq!(terminals.prompts().len(), 2);
+}
+
+#[test]
+fn test_reproduce_bug1_wake_dormant_consumer_when_done() {
+    let tmp = TestDir::new("test-wake-dormant");
+    let (service, terminals, _clock) = test_service(tmp.path());
+
+    let agent = service
+        .spawn(ServiceSpawnRequest {
+            root: tmp.path().to_path_buf(),
+            role: "coder".into(),
+            task: "solve task".into(),
+            mcp_url: Some("http://127.0.0.1:9099".into()),
+            ..ServiceSpawnRequest::default()
+        })
+        .unwrap();
+    assert!(agent.mcp);
+
+    let mut reg = service.load_registry().unwrap();
+    reg.agents[0].state = "done".into();
+    service.save_registry(&reg).unwrap();
+
+    let st = TerminalAgentStatus {
+        state: "live".into(),
+        status: "done".into(),
+        pane: agent.pane.clone(),
+        tab: agent.tab.clone(),
+        title: agent.label.clone(),
+        seq: 1,
+    };
+    terminals.set_status(&agent.id, st.clone());
+    terminals.set_status(&agent.pane, st);
+
+    let bus = service.bus().unwrap();
+    bus.subscribe(&agent.id, "results", None).unwrap();
+
+    assert_eq!(terminals.prompts().len(), 1);
+
+    bus.publish(
+        "results",
+        "task completed by worker",
+        None,
+        Some(0),
+        "worker-1",
+    )
+    .unwrap();
+
+    service.reconcile_once().unwrap();
+
+    let prompts = terminals.prompts();
+    assert!(
+        prompts.len() >= 2,
+        "Dormant consumer in 'done' was not woken up! Prompt count is {}",
+        prompts.len()
+    );
+    assert!(prompts[1]
+        .1
+        .contains("Hay 1 mensaje nuevo en 'results': usa poll"));
+
+    let reg2 = service.load_registry().unwrap();
+    assert_eq!(reg2.agents[0].state, "working");
+}
+
+#[test]
+fn test_reproduce_bug2_pattern_run_reconciles_to_done_when_live_zero() {
+    let tmp = TestDir::new("test-pattern-run-done");
+    let (service, terminals, _clock) = test_service(tmp.path());
+
+    let run = service
+        .start_pattern_run(
+            tmp.path(),
+            Some("orchestrator-worker"),
+            None,
+            Some("test task"),
+            None,
+            true,
+        )
+        .unwrap();
+
+    assert_eq!(run.state, patterns_run::PatternRunState::Running);
+
+    let mut reg = service.load_registry().unwrap();
+    for ag in &mut reg.agents {
+        ag.state = "done".into();
+        terminals.set_status(
+            &ag.id,
+            TerminalAgentStatus {
+                state: "live".into(),
+                status: "done".into(),
+                pane: ag.pane.clone(),
+                tab: ag.tab.clone(),
+                title: ag.label.clone(),
+                seq: 10,
+            },
+        );
+    }
+    service.save_registry(&reg).unwrap();
+
+    let _ = service.reconcile_once().unwrap();
+
+    let fetched = service.get_pattern_run(tmp.path(), &run.id).unwrap();
+    assert_eq!(
+        fetched.state,
+        patterns_run::PatternRunState::Done,
+        "Pattern run did not transition to done when LIVE 0; state is {:?}",
+        fetched.state
+    );
+    assert!(fetched.finished_at.is_some());
+}
+
+#[test]
+fn test_wake_dormant_idempotent_no_duplicate_for_same_offset() {
+    let tmp = TestDir::new("test-wake-idempotent");
+    let (service, terminals, clock) = test_service(tmp.path());
+
+    let agent = service
+        .spawn(ServiceSpawnRequest {
+            root: tmp.path().to_path_buf(),
+            role: "coder".into(),
+            task: "solve task".into(),
+            mcp_url: Some("http://127.0.0.1:9099".into()),
+            ..ServiceSpawnRequest::default()
+        })
+        .unwrap();
+
+    let mut reg = service.load_registry().unwrap();
+    reg.agents[0].state = "done".into();
+    service.save_registry(&reg).unwrap();
+
+    let st = TerminalAgentStatus {
+        state: "live".into(),
+        status: "done".into(),
+        pane: agent.pane.clone(),
+        tab: agent.tab.clone(),
+        title: agent.label.clone(),
+        seq: 1,
+    };
+    terminals.set_status(&agent.id, st.clone());
+    terminals.set_status(&agent.pane, st);
+
+    let bus = service.bus().unwrap();
+    bus.subscribe(&agent.id, "results", None).unwrap();
+    bus.publish("results", "msg-1", None, Some(0), "worker-1")
+        .unwrap();
+
+    // Reconcile once -> delivers prompt for offset 0
+    service.reconcile_once().unwrap();
+    assert_eq!(terminals.prompts().len(), 2);
+
+    // Agent finishes processing and transitions back to done
+    let mut reg = service.load_registry().unwrap();
+    reg.agents[0].state = "done".into();
+    service.save_registry(&reg).unwrap();
+
+    // Advance clock past cooldown (>3s)
+    clock.advance(std::time::Duration::from_secs(5));
+
+    // Reconcile again without new messages -> no duplicate prompt!
+    service.reconcile_once().unwrap();
+    assert_eq!(terminals.prompts().len(), 2);
+
+    // Publish new message with higher offset -> wakes up again
+    bus.publish("results", "msg-2", None, Some(0), "worker-1")
+        .unwrap();
+    service.reconcile_once().unwrap();
+    assert_eq!(terminals.prompts().len(), 3);
+}
+
+#[test]
+fn test_wake_dormant_skip_paused_and_stopped_runs() {
+    let tmp = TestDir::new("test-wake-paused-run");
+    let (service, terminals, _clock) = test_service(tmp.path());
+
+    let run = service
+        .start_pattern_run(
+            tmp.path(),
+            Some("orchestrator-worker"),
+            None,
+            Some("test task"),
+            None,
+            true,
+        )
+        .unwrap();
+
+    // Pause the run
+    service.pause_pattern_run(tmp.path(), &run.id).unwrap();
+
+    let mut reg = service.load_registry().unwrap();
+    for ag in &mut reg.agents {
+        ag.state = "done".into();
+        let st = TerminalAgentStatus {
+            state: "live".into(),
+            status: "done".into(),
+            pane: ag.pane.clone(),
+            tab: ag.tab.clone(),
+            title: ag.label.clone(),
+            seq: 1,
+        };
+        terminals.set_status(&ag.id, st.clone());
+        terminals.set_status(&ag.pane, st);
+    }
+    service.save_registry(&reg).unwrap();
+
+    let bus = service.bus().unwrap();
+    bus.publish("orders", "new order", None, Some(0), "orchestrator-1")
+        .unwrap();
+
+    let prompt_count_before = terminals.prompts().len();
+
+    // Reconcile should NOT wake worker because run is paused
+    service.reconcile_once().unwrap();
+    assert_eq!(terminals.prompts().len(), prompt_count_before);
+}
+
+#[test]
+fn test_pattern_run_reconciles_to_failed_when_all_fail() {
+    let tmp = TestDir::new("test-pattern-run-failed");
+    let (service, terminals, _clock) = test_service(tmp.path());
+
+    let run = service
+        .start_pattern_run(
+            tmp.path(),
+            Some("orchestrator-worker"),
+            None,
+            Some("test task"),
+            None,
+            true,
+        )
+        .unwrap();
+
+    let mut reg = service.load_registry().unwrap();
+    for ag in &mut reg.agents {
+        ag.state = "failed".into();
+        let st = TerminalAgentStatus {
+            state: "live".into(),
+            status: "failed".into(),
+            pane: ag.pane.clone(),
+            tab: ag.tab.clone(),
+            title: ag.label.clone(),
+            seq: 10,
+        };
+        terminals.set_status(&ag.id, st.clone());
+        terminals.set_status(&ag.pane, st);
+    }
+    service.save_registry(&reg).unwrap();
+
+    let _ = service.reconcile_once().unwrap();
+
+    let fetched = service.get_pattern_run(tmp.path(), &run.id).unwrap();
+    assert_eq!(fetched.state, patterns_run::PatternRunState::Failed);
+    assert!(fetched.finished_at.is_some());
+}
+
+#[test]
+fn test_pattern_run_reconciles_to_degraded_when_some_fail() {
+    let tmp = TestDir::new("test-pattern-run-degraded");
+    let (service, terminals, _clock) = test_service(tmp.path());
+
+    let run = service
+        .start_pattern_run(
+            tmp.path(),
+            Some("orchestrator-worker"),
+            None,
+            Some("test task"),
+            None,
+            true,
+        )
+        .unwrap();
+
+    let mut reg = service.load_registry().unwrap();
+    reg.agents[0].state = "done".into();
+    reg.agents[1].state = "done".into();
+    reg.agents[2].state = "exited".into();
+    reg.agents[3].state = "exited".into();
+    for ag in &reg.agents {
+        let st = TerminalAgentStatus {
+            state: "live".into(),
+            status: ag.state.clone(),
+            pane: ag.pane.clone(),
+            tab: ag.tab.clone(),
+            title: ag.label.clone(),
+            seq: 10,
+        };
+        terminals.set_status(&ag.id, st.clone());
+        terminals.set_status(&ag.pane, st);
+    }
+    service.save_registry(&reg).unwrap();
+
+    let _ = service.reconcile_once().unwrap();
+
+    let fetched = service.get_pattern_run(tmp.path(), &run.id).unwrap();
+    assert_eq!(fetched.state, patterns_run::PatternRunState::Degraded);
+    assert!(fetched.finished_at.is_some());
+}
+
+#[test]
+fn test_pattern_run_reconciles_on_resume_on_startup() {
+    let tmp = TestDir::new("test-pattern-run-resume");
+    let (service, _terminals, _clock) = test_service(tmp.path());
+
+    let run = service
+        .start_pattern_run(
+            tmp.path(),
+            Some("orchestrator-worker"),
+            None,
+            Some("test task"),
+            None,
+            true,
+        )
+        .unwrap();
+
+    // Simulate reboot: new service instance without live terminals
+    let (service2, _terminals2, _clock2) = test_service(tmp.path());
+    let _ = service2.resume_on_startup().unwrap();
+
+    let fetched = service2.get_pattern_run(tmp.path(), &run.id).unwrap();
+    // Missing panes during resume_on_startup become 'exited', so all failed/exited -> Failed
+    assert_eq!(fetched.state, patterns_run::PatternRunState::Failed);
+    assert!(fetched.finished_at.is_some());
 }

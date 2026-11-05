@@ -1,0 +1,13 @@
+[
+  {
+    "agents_count": 4,
+    "created_at": "<TIMESTAMP>",
+    "id": "run-orchestrator-worker-0",
+    "kind": "orchestrator-worker",
+    "live_agents": 4,
+    "pattern": "orchestrator-worker",
+    "state": "<STATE_DIR_PATH>",
+    "topics_count": 2,
+    "updated_at": "<TIMESTAMP>"
+  }
+]

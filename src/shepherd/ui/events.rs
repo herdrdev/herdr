@@ -8,16 +8,18 @@ use ratatui::{
     style::{Modifier, Style},
 };
 
-use crate::app::state::Palette;
 use super::components::{
     confirm_stripe::{render_confirm_stripe, ConfirmStripeHits},
-    detail_view::{render_detail_view, AlertLevel, DetailContentBlock, DetailHeader, DetailViewHits},
+    detail_view::{
+        render_detail_view, AlertLevel, DetailContentBlock, DetailHeader, DetailViewHits,
+    },
     empty_state::{render_empty_state, EmptyStateHits},
     list_view::{render_list_view, ListViewHits, ListViewItem},
 };
+use crate::app::state::Palette;
 
-pub use shepherd_core::service::patterns_run::{PatternRun, PatternRunState, PatternRunSummary};
 pub use shepherd_core::bus::Message as BusMessage;
+pub use shepherd_core::service::patterns_run::{PatternRun, PatternRunState, PatternRunSummary};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum ShepherdEventsSubTab {
@@ -434,12 +436,20 @@ pub fn render_events_section(
     let content_area = layout[2];
 
     // 1. Render Subtab Bar
-    render_subtab_bar(buffer, subtab_bar_area, state.active_subtab, &mut hits, palette);
+    render_subtab_bar(
+        buffer,
+        subtab_bar_area,
+        state.active_subtab,
+        &mut hits,
+        palette,
+    );
 
     // Divider
     let div_style = Style::default().fg(palette.surface_dim);
     for x in divider_area.left()..divider_area.right() {
-        buffer[(x, divider_area.top())].set_char('─').set_style(div_style);
+        buffer[(x, divider_area.top())]
+            .set_char('─')
+            .set_style(div_style);
     }
 
     // If confirmation stripe active
@@ -489,7 +499,10 @@ fn render_subtab_bar(
     hits: &mut ShepherdEventsHits,
     palette: &Palette,
 ) {
-    let subtabs = [ShepherdEventsSubTab::Topics, ShepherdEventsSubTab::PatternRuns];
+    let subtabs = [
+        ShepherdEventsSubTab::Topics,
+        ShepherdEventsSubTab::PatternRuns,
+    ];
     let mut current_x = area.left() + 1;
 
     for tab in subtabs {
@@ -558,7 +571,10 @@ fn render_topics_view(
         .iter()
         .map(|t| ListViewItem {
             title: t.name.clone(),
-            badge: Some((format!("{}p", t.partitions), Style::default().fg(palette.accent))),
+            badge: Some((
+                format!("{}p", t.partitions),
+                Style::default().fg(palette.accent),
+            )),
             meta: Some(format!("{} msgs", t.messages_count)),
         })
         .collect();
@@ -597,9 +613,13 @@ fn render_topics_view(
     };
     let pause_w = pause_label.chars().count() as u16;
     let pause_style = if state.view_paused {
-        Style::default().fg(palette.yellow).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(palette.yellow)
+            .add_modifier(Modifier::BOLD)
     } else {
-        Style::default().fg(palette.green).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(palette.green)
+            .add_modifier(Modifier::BOLD)
     };
     buffer.set_string(cx, controls_area.top(), pause_label, pause_style);
     hits.pause_view_button = Some(Rect {
@@ -614,7 +634,9 @@ fn render_topics_view(
     let replay_input_str = format!("Offset: [{}]", state.replay_offset_input);
     let replay_in_w = replay_input_str.chars().count() as u16;
     let replay_in_style = if state.editing_replay_offset {
-        Style::default().fg(palette.accent).add_modifier(Modifier::REVERSED)
+        Style::default()
+            .fg(palette.accent)
+            .add_modifier(Modifier::REVERSED)
     } else {
         Style::default().fg(palette.text)
     };
@@ -651,7 +673,9 @@ fn render_topics_view(
     };
     let filter_w = filter_str.chars().count() as u16;
     let filter_style = if state.editing_agent_filter {
-        Style::default().fg(palette.accent).add_modifier(Modifier::REVERSED)
+        Style::default()
+            .fg(palette.accent)
+            .add_modifier(Modifier::REVERSED)
     } else {
         Style::default().fg(palette.overlay0)
     };
@@ -697,7 +721,9 @@ fn render_topics_view(
         .collect();
 
     let visible_rows = table_area.height as usize;
-    let start_idx = state.message_scroll.min(filtered_messages.len().saturating_sub(1));
+    let start_idx = state
+        .message_scroll
+        .min(filtered_messages.len().saturating_sub(1));
     let end_idx = (start_idx + visible_rows).min(filtered_messages.len());
 
     for (row_idx, m) in filtered_messages[start_idx..end_idx].iter().enumerate() {
@@ -752,8 +778,10 @@ fn render_pattern_runs_view(
             let (state_color, state_badge) = match r.state {
                 PatternRunState::Running => (palette.green, "RUNNING"),
                 PatternRunState::Paused => (palette.yellow, "PAUSED"),
-                PatternRunState::Stopped | PatternRunState::Failed => (palette.red, "STOPPED"),
-                PatternRunState::Completed => (palette.blue, "DONE"),
+                PatternRunState::Stopped => (palette.red, "STOPPED"),
+                PatternRunState::Failed => (palette.red, "FAILED"),
+                PatternRunState::Done => (palette.blue, "DONE"),
+                PatternRunState::Degraded => (palette.yellow, "DEGRADED"),
             };
             ListViewItem {
                 title: r.pattern.clone(),
@@ -781,16 +809,23 @@ fn render_pattern_runs_view(
             PatternRunState::Paused => (palette.yellow, "⏸ PAUSADA"),
             PatternRunState::Stopped => (palette.red, "⏹ DETENIDA"),
             PatternRunState::Failed => (palette.red, "✗ ERROR EN EJECUCIÓN"),
-            PatternRunState::Completed => (palette.blue, "✓ COMPLETADA"),
+            PatternRunState::Done => (palette.blue, "✓ COMPLETADA"),
+            PatternRunState::Degraded => (palette.yellow, "⚠ DEGRADADA"),
         };
 
         let header = DetailHeader {
             title: format!("EJECUCIÓN: {}", detail.id),
             badges: vec![
                 (status_label.to_string(), Style::default().fg(status_color)),
-                (format!("Topología: {}", detail.kind), Style::default().fg(palette.accent)),
+                (
+                    format!("Topología: {}", detail.kind),
+                    Style::default().fg(palette.accent),
+                ),
             ],
-            metadata_line: Some(format!("Patrón: {} | Iniciada: {}", detail.pattern, detail.created_at)),
+            metadata_line: Some(format!(
+                "Patrón: {} | Iniciada: {}",
+                detail.pattern, detail.created_at
+            )),
             actions: vec![
                 ("Pausar/Reanudar".into(), Some("p".into())),
                 ("Detener".into(), Some("x".into())),
@@ -828,10 +863,19 @@ fn render_pattern_runs_view(
             let lvl_str = ag.level.map(|l| format!(" (lvl {l})")).unwrap_or_default();
             ag_lines.push(format!(
                 "• {:<12} [{}] {:<8} {:<8} {} (pub: {:?}, sub: {:?})",
-                ag.id, ag.state, ag.role, ag.vendor.as_deref().unwrap_or("-"), lvl_str, ag.publishes, ag.consumes
+                ag.id,
+                ag.state,
+                ag.role,
+                ag.vendor.as_deref().unwrap_or("-"),
+                lvl_str,
+                ag.publishes,
+                ag.consumes
             ));
         }
-        blocks.push(DetailContentBlock::Heading(format!("AGENTES ({})", detail.agents.len())));
+        blocks.push(DetailContentBlock::Heading(format!(
+            "AGENTES ({})",
+            detail.agents.len()
+        )));
         blocks.push(DetailContentBlock::BulletList(ag_lines));
 
         let is_running = detail.state == PatternRunState::Running;
