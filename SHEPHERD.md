@@ -5733,3 +5733,20 @@ Cobertura de los tests nuevos: render por celdas de lista/detalle/estados vacío
 - «Finalizados» agrupa todo lo que no está vivo: no distingue «terminó bien» de «matado», y los snapshots de un worktree borrado se listan pero no se pueden restaurar allí (el error sale en el panel).
 - La lista no pagina: hasta `max_per_agent` (50) snapshots por agente, más los de otros agentes en «Finalizados».
 - Sin documentación de usuario en `docs/next` (no se pidió).
+
+## Pruebas reales de los otros tres patrones: blackboard, jerárquico y market (claude haiku, 2026-11-05)
+
+Patrones mínimos (`mini-*`, copias recortadas de las plantillas, todos los agentes `claude haiku`), entorno aislado.
+
+- **Blackboard (2 agentes)**: ✔. `brain-1` publicó `hypothesis: 2+2=4…`, `tester-1` verificó con un `python3 -I` y publicó `validation: CONFIRMED…`; el run pasó solo a `done`.
+- **Jerárquico (director → manager → especialista)**: ✘. El director (`brain`) publicó la directiva en `root-orders`; el manager (rol `reviewer`) la vio, no la procesó: su respuesta fue «no hay contexto de tarea con criterios de aceptación ni diff del coder… la persona dice manager pero mi rol es reviewer», quedó bloqueado. El especialista (`coder`) no recibió nada. `team-orders`, `team-results` y `root-results` vacíos. El run se marcó `done` igualmente.
+- **Market (maker, 1 requester, 2 solvers)**: ✘. El requester (rol `docs`) se limitó a «estoy disponible»: nunca publicó el `ask`; los solvers esperaron un `ask` que no llegó; el maker se bloqueó («falta contexto de tarea… `get_task_context` no devuelve la tarea»). `ask`/`bid`/`transaction` vacíos. Run `done`.
+
+Causas observadas:
+1. **El prompt base del rol manda sobre la persona del patrón.** Los roles de flujo de trabajo (`reviewer` = revisa un diff, `coder` = implementa una subtarea, `brain` = planifica, `docs`) traen su guion y piden `get_task_context`/`get_diff`; la persona del patrón llega como apéndice («Persona instructions») y el agente sigue el guion del rol.
+2. **`get_task_context` falla para un `pattern run`** («no task run-…»): los agentes se bloquean por no tener contexto/criterios.
+3. **Nadie inicia la conversación**: en market/jerárquico el que debe empezar (requester/director) no sabe que debe arrancar con la tarea del run; el blackboard funcionó porque su persona (`researcher`/brain) coincidía con el rol.
+4. **Falso `done`**: agentes `idle` que se declararon bloqueados o que nunca hicieron nada cuentan como quiescentes; el run debería distinguir «terminó» de «atascado» (`stalled`).
+5. **Concurrencia**: agentes `idle` de un run ya `done` siguen contando para `max_concurrent` (`2 live + 4 new` bloqueó el siguiente run; hubo que usar `--confirm-over-limit`).
+
+Limpieza: sesión aislada parada y reseteada, worktrees eliminados.
