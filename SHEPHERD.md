@@ -5196,3 +5196,15 @@ results  brain        1       -         2     p0:2
 - Los agentes no MCP se entregan por pane y se reconocen al entregar, así que no bloquean la quiescencia.
 - Temporizador en memoria (reinicio = recuento desde cero). Lista de runs de Eventos no distingue `quiesced` (solo el detalle).
 - Pendiente de la prueba real con claude y codex (la repetirá el brain); no se probaron hierárquico/blackboard/market ni capturas de Eventos con tráfico real.
+
+## Tercera prueba real de patrones tras F8f: claude + codex (2026-11-05)
+
+Patrón `duo` (brain claude/haiku + worker codex), tarea sin commit (sin diálogos de permisos).
+
+- **Corregido**: el run pasó solo a `done` por quiescencia (`pattern runs`: `done`, ambos agentes `idle`/`done`, mensajes de `results` leídos y reconocidos). `note.txt` con `pattern ok`. El orquestador recibió un único aviso «Hay 1 mensaje nuevo en 'results'» (el del worker); no hubo auto-despertar por su propio resumen.
+- **`topic groups`** ya muestra datos reales: `orders worker-pool 1 miembro, committed p0:#0, lag 0`; `results brain-1 1 miembro, committed p0:#2, lag 0`.
+- **Pendiente 1 (reabrir)**: tras publicar un mensaje nuevo en `results` con el run en `done`, el orquestador despertó y lo procesó, pero el run **siguió `done`** (3 comprobaciones en ~75 s): no vuelve a `running` al llegar tráfico. Puede que el agente procese y vuelva a `idle` más rápido que el ciclo de reconciliación; decidir si se reabre por el evento de publicación (no por muestreo de estados).
+- **Pendiente 2 (grupo fantasma)**: `topic groups` lista además `results brain` con 0 miembros y lag creciente (`p0:3`): un grupo por rol creado por la topología, sin consumidores, cuyo lag nunca baja y puede impedir la quiescencia si se contara. Revisar si debe crearse, ocultarse o excluirse del lag.
+- No cubierto: pestaña Eventos con tráfico real (capturas), patrones jerárquico/blackboard/market con agentes reales.
+
+Limpieza: sesión aislada parada y reseteada, worktrees eliminados.
