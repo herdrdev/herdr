@@ -5113,3 +5113,16 @@ Todas las áreas se ejecutaron mediante `./cargo-fork.sh test` arrojando resulta
 
 
 
+
+## Prueba real de patrones: claude + codex con `pattern run` (F8d, 2026-11-05)
+
+Sesión aislada (`SHF_HOME=$HOME` solo para credenciales). Patrón `duo` creado con `pattern new duo --from orchestrator-worker` y editado: orquestador `brain` (claude, haiku) y 1 worker `coder` (codex). `pattern run duo --task …` arrancó los dos agentes con su rol, vendor, modelo, prompt y tópicos; la primera ejecución falló con `confirmation_required` solo porque el entorno aislado conservaba `max_concurrent = 1` de la prueba de F9e (restablecido).
+
+Resultado con agentes reales:
+- **Bien**: el orquestador publicó la orden en `orders[0]` con `shepherd.publish`; el worker la recibió con `shepherd.subscribe`/`poll`, creó `note.txt` con los 10 bytes exactos `pattern ok`, lo commiteó (`cab432c`, tras el permiso humano de codex), publicó en `results` y la reconocimiento (`ack`) de la orden. `topic tail results` mostró el mensaje; la CLI `pattern runs`/`agents` reflejó los estados.
+- **Fallo 1 (UI)**: la pestaña Agentes mostró «0 agentes registrados / NO HAY AGENTES ACTIVOS» mientras la CLI listaba los dos agentes (la lista de la pestaña no se actualiza con agentes lanzados por un patrón).
+- **Fallo 2 (orquestador)**: el orquestador esperó `wait_for` 300 s a `results` mientras el worker estaba bloqueado en el permiso humano, se dio por terminado (`done`) informando el bloqueo y no volvió a despertar cuando llegó el resultado ~70 min después; el mensaje de `results` no se le entregó. Falta un mecanismo de «despertar» al consumidor cuando llega un mensaje a un tópico al que está suscrito y ya ha terminado/está inactivo (entrega por `agent.prompt` a agentes sin MCP también sin cubrir).
+- **Fallo 3 (estado del run)**: con `LIVE 0` (ambos agentes `done`) el run seguía `running`; no pasa a `done`.
+- No cubierto: pausa/reanudación y `stop` con agentes reales; pestaña Eventos con tráfico real; patrones jerárquico/blackboard/market.
+
+Limpieza: sesión aislada parada y reseteada, worktree eliminado.
