@@ -2253,3 +2253,21 @@ fn agents_join_the_workspace_of_their_parent_and_of_their_task() {
         "another run keeps its own"
     );
 }
+
+#[test]
+fn role_worktree_default_is_skipped_outside_git_and_every_agent_gets_comms() {
+    let tmp = TestDir::new("test"); // a plain folder, not a git work tree
+    let (service, _terminals, _clock) = test_service(tmp.path());
+    let agent = service
+        .spawn(ServiceSpawnRequest {
+            root: tmp.path().to_path_buf(),
+            role: "coder".into(), // coder defaults to worktree = true
+            task: "t".into(),
+            pattern_prompt: Some("pattern prompt".into()),
+            ..ServiceSpawnRequest::default()
+        })
+        .expect("a plain folder must not fail with not_git_worktree");
+    assert!(agent.worktree.is_empty(), "no worktree outside git");
+    assert!(agent.active_skills.iter().any(|s| s == "shepherd-comms"));
+    assert!(agent.active_skills.iter().any(|s| s == "shepherd-events"));
+}

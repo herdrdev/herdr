@@ -27,6 +27,18 @@ pub struct ParsedWorktree {
 }
 
 /// Parses the output of `git worktree list --porcelain`.
+/// True when `path` is inside a git work tree (an unborn repository counts).
+pub fn is_git_work_tree(path: &Path) -> bool {
+    std::process::Command::new("git")
+        .arg("-C")
+        .arg(path)
+        .args(["rev-parse", "--is-inside-work-tree"])
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .is_ok_and(|o| o.status.success() && o.stdout.starts_with(b"true"))
+}
+
 pub fn parse_git_worktree_porcelain(text: &str) -> Vec<ParsedWorktree> {
     let mut worktrees = Vec::new();
     let mut current_path: Option<PathBuf> = None;

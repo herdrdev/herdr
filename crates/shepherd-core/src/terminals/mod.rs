@@ -616,27 +616,39 @@ fn workspace_exists(snapshot: &Value, id: &str) -> bool {
 }
 
 fn find_workspace(snapshot: &Value, root: &Path) -> Option<String> {
-    let by_checkout = snapshot
+    let text = |v: Option<&Value>| v.and_then(Value::as_str).map(str::to_owned);
+    let by_checkout: Vec<String> = snapshot
         .get("workspaces")
         .and_then(Value::as_array)
-        .and_then(|workspaces| {
-            workspaces.iter().find_map(|workspace| {
-                let checkout = workspace.get("worktree")?.get("checkout_path")?.as_str()?;
-                (Path::new(checkout) == root)
-                    .then(|| workspace.get("workspace_id")?.as_str().map(str::to_owned))
-                    .flatten()
-            })
-        });
+        .into_iter()
+        .flatten()
+        .filter(|w| {
+            w.get("worktree")
+                .and_then(|t| t.get("checkout_path"))
+                .and_then(Value::as_str)
+                .is_some_and(|c| Path::new(c) == root)
+        })
+        .filter_map(|w| text(w.get("workspace_id")))
+        .collect();
     // A workspace's git info lands a moment after it is created, and non-git folders never have it:
-    // fall back to a workspace that has a pane started in `root`.
-    by_checkout.or_else(|| {
+    // fall back to workspaces that have a pane started in `root`.
+    let candidates = if by_checkout.is_empty() {
         snapshot
-            .get("panes")?
-            .as_array()?
-            .iter()
-            .find(|pane| pane.get("cwd").and_then(Value::as_str).map(Path::new) == Some(root))
-            .and_then(|pane| pane.get("workspace_id")?.as_str().map(str::to_owned))
-    })
+            .get("panes")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter(|p| p.get("cwd").and_then(Value::as_str).map(Path::new) == Some(root))
+            .filter_map(|p| text(p.get("workspace_id")))
+            .collect()
+    } else {
+        by_checkout
+    };
+    // Several workspaces on one folder: the one the user is looking at is the parent.
+    let focused = text(snapshot.get("focused_workspace_id"));
+    focused
+        .filter(|f| candidates.contains(f))
+        .or_else(|| candidates.into_iter().next())
 }
 
 fn nested_string(value: &Value, path: &[&str]) -> Result<String, TerminalError> {

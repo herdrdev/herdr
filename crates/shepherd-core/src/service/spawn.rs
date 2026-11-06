@@ -125,11 +125,16 @@ impl OrchestrationService {
             ));
         }
 
-        let use_worktree = req.worktree.unwrap_or(role_cfg.worktree);
         let root_path = if req.root.as_os_str().is_empty() {
             std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
         } else {
             req.root.clone()
+        };
+        // A role's default worktree only applies inside a git work tree: in a plain folder the agent
+        // works in the folder itself instead of failing. Asking for a worktree explicitly still fails.
+        let use_worktree = match req.worktree {
+            Some(explicit) => explicit,
+            None => role_cfg.worktree && crate::git::is_git_work_tree(&root_path),
         };
         let task_id = req.task_id.clone().unwrap_or_default();
         let mcp_url = req
@@ -174,8 +179,22 @@ impl OrchestrationService {
         let session_dir = self.service_config.agent_session_dir(&agent.id);
         let catalog = skills::Catalog::load(Some(&root_path), Some(&skills::user_skills_dir()));
         let (_, langs) = skills::detect_checks(&root_path);
+        // Every agent learns how to talk to the others; pattern agents also learn the topic tools.
+        let mut skill_adjust = req.skills.clone();
+        let mut baseline = vec!["shepherd-comms"];
+        if req.pattern_prompt.is_some() {
+            baseline.push("shepherd-events");
+        }
+        for name in baseline {
+            if !role_cfg.skills.iter().any(|n| n == name)
+                && !skill_adjust.add.iter().any(|n| n == name)
+                && !skill_adjust.remove.iter().any(|n| n == name)
+            {
+                skill_adjust.add.push(name.to_owned());
+            }
+        }
         let (resolved, _problems) =
-            catalog.effective_for(&project_cfg, &req.role, &langs, &req.skills);
+            catalog.effective_for(&project_cfg, &req.role, &langs, &skill_adjust);
         agent.active_skills = resolved.iter().map(|r| r.skill.name.clone()).collect();
         let skill_launch = skills::install(skills::Plan {
             vendor: vendor.clone(),
