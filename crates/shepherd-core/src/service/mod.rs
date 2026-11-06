@@ -28,6 +28,10 @@ use crate::{
     CreatedTask, SkillAdjust,
 };
 
+/// How long a terminal must stay unresolvable before its agent is declared gone. The server answers
+/// `not found` for panes it has just created while it is busy, and reconcile ticks can arrive in bursts.
+pub(crate) const MISSING_GRACE_MS: u64 = 20_000;
+
 pub const BLOCKED_HUMAN_NOTICE: &str =
     "esperando al humano: diálogo de confianza o login; abre su pestaña";
 pub const NEVER_READY_ERROR: &str = "nunca estuvo listo, probablemente esperaba al humano";
@@ -296,8 +300,8 @@ pub struct OrchestrationService {
     pub(crate) registry_io: Arc<Mutex<()>>,
     /// Agents removed on purpose, so a merge with the file on disk does not bring them back.
     pub(crate) removed_agents: Arc<Mutex<HashSet<String>>>,
-    /// Consecutive reconcile ticks in which an agent's terminal could not be found.
-    pub(crate) missing_strikes: Arc<Mutex<HashMap<String, u32>>>,
+    /// Agent id -> ms of the first reconcile tick in which its terminal could not be found.
+    pub(crate) missing_since: Arc<Mutex<HashMap<String, u64>>>,
     /// Highest unread message id an idle MCP agent was already told about.
     pub(crate) nudged: Arc<Mutex<HashMap<String, i64>>>,
     pub(crate) quiet_screens: Arc<Mutex<HashMap<String, ScreenQuietTracker>>>,
@@ -339,7 +343,7 @@ impl OrchestrationService {
             blocked_announced: Arc::new(Mutex::new(HashSet::new())),
             registry_io: Arc::new(Mutex::new(())),
             removed_agents: Arc::new(Mutex::new(HashSet::new())),
-            missing_strikes: Arc::new(Mutex::new(HashMap::new())),
+            missing_since: Arc::new(Mutex::new(HashMap::new())),
             nudged: Arc::new(Mutex::new(HashMap::new())),
             quiet_screens: Arc::new(Mutex::new(HashMap::new())),
             failed_requests: Arc::new(Mutex::new(Vec::new())),
@@ -374,12 +378,80 @@ impl OrchestrationService {
         MessageBus::open(self.service_config.bus_path()).map_err(|e| e.to_string())
     }
 
+    /// Empties the message bus: directed messages, topic events, offsets and subscriptions. It would
+    /// cut the communication of agents that are still alive, so it needs `force` in that case.
+    pub fn clean_bus(&self, force: bool) -> Result<usize, String> {
+        let live = self.load_registry()?.live().len();
+        if live > 0 && !force {
+            return Err(format!(
+                "confirmation_required: {live} agente(s) vivo(s) usan el bus; limpiarlo corta su comunicación"
+            ));
+        }
+        let removed = self.bus()?.since(0).map_err(|e| e.to_string())?.len();
+        let path = self.service_config.bus_path();
+        let name = path.file_name().map(|n| n.to_owned()).unwrap_or_default();
+        if let Some(dir) = path.parent() {
+            for entry in std::fs::read_dir(dir).map_err(|e| e.to_string())?.flatten() {
+                if entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(&*name.to_string_lossy())
+                {
+                    std::fs::remove_file(entry.path()).map_err(|e| e.to_string())?;
+                }
+            }
+        }
+        self.nudged
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
+        self.topic_wake_notified
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
+        Ok(removed)
+    }
+
+    /// Writes to service.log which code path marked a live agent as `exited`, so a bogus exit can be
+    /// traced instead of guessed.
+    fn record_exit(&self, id: &str) {
+        let trace = std::backtrace::Backtrace::force_capture().to_string();
+        let frames: Vec<&str> = trace
+            .lines()
+            .map(str::trim)
+            .filter(|l| l.contains("shepherd_core::") || l.contains("shepherd::"))
+            .filter(|l| !l.contains("record_exit") && !l.contains("save_registry"))
+            .take(6)
+            .collect();
+        self.record_failure(
+            "agent_exited",
+            &format!("{id} marcado exited por: {}", frames.join(" <- ")),
+        );
+    }
+
+    /// True when the agent's terminal answers any of three independent lookups. `not found` from one of
+    /// them is not proof: the server answers it for panes it has just created while it is busy.
+    pub(crate) fn terminal_alive(&self, agent: &Agent) -> bool {
+        let by_target = self.terminals.agent_status(&status_query_target(agent));
+        if by_target.as_ref().is_ok_and(|s| s.state != "finished") {
+            return true;
+        }
+        if self
+            .terminals
+            .agent_status(&agent.id)
+            .is_ok_and(|s| s.state != "finished")
+        {
+            return true;
+        }
+        !agent.pane.is_empty() && self.terminals.read_screen(&agent.pane, 1).is_ok()
+    }
+
     pub fn load_registry(&self) -> Result<AgentRegistryFile, String> {
         load_agent_registry(self.service_config.registry_path()).map_err(|e| e.to_string())
     }
 
     /// Saves the registry without losing what other threads wrote since `registry` was loaded: agents
-    /// that are only on disk are kept, and the caller's copy wins for the rest. Several
+    /// that are only on disk are kept and, for the rest, the more recently updated copy wins (the caller's on a tie). Several
     /// threads (spawning a pattern's agents, first-prompt delivery, the reconcile loop) read, change
     /// and save the whole file, and a stale snapshot used to drop freshly spawned agents.
     pub fn save_registry(&self, registry: &AgentRegistryFile) -> Result<(), String> {
@@ -391,6 +463,14 @@ impl OrchestrationService {
                 .lock()
                 .unwrap_or_else(|e| e.into_inner()),
         );
+        if let Ok(before) = load_agent_registry(path.clone()) {
+            for a in &registry.agents {
+                let was_live = before.result(&a.id).is_some_and(|b| !b.gone());
+                if matches!(a.state.as_str(), "exited" | "failed" | "killed") && was_live {
+                    self.record_exit(&a.id);
+                }
+            }
+        }
         let mut merged = registry.clone();
         merged.agents.retain(|a| !removed.contains(&a.id));
         if let Ok(disk) = load_agent_registry(path.clone()) {
@@ -398,8 +478,11 @@ impl OrchestrationService {
                 if removed.contains(&theirs.id) {
                     continue;
                 }
-                if !merged.agents.iter().any(|a| a.id == theirs.id) {
-                    merged.agents.push(theirs);
+                match merged.agents.iter_mut().find(|a| a.id == theirs.id) {
+                    None => merged.agents.push(theirs),
+                    // a stale snapshot must not undo a newer state (`starting` over `working`)
+                    Some(mine) if theirs.updated > mine.updated => *mine = theirs,
+                    Some(_) => {}
                 }
             }
             merged.seq = merged.seq.max(disk.seq);
@@ -1057,6 +1140,22 @@ impl OrchestrationService {
                     workspace,
                 )?;
                 serde_json::to_value(run).map_err(|e| e.to_string())
+            }
+            "runs_clean" => {
+                let root = args
+                    .get("root")
+                    .and_then(Value::as_str)
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| {
+                        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+                    });
+                let removed = self.clean_pattern_runs(&root)?;
+                Ok(serde_json::json!({ "removed": removed }))
+            }
+            "bus_clean" => {
+                let force = args.get("force").and_then(Value::as_bool).unwrap_or(false);
+                let removed = self.clean_bus(force)?;
+                Ok(serde_json::json!({ "removed": removed }))
             }
             "pattern_runs" | "pattern_run_list" => {
                 let root = args

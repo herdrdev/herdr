@@ -242,6 +242,24 @@ impl OrchestrationService {
         )
     }
 
+    /// Forgets the runs that are over (done, failed or stopped); running, paused and stalled ones stay.
+    pub fn clean_pattern_runs(&self, root: &Path) -> Result<usize, String> {
+        let path = pattern_runs_path(root, &self.service_config.state_dir);
+        let runs = load_pattern_runs(&path)?;
+        let before = runs.len();
+        let kept: Vec<PatternRun> = runs
+            .into_iter()
+            .filter(|r| {
+                !matches!(
+                    r.state,
+                    PatternRunState::Done | PatternRunState::Failed | PatternRunState::Stopped
+                )
+            })
+            .collect();
+        save_pattern_runs(&path, &kept)?;
+        Ok(before - kept.len())
+    }
+
     /// Like `start_pattern_run`, with every agent placed in `workspace` (the one the run was launched from).
     #[allow(clippy::too_many_arguments)] // mirrors start_pattern_run plus the workspace
     pub fn start_pattern_run_in(

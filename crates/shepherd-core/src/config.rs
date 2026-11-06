@@ -540,11 +540,27 @@ pub fn global_config_path() -> PathBuf {
     home_dir().join(".config/shepherd/config.yaml")
 }
 
+/// Where agents, the bus and runs are kept. A server on a non-default socket (`SHEPHERD_SOCKET_PATH`,
+/// e.g. a test or throwaway server) gets its own subdirectory: two servers sharing one registry
+/// cannot see each other's panes, so each used to mark the other's agents as exited. A named session
+/// (`SHEPHERD_SESSION`) gets one too.
 pub fn state_dir() -> PathBuf {
-    if let Some(path) = std::env::var_os("XDG_STATE_HOME") {
-        return PathBuf::from(path).join("shepherd");
+    let base = if let Some(path) = std::env::var_os("XDG_STATE_HOME") {
+        PathBuf::from(path).join("shepherd")
+    } else {
+        home_dir().join(".local/state/shepherd")
+    };
+    // Like Herdr, a named session (`--session`) is a world of its own.
+    let base = match std::env::var("SHEPHERD_SESSION") {
+        Ok(name) if !name.is_empty() => base.join("sessions").join(name),
+        _ => base,
+    };
+    match std::env::var("SHEPHERD_SOCKET_PATH") {
+        Ok(socket) if !socket.is_empty() => base
+            .join("by-socket")
+            .join(format!("{:016x}", crate::bus::fnv1a_hash(&socket))),
+        _ => base,
     }
-    home_dir().join(".local/state/shepherd")
 }
 
 pub fn project_config_path(start: &Path) -> PathBuf {
@@ -1025,5 +1041,32 @@ mod tests {
         assert!(text_str.contains("configuration is valid"));
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+}
+
+#[cfg(test)]
+mod state_dir_tests {
+    use super::*;
+
+    #[test]
+    fn a_custom_socket_gets_its_own_state_dir() {
+        let _g = crate::TEST_ENV_MUTEX
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        std::env::remove_var("SHEPHERD_SOCKET_PATH");
+        let shared = state_dir();
+        std::env::set_var("SHEPHERD_SOCKET_PATH", "/tmp/a.sock");
+        let a = state_dir();
+        std::env::set_var("SHEPHERD_SOCKET_PATH", "/tmp/b.sock");
+        let b = state_dir();
+        std::env::remove_var("SHEPHERD_SOCKET_PATH");
+        assert_ne!(a, shared);
+        assert_ne!(a, b);
+        assert!(a.starts_with(&shared));
+        assert_eq!(
+            state_dir(),
+            shared,
+            "the default socket keeps the usual directory"
+        );
     }
 }

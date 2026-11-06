@@ -455,6 +455,7 @@ fn req3_periodic_reconciliation_blocked_once_and_non_mcp_quiet_screen_done() {
         "exited",
         "one failed lookup is not proof the terminal is gone"
     );
+    clock.advance(Duration::from_secs(21));
     let reg = service.reconcile_once().unwrap();
     assert_eq!(reg.result(&mcp_agent.id).unwrap().state, "exited");
 }
@@ -559,7 +560,7 @@ fn req4_resume_on_startup_reconciles_starting_and_preserves_tokens() {
 #[test]
 fn req5_kill_clean_focus_and_limits_confirmation() {
     let tmp = TestDir::new("test");
-    let (service, terminals, _clock) = test_service(tmp.path());
+    let (service, terminals, clock) = test_service(tmp.path());
 
     let brain = service
         .spawn(ServiceSpawnRequest {
@@ -576,7 +577,7 @@ fn req5_kill_clean_focus_and_limits_confirmation() {
 
     // Mark brain as "done" -> kill must accept "done" and succeed even if pane is already gone
     let mut reg = service.load_registry().unwrap();
-    reg.submit_result(&brain.id, "done planning", "2026-04-20T00:01:00Z")
+    reg.submit_result(&brain.id, "done planning", &clock.now_rfc3339())
         .unwrap();
     service.save_registry(&reg).unwrap();
     terminals.remove_status(&brain.id);
@@ -2428,4 +2429,208 @@ fn cleaned_agents_stay_removed() {
     service.kill(&a.id).unwrap();
     service.clean(&[a.id.clone()], None).unwrap();
     assert!(service.load_registry().unwrap().result(&a.id).is_none());
+}
+
+#[test]
+fn clean_removes_finished_runs_and_the_bus_but_not_live_traffic() {
+    let tmp = TestDir::new("test");
+    let (service, _terminals, _clock) = test_service(tmp.path());
+    let run = service
+        .start_pattern_run(
+            tmp.path(),
+            Some("orchestrator-worker"),
+            None,
+            Some("x"),
+            None,
+            true,
+        )
+        .unwrap();
+    // a running run is never forgotten
+    assert_eq!(service.clean_pattern_runs(tmp.path()).unwrap(), 0);
+    service.stop_pattern_run(tmp.path(), &run.id, true).unwrap();
+    assert_eq!(service.clean_pattern_runs(tmp.path()).unwrap(), 1);
+    assert!(service.list_pattern_runs(tmp.path()).unwrap().is_empty());
+
+    let bus = service.bus().unwrap();
+    bus.send(Message::directed("a", "b", "msg", "hola"))
+        .unwrap();
+    let live = service
+        .spawn(ServiceSpawnRequest {
+            root: tmp.path().to_path_buf(),
+            role: "docs".into(),
+            task: "t".into(),
+            ..ServiceSpawnRequest::default()
+        })
+        .unwrap();
+    assert!(
+        service.clean_bus(false).is_err(),
+        "a live agent ({}) keeps the bus",
+        live.id
+    );
+    assert!(service.clean_bus(true).unwrap() >= 1);
+    assert!(service.bus().unwrap().since(0).unwrap().is_empty());
+}
+
+#[test]
+fn an_exit_is_traced_and_a_resolvable_pane_is_never_declared_gone() {
+    let tmp = TestDir::new("test");
+    let (service, terminals, clock) = test_service(tmp.path());
+    let agent = service
+        .spawn(ServiceSpawnRequest {
+            root: tmp.path().to_path_buf(),
+            role: "tester".into(),
+            task: "t".into(),
+            mcp_url: Some("http://127.0.0.1:9999/mcp".into()),
+            ..ServiceSpawnRequest::default()
+        })
+        .unwrap();
+    terminals.set_status(
+        &agent.id,
+        TerminalAgentStatus {
+            state: "live".into(),
+            status: "idle".into(),
+            pane: agent.pane.clone(),
+            tab: agent.tab.clone(),
+            title: agent.label.clone(),
+            seq: 1,
+        },
+    );
+    // Lookups answer: nothing ever becomes "exited", however long the reconcile runs.
+    for _ in 0..3 {
+        clock.advance(Duration::from_secs(30));
+        let reg = service.reconcile_once().unwrap();
+        assert_ne!(reg.result(&agent.id).unwrap().state, "exited");
+    }
+    // Lookups fail for longer than the grace period: it exits, and service.log says who did it.
+    terminals.remove_status(&agent.id);
+    terminals.remove_status(&agent.pane);
+    service.reconcile_once().unwrap();
+    clock.advance(Duration::from_secs(25));
+    let reg = service.reconcile_once().unwrap();
+    assert_eq!(reg.result(&agent.id).unwrap().state, "exited");
+    let log = std::fs::read_to_string(tmp.path().join("state").join("service.log")).unwrap();
+    assert!(
+        log.contains("agent_exited") && log.contains(&agent.id),
+        "{log}"
+    );
+}
+
+#[test]
+fn members_left_over_from_earlier_runs_do_not_swallow_the_messages_of_live_workers() {
+    let tmp = TestDir::new("test");
+    let (service, terminals, _clock) = test_service(tmp.path());
+    let worker = service
+        .spawn(ServiceSpawnRequest {
+            root: tmp.path().to_path_buf(),
+            role: "tester".into(),
+            task: "t".into(),
+            mcp_url: Some("http://127.0.0.1:9999/mcp".into()),
+            ..ServiceSpawnRequest::default()
+        })
+        .unwrap();
+    terminals.set_status(
+        &worker.id,
+        TerminalAgentStatus {
+            state: "live".into(),
+            status: "idle".into(),
+            pane: worker.pane.clone(),
+            tab: worker.tab.clone(),
+            title: worker.label.clone(),
+            seq: 1,
+        },
+    );
+    let bus = service.bus().unwrap();
+    bus.topic_create("orders", 4).unwrap();
+    // five members from earlier runs that no longer exist, and the live worker
+    for ghost in ["coder-91", "coder-92", "coder-93", "coder-94", "coder-95"] {
+        bus.subscribe(ghost, "orders", Some("worker-pool")).unwrap();
+    }
+    bus.subscribe(&worker.id, "orders", Some("worker-pool"))
+        .unwrap();
+    // one order per partition, so whichever partitions the worker owns, it has something
+    for p in 0..4u32 {
+        bus.publish("orders", "haz la tarea", None, Some(p), "brain-1")
+            .unwrap();
+    }
+
+    service.reconcile_once().unwrap();
+
+    let members: Vec<String> = service
+        .bus()
+        .unwrap()
+        .consumer_groups(Some("orders"))
+        .unwrap()
+        .into_iter()
+        .flat_map(|g| g.members)
+        .collect();
+    assert_eq!(
+        members,
+        vec![worker.id.clone()],
+        "left-over members are removed"
+    );
+    assert!(
+        terminals
+            .prompts()
+            .iter()
+            .any(|(_, text)| text.contains("mensaje") && text.contains("orders")),
+        "the live worker is told about the order: {:?}",
+        terminals.prompts()
+    );
+}
+
+#[test]
+fn a_stale_save_does_not_undo_a_newer_state_and_a_stuck_starting_agent_is_reconciled() {
+    let tmp = TestDir::new("test");
+    let (service, terminals, clock) = test_service(tmp.path());
+    let agent = service
+        .spawn(ServiceSpawnRequest {
+            root: tmp.path().to_path_buf(),
+            role: "tester".into(),
+            task: "t".into(),
+            mcp_url: Some("http://127.0.0.1:9999/mcp".into()),
+            ..ServiceSpawnRequest::default()
+        })
+        .unwrap();
+    let stale = service.load_registry().unwrap(); // the agent is "starting" here
+    clock.advance(Duration::from_secs(5));
+    let mut fresh = service.load_registry().unwrap();
+    {
+        let a = fresh.agents.iter_mut().find(|a| a.id == agent.id).unwrap();
+        a.state = "working".into();
+        a.updated = clock.now_rfc3339();
+    }
+    service.save_registry(&fresh).unwrap();
+    service.save_registry(&stale).unwrap(); // a slow thread saves its old copy afterwards
+    assert_eq!(
+        service
+            .load_registry()
+            .unwrap()
+            .result(&agent.id)
+            .unwrap()
+            .state,
+        "working"
+    );
+
+    // an agent that never left `starting` is moved on once its terminal answers
+    let mut reg = service.load_registry().unwrap();
+    {
+        let a = reg.agents.iter_mut().find(|a| a.id == agent.id).unwrap();
+        a.state = "starting".into();
+        a.updated = clock.now_rfc3339();
+    }
+    service.save_registry(&reg).unwrap();
+    terminals.set_status(
+        &agent.id,
+        TerminalAgentStatus {
+            state: "live".into(),
+            status: "idle".into(),
+            pane: agent.pane.clone(),
+            tab: agent.tab.clone(),
+            title: agent.label.clone(),
+            seq: 1,
+        },
+    );
+    clock.advance(Duration::from_secs(200));
+    let after = service.reconcile_once().unwrap();
+    assert_eq!(after.result(&agent.id).unwrap().state, "idle");
 }

@@ -34,6 +34,10 @@ impl OrchestrationService {
                         Err(err) => return Err(err.to_string()),
                     }
                 };
+                // Three independent lookups before calling an agent a leftover of a previous server.
+                if live_status.is_none() && self.terminal_alive(agent) {
+                    continue;
+                }
 
                 if agent.state == "starting" {
                     match live_status {
@@ -109,7 +113,13 @@ impl OrchestrationService {
             let bus = self.bus()?;
 
             for agent in &mut registry.agents {
-                if agent.state == "starting" || agent.gone() {
+                // `starting` is owned by first-prompt delivery, but one that has been starting for
+                // minutes was simply never moved on (a stale save, a lost thread): reconcile it too.
+                let stuck = agent.state == "starting"
+                    && rfc3339_secs(&now_str)
+                        .zip(rfc3339_secs(&agent.updated))
+                        .is_some_and(|(now, then)| now - then > STARTING_STUCK_SECS);
+                if (agent.state == "starting" && !stuck) || agent.gone() {
                     continue;
                 }
                 let target = status_query_target(agent);
@@ -125,24 +135,22 @@ impl OrchestrationService {
                         continue;
                     }
                     Err(err) if is_missing_terminal_error(&err) => {
-                        // One failed lookup is not proof the terminal is gone: try the agent's name
-                        // too, and only give up after two ticks in a row.
-                        if let Ok(st) = self.terminals.agent_status(&agent.id) {
-                            if st.state != "finished" {
-                                self.missing_strikes.lock().unwrap().remove(&agent.id);
-                                continue;
-                            }
-                        }
-                        let strikes = {
-                            let mut m = self.missing_strikes.lock().unwrap();
-                            let n = m.entry(agent.id.clone()).or_insert(0);
-                            *n += 1;
-                            *n
-                        };
-                        if strikes < 2 {
+                        // A failed lookup is not proof the terminal is gone: try the agent's name too,
+                        // and declare it gone only after it stayed unresolvable for MISSING_GRACE_MS.
+                        if self.terminal_alive(agent) {
+                            self.missing_since.lock().unwrap().remove(&agent.id);
                             continue;
                         }
-                        self.missing_strikes.lock().unwrap().remove(&agent.id);
+                        let first_miss = *self
+                            .missing_since
+                            .lock()
+                            .unwrap()
+                            .entry(agent.id.clone())
+                            .or_insert(now_ms);
+                        if now_ms.saturating_sub(first_miss) < super::MISSING_GRACE_MS {
+                            continue;
+                        }
+                        self.missing_since.lock().unwrap().remove(&agent.id);
                         agent.state = "exited".into();
                         agent.notice.clear();
                         agent.updated = now_str.clone();
@@ -153,7 +161,7 @@ impl OrchestrationService {
                     }
                     Err(err) => return Err(err.to_string()),
                 };
-                self.missing_strikes.lock().unwrap().remove(&agent.id);
+                self.missing_since.lock().unwrap().remove(&agent.id);
 
                 match status.status.as_str() {
                     "working" => {
@@ -273,6 +281,7 @@ impl OrchestrationService {
             self.auto_snapshot_tick(&registry);
             self.deliver_pending_non_mcp_messages(&mut registry);
             self.nudge_idle_mcp_agents(&registry);
+            self.prune_dead_subscribers(&registry);
             self.wake_dormant_topic_subscribers(&mut registry, None);
             let _ = self.reconcile_pattern_runs(&registry, None);
 
@@ -290,4 +299,19 @@ impl OrchestrationService {
         let reg = self.resume_on_startup()?;
         Ok(reg.agents.iter().map(Agent::public).collect())
     }
+}
+
+/// A `starting` agent older than this is reconciled like any other.
+const STARTING_STUCK_SECS: i64 = 120;
+
+/// Seconds for an RFC 3339 UTC timestamp (`YYYY-MM-DDTHH:MM:SSZ`); only differences are meaningful.
+fn rfc3339_secs(ts: &str) -> Option<i64> {
+    let (date, time) = ts.trim_end_matches('Z').split_once('T')?;
+    let mut d = date.split('-').map(|n| n.parse::<i64>().ok());
+    let (y, m, day) = (d.next()??, d.next()??, d.next()??);
+    let mut t = time.split(':').map(|n| n.parse::<i64>().ok());
+    let (h, mi, sec) = (t.next()??, t.next()??, t.next()??);
+    let (y, m) = if m <= 2 { (y - 1, m + 9) } else { (y, m - 3) };
+    let days = 365 * y + y / 4 - y / 100 + y / 400 + (153 * m + 2) / 5 + day;
+    Some(days * 86_400 + h * 3_600 + mi * 60 + sec)
 }
