@@ -26,15 +26,21 @@ pub(crate) fn request(args: &[String]) -> Result<Request, ParseError> {
         }
         _ => args,
     };
-    projection::parse(command().bin_name("shepherd notification"), args, |matches| {
-        let matches = matches
-            .subcommand_matches("show")
-            .ok_or_else(|| ParseError::Usage("missing notification show command".into()))?;
-        Ok(Request {
-            id: "cli:notification:show".into(),
-            method: Method::NotificationShow(NotificationShowProjection::from_matches(matches)?),
-        })
-    })
+    projection::parse(
+        command().bin_name("shepherd notification"),
+        args,
+        |matches| {
+            let matches = matches
+                .subcommand_matches("show")
+                .ok_or_else(|| ParseError::Usage("missing notification show command".into()))?;
+            Ok(Request {
+                id: "cli:notification:show".into(),
+                method: Method::NotificationShow(NotificationShowProjection::from_matches(
+                    matches,
+                )?),
+            })
+        },
+    )
 }
 
 #[cfg(test)]

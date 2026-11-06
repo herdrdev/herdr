@@ -708,7 +708,11 @@ fn agent_start_follows_its_named_terminal_when_the_pane_moves() {
     let bin = base.join("bin");
     fs::create_dir_all(&bin).unwrap();
     let fake_pi = bin.join("pi");
-    fs::write(&fake_pi, "#!/bin/sh\nSHEPHERD_AGENT=pi exec /bin/sleep 10\n").unwrap();
+    fs::write(
+        &fake_pi,
+        "#!/bin/sh\nSHEPHERD_AGENT=pi exec /bin/sleep 10\n",
+    )
+    .unwrap();
     fs::set_permissions(&fake_pi, fs::Permissions::from_mode(0o755)).unwrap();
 
     let shepherd = spawn_shepherd_with_path(&config_home, &runtime_dir, &socket_path, Some(&bin));

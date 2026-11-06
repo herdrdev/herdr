@@ -16,8 +16,10 @@ use windows_sys::Win32::{
 struct Directory(PathBuf);
 impl Directory {
     fn new(case: &str) -> Self {
-        let path =
-            std::env::temp_dir().join(format!("shepherd-config-backup-{case}-{}", std::process::id()));
+        let path = std::env::temp_dir().join(format!(
+            "shepherd-config-backup-{case}-{}",
+            std::process::id()
+        ));
         fs::create_dir(&path).unwrap();
         Self(path)
     }

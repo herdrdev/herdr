@@ -107,7 +107,10 @@ mod tests {
         std::env::remove_var(crate::session::SESSION_ENV_VAR);
         crate::session::clear_explicit_session_for_test();
         let path = client_socket_path_from_overrides(None, None);
-        assert_eq!(path, crate::config::config_dir().join("shepherd-client.sock"));
+        assert_eq!(
+            path,
+            crate::config::config_dir().join("shepherd-client.sock")
+        );
     }
 
     #[test]

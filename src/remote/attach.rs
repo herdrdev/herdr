@@ -1095,7 +1095,11 @@ impl RemoteSsh {
         }
     }
 
-    fn install_shepherd(&self, remote_shepherd: &RemoteShepherd, source_path: &Path) -> io::Result<()> {
+    fn install_shepherd(
+        &self,
+        remote_shepherd: &RemoteShepherd,
+        source_path: &Path,
+    ) -> io::Result<()> {
         let output = self.sh_output(&remote_install_prepare_script(remote_shepherd))?;
         if !output.status.success() {
             return Err(command_failed("remote install preparation failed", &output));
@@ -1360,8 +1364,9 @@ fn windows_scp_target(target: &str, remote_path: &str) -> String {
 
 fn windows_remote_install_command(remote_dir: &str, identity: &str, sha256: &str) -> String {
     let installer = crate::platform::quote_powershell_arg(&format!(r"{remote_dir}\install.ps1"));
-    let package =
-        crate::platform::quote_powershell_arg(&format!(r"{remote_dir}\shepherd-windows-x86_64.zip"));
+    let package = crate::platform::quote_powershell_arg(&format!(
+        r"{remote_dir}\shepherd-windows-x86_64.zip"
+    ));
     windows_powershell_script_command(&format!(
         r#"$shepherdInstaller = {installer}; $shepherdPackage = {package}; & powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $shepherdInstaller -Channel {channel} -LocalPackagePath $shepherdPackage -LocalPackageFormat zip -LocalPackageIdentity {identity} -LocalPackageSha256 {sha256}; if ($LASTEXITCODE -ne 0) {{ exit $LASTEXITCODE }}; $shepherdHome = if ([string]::IsNullOrWhiteSpace($env:SHEPHERD_HOME)) {{ Join-Path $env:USERPROFILE '.shepherd' }} else {{ $env:SHEPHERD_HOME }}; $activeJunction = Join-Path $shepherdHome 'packages\standalone\current'; $activeTarget = [string](Get-Item -LiteralPath $activeJunction -Force -ErrorAction Stop).Target; if ([string]::IsNullOrWhiteSpace($activeTarget)) {{ throw 'Shepherd installer did not activate a concrete release.' }}; $installedShepherd = Join-Path $activeTarget 'shepherd.exe'; if (-not (Test-Path -LiteralPath $installedShepherd -PathType Leaf)) {{ throw 'Shepherd installer result does not contain shepherd.exe.' }}; $encodedResult = [System.Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes([System.IO.Path]::GetFullPath($installedShepherd))); [Console]::Out.WriteLine('{WINDOWS_REMOTE_INSTALL_RESULT_MARKER}' + $encodedResult); exit 0"#,
         channel = crate::platform::quote_powershell_arg(current_channel()),
@@ -1566,7 +1571,11 @@ fn prepare_discovered_remote_shepherd(
     source.cleanup();
     install_result?;
 
-    if !remote_binary_supports_endpoint_requirement(ssh, &remote_shepherd, require_surface_interest)? {
+    if !remote_binary_supports_endpoint_requirement(
+        ssh,
+        &remote_shepherd,
+        require_surface_interest,
+    )? {
         return Err(io::Error::other(format!(
             "installed remote shepherd at {}, but it does not support saved SSH endpoint federation",
             remote_shepherd.executable.display()
@@ -1659,7 +1668,11 @@ fn prepare_windows_remote_shepherd(
     })();
     source.cleanup();
     let remote_shepherd = install_result?;
-    if !remote_binary_supports_endpoint_requirement(ssh, &remote_shepherd, require_surface_interest)? {
+    if !remote_binary_supports_endpoint_requirement(
+        ssh,
+        &remote_shepherd,
+        require_surface_interest,
+    )? {
         return Err(io::Error::other(format!(
             "installed remote shepherd at {}, but it does not support the required remote hosting capabilities",
             remote_shepherd.executable.display()
@@ -1888,7 +1901,10 @@ fn windows_remote_binary_candidate_command() -> String {
     ))
 }
 
-fn windows_remote_binary_candidates(remote_shepherd: &RemoteShepherd, stdout: &str) -> Vec<RemoteShepherd> {
+fn windows_remote_binary_candidates(
+    remote_shepherd: &RemoteShepherd,
+    stdout: &str,
+) -> Vec<RemoteShepherd> {
     let mut candidates = Vec::new();
     for path in stdout.lines().filter_map(|line| {
         line.trim()
@@ -1903,7 +1919,10 @@ fn windows_remote_binary_candidates(remote_shepherd: &RemoteShepherd, stdout: &s
     candidates
 }
 
-fn push_if_new_remote_binary_candidate(candidates: &mut Vec<RemoteShepherd>, candidate: RemoteShepherd) {
+fn push_if_new_remote_binary_candidate(
+    candidates: &mut Vec<RemoteShepherd>,
+    candidate: RemoteShepherd,
+) {
     if !candidates
         .iter()
         .any(|existing| existing.executable == candidate.executable)
@@ -1982,10 +2001,16 @@ fn remote_binary_on_path_any(
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    Ok(remote_shepherd_from_path_discovery(remote_shepherd, &stdout))
+    Ok(remote_shepherd_from_path_discovery(
+        remote_shepherd,
+        &stdout,
+    ))
 }
 
-fn remote_shepherds_from_path_discovery(remote_shepherd: &RemoteShepherd, stdout: &str) -> Vec<RemoteShepherd> {
+fn remote_shepherds_from_path_discovery(
+    remote_shepherd: &RemoteShepherd,
+    stdout: &str,
+) -> Vec<RemoteShepherd> {
     stdout
         .lines()
         .filter_map(|path| remote_shepherd_from_path(remote_shepherd, path))
@@ -2001,7 +2026,10 @@ fn remote_shepherd_from_path_discovery(
         .find_map(|path| remote_shepherd_from_path(remote_shepherd, path))
 }
 
-fn remote_shepherd_from_path(remote_shepherd: &RemoteShepherd, path: &str) -> Option<RemoteShepherd> {
+fn remote_shepherd_from_path(
+    remote_shepherd: &RemoteShepherd,
+    path: &str,
+) -> Option<RemoteShepherd> {
     let path = path.trim();
     if !path.starts_with('/') {
         return None;
@@ -2040,7 +2068,8 @@ fn remote_binary_supports_endpoint_requirement(
 ) -> io::Result<bool> {
     Ok(
         remote_client_status(ssh, remote_shepherd)?.is_some_and(|status| {
-            status.supports_endpoint_requirement(&remote_shepherd.platform, require_surface_interest)
+            status
+                .supports_endpoint_requirement(&remote_shepherd.platform, require_surface_interest)
         }),
     )
 }
@@ -2590,7 +2619,9 @@ fn confirm_remote_server_stop(
 
 fn live_handoff_remote_server(ssh: &RemoteSsh, remote_shepherd: &RemoteShepherd) -> io::Result<()> {
     let status = remote_client_status(ssh, remote_shepherd)?.ok_or_else(|| {
-        io::Error::other("could not inspect the prepared remote shepherd binary before live handoff")
+        io::Error::other(
+            "could not inspect the prepared remote shepherd binary before live handoff",
+        )
     })?;
     let protocol = status.protocol.ok_or_else(|| {
         io::Error::other("prepared remote shepherd did not report its private protocol")
@@ -2632,7 +2663,10 @@ fn stop_remote_server(ssh: &RemoteSsh, remote_shepherd: &RemoteShepherd) -> io::
     Ok(())
 }
 
-fn wait_for_remote_server_shutdown(ssh: &RemoteSsh, remote_shepherd: &RemoteShepherd) -> io::Result<()> {
+fn wait_for_remote_server_shutdown(
+    ssh: &RemoteSsh,
+    remote_shepherd: &RemoteShepherd,
+) -> io::Result<()> {
     let deadline = Instant::now() + REMOTE_SERVER_SHUTDOWN_CONFIRM_TIMEOUT;
     loop {
         if remote_server_status(ssh, remote_shepherd, false)? == RemoteServerStatus::NotRunning {
@@ -2951,9 +2985,10 @@ pub(super) fn remote_api_bridge_command(
         args.push("--check");
     }
     match &remote_shepherd.executable {
-        RemoteExecutable::PosixShellPath(_) => {
-            posix_remote_output_command(&format!("exec {}", remote_shepherd.executable.command(&args)))
-        }
+        RemoteExecutable::PosixShellPath(_) => posix_remote_output_command(&format!(
+            "exec {}",
+            remote_shepherd.executable.command(&args)
+        )),
         RemoteExecutable::WindowsPath(path) => {
             windows_powershell_streaming_application_command(path, &args)
         }
@@ -3799,8 +3834,10 @@ mod tests {
 
     #[test]
     fn remote_client_preferences_cross_process_handoff() {
-        let root =
-            std::env::temp_dir().join(format!("shepherd-preference-handoff-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!(
+            "shepherd-preference-handoff-{}",
+            std::process::id()
+        ));
         let _ = fs::remove_dir_all(&root);
         for bridge in ["bridge-100.sock", "bridge-200.sock"] {
             let mut command = Command::new(std::env::current_exe().unwrap());
@@ -4582,7 +4619,10 @@ mod tests {
         ] {
             assert_eq!(
                 shepherd.executable.session_command("agents", args),
-                format!("{} --session agents {command}", shepherd.executable.display())
+                format!(
+                    "{} --session agents {command}",
+                    shepherd.executable.display()
+                )
             );
             assert_eq!(
                 shepherd
@@ -4645,7 +4685,8 @@ mod tests {
             )
         );
         assert_eq!(
-            parse_remote_install_paths(b"/home/a b\n/shepherd.tmp.42\0/home/a b\n/shepherd\0").unwrap(),
+            parse_remote_install_paths(b"/home/a b\n/shepherd.tmp.42\0/home/a b\n/shepherd\0")
+                .unwrap(),
             (
                 "/home/a b\n/shepherd.tmp.42".to_string(),
                 "/home/a b\n/shepherd".to_string()
@@ -4799,7 +4840,11 @@ mod tests {
 
     #[test]
     fn extract_remote_args_rejects_option_like_target() {
-        let args = vec!["shepherd".into(), "--remote".into(), "-oProxyCommand=x".into()];
+        let args = vec![
+            "shepherd".into(),
+            "--remote".into(),
+            "-oProxyCommand=x".into(),
+        ];
         let err = extract_remote_args(&args).unwrap_err();
         assert_eq!(err, "--remote target must not start with '-'");
     }
@@ -4830,8 +4875,10 @@ mod tests {
     fn windows_platform_probe_preserves_native_and_unsupported_architectures() {
         for arch in ["AMD64", "x86_64"] {
             assert_eq!(
-                parse_windows_platform_probe(&format!("profile noise\r\nshepherd-windows:{arch}\r\n"))
-                    .unwrap(),
+                parse_windows_platform_probe(&format!(
+                    "profile noise\r\nshepherd-windows:{arch}\r\n"
+                ))
+                .unwrap(),
                 Some(DetectedRemotePlatform {
                     platform: RemotePlatform {
                         os: "windows",
@@ -5311,7 +5358,8 @@ mod tests {
         assert!(command.contains(".Target"));
         assert!(command.contains(WINDOWS_REMOTE_INSTALL_RESULT_MARKER));
 
-        let installed = r"C:\Users\test\测试\.shepherd\packages\standalone\releases\0.9.0\shepherd.exe";
+        let installed =
+            r"C:\Users\test\测试\.shepherd\packages\standalone\releases\0.9.0\shepherd.exe";
         let encoded = base64::engine::general_purpose::STANDARD.encode(installed);
         assert_eq!(
             parse_windows_remote_path(
@@ -5425,7 +5473,8 @@ function Get-Process {
         normalize_remote_stdout(&mut missing, false).unwrap();
         assert_eq!(missing, b"profile output without marker");
 
-        let mut platform = b"profile output\nshepherd-remote-output-ready:1\nLinux\nx86_64\n".to_vec();
+        let mut platform =
+            b"profile output\nshepherd-remote-output-ready:1\nLinux\nx86_64\n".to_vec();
         normalize_remote_stdout(&mut platform, true).unwrap();
         let platform = String::from_utf8(platform).unwrap();
         let mut lines = platform.lines();
@@ -5561,8 +5610,9 @@ function Get-Process {
             os: "linux",
             arch: "x86_64",
         });
-        let remote_shepherd = remote_shepherd_from_path_discovery(&remote_shepherd, "/usr/bin/shepherd\n")
-            .expect("path binary");
+        let remote_shepherd =
+            remote_shepherd_from_path_discovery(&remote_shepherd, "/usr/bin/shepherd\n")
+                .expect("path binary");
 
         assert_eq!(
             remote_shepherd
@@ -5661,10 +5711,11 @@ function Get-Process {
         assert!(script.contains("emit \"$home/.local/bin/shepherd\""));
         assert!(!script.contains("mise/shims/shepherd"));
         assert!(script.contains(&format!("version={}", shell_quote(&current_version()))));
+        assert!(script
+            .contains("emit \"$home/.local/share/mise/installs/shepherd/$version/bin/shepherd\""));
         assert!(
-            script.contains("emit \"$home/.local/share/mise/installs/shepherd/$version/bin/shepherd\"")
+            script.contains("emit \"$home/.local/share/mise/installs/shepherd/$version/shepherd\"")
         );
-        assert!(script.contains("emit \"$home/.local/share/mise/installs/shepherd/$version/shepherd\""));
         assert!(script.contains(
             "emit \"$home/.local/share/mise/installs/github-ogulcancelik-shepherd/$version/shepherd\""
         ));
@@ -5711,7 +5762,8 @@ function Get-Process {
             os: "linux",
             arch: "x86_64",
         });
-        let remote_shepherd = remote_shepherd_from_path_discovery(&remote_shepherd, "bin/shepherd\n");
+        let remote_shepherd =
+            remote_shepherd_from_path_discovery(&remote_shepherd, "bin/shepherd\n");
 
         assert!(remote_shepherd.is_none());
     }
@@ -6082,7 +6134,11 @@ function Get-Process {
             arch: "aarch64",
         };
         assert_eq!(
-            install_source_description_for(&platform, Some(Path::new("/tmp/shepherd-aarch64")), false),
+            install_source_description_for(
+                &platform,
+                Some(Path::new("/tmp/shepherd-aarch64")),
+                false
+            ),
             "SHEPHERD_REMOTE_BINARY (/tmp/shepherd-aarch64)"
         );
     }
@@ -6118,8 +6174,9 @@ function Get-Process {
             os: "linux",
             arch: "aarch64",
         };
-        let source = resolve_install_source(&platform, Some(PathBuf::from("/tmp/shepherd-aarch64")))
-            .expect("override source");
+        let source =
+            resolve_install_source(&platform, Some(PathBuf::from("/tmp/shepherd-aarch64")))
+                .expect("override source");
         assert_eq!(source.path, PathBuf::from("/tmp/shepherd-aarch64"));
         assert!(source.temporary_dir.is_none());
     }

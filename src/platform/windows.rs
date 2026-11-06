@@ -5436,7 +5436,8 @@ mod tests {
 
     #[test]
     fn scrollback_editor_argv_uses_editor_env_and_appends_path() {
-        let path = std::path::Path::new(r"C:\Users\User\AppData\Local\Temp\shepherd scrollback.txt");
+        let path =
+            std::path::Path::new(r"C:\Users\User\AppData\Local\Temp\shepherd scrollback.txt");
         let argv = super::scrollback_editor_argv_with_env(
             path,
             Some(r#""C:\Program Files\Microsoft VS Code\Code.exe" --wait"#),

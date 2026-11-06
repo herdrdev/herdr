@@ -129,7 +129,11 @@ mod tests {
             ("windows", r"\\server\share\shepherd.exe", true),
             ("windows", "shepherd.exe", false),
             ("linux", "$HOME/.local/bin/shepherd", false),
-            ("linux", "/home/user/.local/share/mise/shims/shepherd", false),
+            (
+                "linux",
+                "/home/user/.local/share/mise/shims/shepherd",
+                false,
+            ),
             ("linux", "/bin/shepherd\nmalformed", false),
             ("unknown", "/bin/shepherd", false),
         ] {
@@ -147,7 +151,8 @@ mod tests {
 
     #[test]
     fn metadata_is_disposable_fingerprinted_and_independent_per_profile() {
-        let root = std::env::temp_dir().join(format!("shepherd-ssh-metadata-{}", std::process::id()));
+        let root =
+            std::env::temp_dir().join(format!("shepherd-ssh-metadata-{}", std::process::id()));
         let first = SshMetadataCache {
             path: root.join("first.json"),
             target: "mac".into(),

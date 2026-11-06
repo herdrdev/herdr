@@ -374,7 +374,10 @@ pub fn validate_native_source(path: &Path, expected_len: usize) -> io::Result<()
 fn native_base() -> PathBuf {
     #[cfg(unix)]
     {
-        PathBuf::from(format!("/var/tmp/shepherd-native-sources-{}", effective_uid()))
+        PathBuf::from(format!(
+            "/var/tmp/shepherd-native-sources-{}",
+            effective_uid()
+        ))
     }
     #[cfg(not(unix))]
     {

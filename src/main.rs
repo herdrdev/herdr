@@ -550,7 +550,13 @@ fn main() -> io::Result<()> {
         && !args.iter().any(|a| {
             matches!(
                 a.as_str(),
-                "--help" | "-h" | "--version" | "-V" | "--default-config" | "--skill" | "--shepherd-skill"
+                "--help"
+                    | "-h"
+                    | "--version"
+                    | "-V"
+                    | "--default-config"
+                    | "--skill"
+                    | "--shepherd-skill"
             )
         })
     {
@@ -643,7 +649,10 @@ fn main() -> io::Result<()> {
                 "Show local client and running server status",
             ),
             ("shepherd update", "Download and install the latest version"),
-            ("shepherd completion zsh", "Generate shell completions for zsh"),
+            (
+                "shepherd completion zsh",
+                "Generate shell completions for zsh",
+            ),
             (
                 "shepherd server stop",
                 "Stop the running server via the API socket",
@@ -677,7 +686,10 @@ fn main() -> io::Result<()> {
                 "shepherd worktree <subcommand>",
                 "Git worktree helpers over the socket API",
             ),
-            ("shepherd tab <subcommand>", "Tab helpers over the socket API"),
+            (
+                "shepherd tab <subcommand>",
+                "Tab helpers over the socket API",
+            ),
             (
                 "shepherd notification <subcommand>",
                 "Notification helpers over the socket API",
@@ -836,14 +848,20 @@ mod tests {
     #[test]
     fn nested_shepherd_blocks_when_env_is_set() {
         let config = config::Config::default();
-        assert!(should_block_nested_for_env(&config, Some(SHEPHERD_ENV_VALUE)));
+        assert!(should_block_nested_for_env(
+            &config,
+            Some(SHEPHERD_ENV_VALUE)
+        ));
     }
 
     #[test]
     fn nested_shepherd_does_not_block_when_allowed() {
         let config: config::Config =
             toml::from_str("[experimental]\nallow_nested = true\n").unwrap();
-        assert!(!should_block_nested_for_env(&config, Some(SHEPHERD_ENV_VALUE)));
+        assert!(!should_block_nested_for_env(
+            &config,
+            Some(SHEPHERD_ENV_VALUE)
+        ));
     }
 
     #[test]

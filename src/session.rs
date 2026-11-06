@@ -123,7 +123,9 @@ pub fn stop_command_for(name: Option<&str>) -> String {
 pub fn restart_after_update_guidance(stop_command: &str, attach_command: Option<&str>) -> String {
     let restart = match attach_command {
         Some(command) => format!("Run `{stop_command}`, then run `{command}` again."),
-        None => format!("Run `{stop_command}`, then restart Shepherd with the same socket override."),
+        None => {
+            format!("Run `{stop_command}`, then restart Shepherd with the same socket override.")
+        }
     };
     format!(
         "Stop the old server to use the new version.\nStopping exits pane processes.\n{restart}"
@@ -904,8 +906,10 @@ mod tests {
     #[test]
     fn env_default_session_name_uses_default_path() {
         let _guard = env_lock().lock().unwrap();
-        let config_home =
-            std::env::temp_dir().join(format!("shepherd-env-session-default-{}", std::process::id()));
+        let config_home = std::env::temp_dir().join(format!(
+            "shepherd-env-session-default-{}",
+            std::process::id()
+        ));
         std::env::set_var("XDG_CONFIG_HOME", &config_home);
         std::env::remove_var(crate::api::SOCKET_PATH_ENV_VAR);
         std::env::set_var(SESSION_ENV_VAR, DEFAULT_SESSION_NAME);
@@ -1000,8 +1004,10 @@ mod tests {
     #[test]
     fn explicit_session_socket_ignores_inherited_socket_override() {
         let _guard = env_lock().lock().unwrap();
-        let config_home =
-            std::env::temp_dir().join(format!("shepherd-session-precedence-{}", std::process::id()));
+        let config_home = std::env::temp_dir().join(format!(
+            "shepherd-session-precedence-{}",
+            std::process::id()
+        ));
         std::env::set_var("XDG_CONFIG_HOME", &config_home);
         std::env::set_var(SESSION_ENV_VAR, "work");
         EXPLICIT_SESSION_REQUESTED.store(true, Ordering::Relaxed);
@@ -1056,7 +1062,10 @@ mod tests {
 
         assert_eq!(cleaned, vec!["shepherd", "workspace", "list"]);
         assert!(!explicit_session_requested());
-        assert_eq!(active_api_socket_path(), PathBuf::from("/tmp/shepherd.sock"));
+        assert_eq!(
+            active_api_socket_path(),
+            PathBuf::from("/tmp/shepherd.sock")
+        );
         assert_eq!(std::env::var(SESSION_ENV_VAR).as_deref(), Ok("bad/name"));
 
         std::env::remove_var(SESSION_ENV_VAR);

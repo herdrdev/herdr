@@ -99,7 +99,8 @@ impl Harness {
         fs::create_dir_all(root.join("bin")).unwrap();
         fs::write(root.join("bin/ssh"), SSH).unwrap();
         fs::set_permissions(root.join("bin/ssh"), fs::Permissions::from_mode(0o700)).unwrap();
-        std::os::unix::fs::symlink(env!("CARGO_BIN_EXE_shepherd"), root.join("remote shepherd")).unwrap();
+        std::os::unix::fs::symlink(env!("CARGO_BIN_EXE_shepherd"), root.join("remote shepherd"))
+            .unwrap();
         fs::create_dir_all(root.join("remote bin")).unwrap();
         let remote_wrapper = root.join("remote bin/shepherd");
         fs::write(
@@ -748,7 +749,10 @@ fn machine_api_server_stop_is_sent_only_to_the_selected_machine() {
     let server = harness.serve(json!({"result":{"type":"ok"}}), harness.protocol);
     let output = harness
         .command(&["--machine", "mac", "server", "stop"])
-        .env("SHEPHERD_SOCKET_PATH", harness.root.join("missing-local.sock"))
+        .env(
+            "SHEPHERD_SOCKET_PATH",
+            harness.root.join("missing-local.sock"),
+        )
         .output()
         .unwrap();
     assert!(

@@ -209,7 +209,10 @@ fn apply_pane_launch_env(cmd: &mut CommandBuilder, launch_env: &PaneLaunchEnv) {
             tab_id,
             pane_id,
         } => {
-            cmd.env(crate::integration::SHEPHERD_WORKSPACE_ID_ENV_VAR, workspace_id);
+            cmd.env(
+                crate::integration::SHEPHERD_WORKSPACE_ID_ENV_VAR,
+                workspace_id,
+            );
             cmd.env(crate::integration::SHEPHERD_TAB_ID_ENV_VAR, tab_id);
             cmd.env(crate::integration::SHEPHERD_PANE_ID_ENV_VAR, pane_id);
         }

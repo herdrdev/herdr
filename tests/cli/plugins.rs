@@ -681,7 +681,9 @@ mv "$SHEPHERD_PLUGIN_ROOT/result-$kind.tmp" "$SHEPHERD_PLUGIN_ROOT/result-$kind"
         .unwrap()
         .file_name()
         .unwrap();
-    let legacy_root = config_home.join("shepherd-dev/plugins/github").join(component);
+    let legacy_root = config_home
+        .join("shepherd-dev/plugins/github")
+        .join(component);
     fs::create_dir_all(legacy_root.parent().unwrap()).unwrap();
     fs::rename(&installed_root, &legacy_root).unwrap();
     entries[0]["plugin_root"] = serde_json::json!(legacy_root);
@@ -993,7 +995,10 @@ fn plugin_install_usage_errors_include_options_without_installing() {
         );
         assert_eq!(output.status.code(), Some(2), "{args:?}");
         let stderr = String::from_utf8_lossy(&output.stderr);
-        assert!(stderr.contains("usage: shepherd plugin install"), "{stderr}");
+        assert!(
+            stderr.contains("usage: shepherd plugin install"),
+            "{stderr}"
+        );
         assert!(stderr.contains("[--ref REF] [--yes|-y]"), "{stderr}");
         assert!(!config_home.join("shepherd-dev/plugins").exists());
         assert!(!config_home.join("shepherd-dev/plugins.json").exists());

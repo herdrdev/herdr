@@ -872,8 +872,8 @@ mod tests {
             },
         );
 
-        let success: SuccessResponse =
-            serde_json::from_str(&response).expect("worktree create with empty base should succeed");
+        let success: SuccessResponse = serde_json::from_str(&response)
+            .expect("worktree create with empty base should succeed");
         let ResponseResult::WorktreeCreated { worktree, .. } = success.result else {
             panic!("expected worktree_created response");
         };

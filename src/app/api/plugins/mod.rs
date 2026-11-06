@@ -1529,7 +1529,10 @@ platforms = ["linux", "macos"]
     fn plugin_command_output_reader_caps_and_marks_truncation() {
         let output = read_capped_plugin_output("abcdef".as_bytes(), 3);
 
-        assert_eq!(output, "abc\n[shepherd truncated plugin output after 3 bytes]");
+        assert_eq!(
+            output,
+            "abc\n[shepherd truncated plugin output after 3 bytes]"
+        );
     }
 
     #[test]
@@ -1967,7 +1970,10 @@ command = ["sh", "-c", "printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n' \"$PWD\" \
                 cwd: None,
                 focus: true,
                 env: std::collections::HashMap::from([
-                    ("SHEPHERD_PLUGIN_ID".to_string(), "spoofed-plugin".to_string()),
+                    (
+                        "SHEPHERD_PLUGIN_ID".to_string(),
+                        "spoofed-plugin".to_string(),
+                    ),
                     (
                         "SHEPHERD_PLUGIN_ENTRYPOINT_ID".to_string(),
                         "spoofed-entrypoint".to_string(),

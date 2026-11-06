@@ -9,9 +9,9 @@ pub mod patterns;
 pub mod runs;
 pub mod skills;
 pub mod snapshots;
-mod snapshots_mouse;
 #[cfg(test)]
 mod snapshots_links_tests;
+mod snapshots_mouse;
 #[cfg(test)]
 mod snapshots_tests;
 pub mod snapshots_view;
@@ -266,7 +266,10 @@ pub fn render_shepherd_section(
                         snaps.agent_snaps.len()
                     ),
                     snapshots::SnapshotSource::Finished => {
-                        format!("Snapshots de agentes finalizados ({})", snaps.finished_snaps.len())
+                        format!(
+                            "Snapshots de agentes finalizados ({})",
+                            snaps.finished_snaps.len()
+                        )
                     }
                 };
                 let help = "↑/↓: lista | c: capturar | d/D: diff | f: archivo | R: todo | x: borrar | p: podar | Tab: finalizados | Esc: volver";

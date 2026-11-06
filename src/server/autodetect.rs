@@ -215,7 +215,10 @@ pub fn spawn_server_daemon() -> io::Result<u32> {
 
     let pid =
         crate::platform::launch_server_daemon_command(&mut command).map_err(|err: io::Error| {
-            io::Error::new(err.kind(), format!("failed to spawn shepherd server: {err}"))
+            io::Error::new(
+                err.kind(),
+                format!("failed to spawn shepherd server: {err}"),
+            )
         })?;
     info!(pid, "server daemon spawned");
 
@@ -352,8 +355,10 @@ mod windows_tests {
 
     #[test]
     fn reachability_distinguishes_denied_silent_busy_and_absent_pipes() {
-        let path =
-            std::env::temp_dir().join(format!("shepherd-startup-probe-{}.sock", std::process::id()));
+        let path = std::env::temp_dir().join(format!(
+            "shepherd-startup-probe-{}.sock",
+            std::process::id()
+        ));
         let name = path.to_string_lossy();
         let denied = ListenerOptions::new()
             .name(name.to_ns_name::<GenericNamespaced>().unwrap())

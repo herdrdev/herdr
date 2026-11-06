@@ -16,10 +16,10 @@ use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize}
 use serde_json::Value;
 use support::{
     cleanup_test_base, client_shell_handshake, drain_messages, register_runtime_dir,
-    register_spawned_shepherd_pid, send_client_shell_focus, send_detach, unregister_spawned_shepherd_pid,
-    wait_for_client_shell_bootstrap, wait_for_message_variant, wait_for_message_variants,
-    CURRENT_ENDPOINT_PROTOCOL_GENERATION as CURRENT_PROTOCOL, SERVER_MESSAGE_PANE_SURFACE,
-    SERVER_MESSAGE_PANE_SURFACE_PATCH,
+    register_spawned_shepherd_pid, send_client_shell_focus, send_detach,
+    unregister_spawned_shepherd_pid, wait_for_client_shell_bootstrap, wait_for_message_variant,
+    wait_for_message_variants, CURRENT_ENDPOINT_PROTOCOL_GENERATION as CURRENT_PROTOCOL,
+    SERVER_MESSAGE_PANE_SURFACE, SERVER_MESSAGE_PANE_SURFACE_PATCH,
 };
 
 fn unique_test_dir() -> PathBuf {

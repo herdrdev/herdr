@@ -127,7 +127,8 @@ pub(super) fn wrap_notice(notice: &str, total_width: usize, max_lines: usize) ->
                     let mut chunk = String::new();
                     for ch in rem.chars() {
                         let next_chunk = format!("{chunk}{ch}");
-                        if unicode_width::UnicodeWidthStr::width(next_chunk.as_str()) <= text_width {
+                        if unicode_width::UnicodeWidthStr::width(next_chunk.as_str()) <= text_width
+                        {
                             chunk.push(ch);
                         } else {
                             break;
@@ -171,7 +172,9 @@ pub(super) fn wrap_notice(notice: &str, total_width: usize, max_lines: usize) ->
                         let mut chunk = String::new();
                         for ch in rem.chars() {
                             let next_chunk = format!("{chunk}{ch}");
-                            if unicode_width::UnicodeWidthStr::width(next_chunk.as_str()) <= text_width {
+                            if unicode_width::UnicodeWidthStr::width(next_chunk.as_str())
+                                <= text_width
+                            {
                                 chunk.push(ch);
                             } else {
                                 break;
@@ -234,7 +237,11 @@ fn truncate_with_ellipsis(line: &mut String, max_w: usize) {
     line.push('…');
 }
 
-pub(super) fn agent_row_line_count(row: &AgentRow, config: &ClientShellConfig, width: u16) -> usize {
+pub(super) fn agent_row_line_count(
+    row: &AgentRow,
+    config: &ClientShellConfig,
+    width: u16,
+) -> usize {
     let mut count = row.rows.len().max(1);
     if config.shepherd_enabled {
         if let Some(ref notice) = row.notice {
@@ -471,11 +478,7 @@ pub(super) fn agent_row(
     );
     let (shepherd_state, needs_you, notice) = if let Some(ref shep) = agent.shepherd {
         let is_blocked = shep.state == "blocked";
-        (
-            Some(shep.state.clone()),
-            is_blocked,
-            shep.notice.clone(),
-        )
+        (Some(shep.state.clone()), is_blocked, shep.notice.clone())
     } else {
         (None, false, None)
     };
@@ -534,7 +537,9 @@ pub(super) fn render_agent_row(
             if row.needs_you {
                 Some((
                     " [NEEDS YOU]".to_string(),
-                    Style::default().fg(palette.red).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(palette.red)
+                        .add_modifier(Modifier::BOLD),
                 ))
             } else if let Some(ref state) = row.shepherd_state {
                 Some((
@@ -611,10 +616,9 @@ pub(super) fn render_agent_row(
                         ),
                     ]
                 };
-                Paragraph::new(Line::from(spans)).style(row_style).render(
-                    Rect::new(rect.x, notice_y, rect.width, 1),
-                    buffer,
-                );
+                Paragraph::new(Line::from(spans))
+                    .style(row_style)
+                    .render(Rect::new(rect.x, notice_y, rect.width, 1), buffer);
             }
         }
     }
@@ -645,9 +649,9 @@ fn sidebar_status_text(status: crate::api::schema::AgentStatus) -> &'static str 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::Config;
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
-    use crate::config::Config;
 
     fn test_config(shepherd_enabled: bool) -> ClientShellConfig {
         let mut config = ClientShellConfig::from_config(&Config::default());
@@ -713,8 +717,12 @@ mod tests {
                 state: state.into(),
                 notice: None,
             };
-            let snapshot = test_snapshot_with_agent(Some(shepherd_info), crate::api::schema::AgentStatus::Working);
-            let row = agent_row(&snapshot, "pane_1", &config, None).expect("agent row should exist");
+            let snapshot = test_snapshot_with_agent(
+                Some(shepherd_info),
+                crate::api::schema::AgentStatus::Working,
+            );
+            let row =
+                agent_row(&snapshot, "pane_1", &config, None).expect("agent row should exist");
 
             let area = Rect::new(0, 0, 80, 1);
             let mut buffer = Buffer::empty(area);
@@ -738,7 +746,10 @@ mod tests {
             state: "blocked".into(),
             notice: Some(notice_text.into()),
         };
-        let snapshot = test_snapshot_with_agent(Some(shepherd_info), crate::api::schema::AgentStatus::Blocked);
+        let snapshot = test_snapshot_with_agent(
+            Some(shepherd_info),
+            crate::api::schema::AgentStatus::Blocked,
+        );
         let row = agent_row(&snapshot, "pane_1", &config, None).expect("agent row should exist");
 
         // Check row line count calculation with wide width
@@ -751,9 +762,18 @@ mod tests {
         render_agent_row(&mut buffer_extra, area_extra, &row, &config);
         let text_extra = buffer_text(&buffer_extra, area_extra);
 
-        assert!(text_extra.contains("[NEEDS YOU]"), "Line 0 should show [NEEDS YOU]");
-        assert!(text_extra.contains(notice_text), "Extra line should show full notice text");
-        assert!(text_extra.contains("↳"), "Extra line should show subline indicator");
+        assert!(
+            text_extra.contains("[NEEDS YOU]"),
+            "Line 0 should show [NEEDS YOU]"
+        );
+        assert!(
+            text_extra.contains(notice_text),
+            "Extra line should show full notice text"
+        );
+        assert!(
+            text_extra.contains("↳"),
+            "Extra line should show subline indicator"
+        );
 
         // 2. Constrained height (inline notice on line 0)
         let area_inline = Rect::new(0, 0, 80, 1);
@@ -761,8 +781,14 @@ mod tests {
         render_agent_row(&mut buffer_inline, area_inline, &row, &config);
         let text_inline = buffer_text(&buffer_inline, area_inline);
 
-        assert!(text_inline.contains("[NEEDS YOU]"), "Constrained height should show [NEEDS YOU]");
-        assert!(text_inline.contains(notice_text), "Constrained height should contain notice text");
+        assert!(
+            text_inline.contains("[NEEDS YOU]"),
+            "Constrained height should show [NEEDS YOU]"
+        );
+        assert!(
+            text_inline.contains(notice_text),
+            "Constrained height should contain notice text"
+        );
     }
 
     #[test]
@@ -775,7 +801,10 @@ mod tests {
             state: "blocked".into(),
             notice: Some(notice_text.into()),
         };
-        let snapshot = test_snapshot_with_agent(Some(shepherd_info), crate::api::schema::AgentStatus::Blocked);
+        let snapshot = test_snapshot_with_agent(
+            Some(shepherd_info),
+            crate::api::schema::AgentStatus::Blocked,
+        );
         let row = agent_row(&snapshot, "pane_1", &config, None).expect("agent row should exist");
 
         // Width 25 (typical sidebar width): text width is 25 - 5 = 20.
@@ -784,7 +813,10 @@ mod tests {
         // "this permission" (15 <= 20)
         // "dialog" (6 <= 20)
         let lines_count = agent_row_line_count(&row, &config, 25);
-        assert!(lines_count >= row.rows.len() + 2, "Long notice must wrap to multiple lines");
+        assert!(
+            lines_count >= row.rows.len() + 2,
+            "Long notice must wrap to multiple lines"
+        );
 
         let area = Rect::new(0, 0, 25, lines_count as u16);
         let mut buffer = Buffer::empty(area);
@@ -800,7 +832,10 @@ mod tests {
         let very_long = "one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty";
         let wrapped = wrap_notice(very_long, 25, MAX_NOTICE_LINES);
         assert_eq!(wrapped.len(), MAX_NOTICE_LINES);
-        assert!(wrapped[MAX_NOTICE_LINES - 1].ends_with('…'), "Last line must end with ellipsis when exceeding max lines");
+        assert!(
+            wrapped[MAX_NOTICE_LINES - 1].ends_with('…'),
+            "Last line must end with ellipsis when exceeding max lines"
+        );
     }
 
     #[test]
@@ -810,16 +845,28 @@ mod tests {
         let snapshot = test_snapshot_with_agent(None, crate::api::schema::AgentStatus::Blocked);
         let row = agent_row(&snapshot, "pane_1", &config, None).expect("agent row should exist");
 
-        assert!(!row.needs_you, "Non-shepherd agent must never have needs_you true");
-        assert_eq!(row.shepherd_state, None, "Non-shepherd agent must have shepherd_state None");
+        assert!(
+            !row.needs_you,
+            "Non-shepherd agent must never have needs_you true"
+        );
+        assert_eq!(
+            row.shepherd_state, None,
+            "Non-shepherd agent must have shepherd_state None"
+        );
 
         let area = Rect::new(0, 0, 80, 2);
         let mut buffer = Buffer::empty(area);
         render_agent_row(&mut buffer, area, &row, &config);
         let text = buffer_text(&buffer, area);
 
-        assert!(!text.contains("[NEEDS YOU]"), "Non-shepherd agent must NOT display [NEEDS YOU]");
-        assert!(!text.contains("[blocked]"), "Non-shepherd agent must NOT display [blocked]");
+        assert!(
+            !text.contains("[NEEDS YOU]"),
+            "Non-shepherd agent must NOT display [NEEDS YOU]"
+        );
+        assert!(
+            !text.contains("[blocked]"),
+            "Non-shepherd agent must NOT display [blocked]"
+        );
     }
 
     #[test]
@@ -853,7 +900,10 @@ mod tests {
             state: "blocked".into(),
             notice: Some("urgent attention needed".into()),
         };
-        let snapshot = test_snapshot_with_agent(Some(shepherd_info), crate::api::schema::AgentStatus::Blocked);
+        let snapshot = test_snapshot_with_agent(
+            Some(shepherd_info),
+            crate::api::schema::AgentStatus::Blocked,
+        );
         let row = agent_row(&snapshot, "pane_1", &config, None).expect("agent row should exist");
 
         let area = Rect::new(0, 0, 80, 2);
@@ -861,9 +911,18 @@ mod tests {
         render_agent_row(&mut buffer, area, &row, &config);
         let text = buffer_text(&buffer, area);
 
-        assert!(!text.contains("[NEEDS YOU]"), "When shepherd is disabled, must not show [NEEDS YOU]");
-        assert!(!text.contains("[blocked]"), "When shepherd is disabled, must not show [blocked]");
-        assert!(!text.contains("urgent attention needed"), "When shepherd is disabled, must not show notice");
+        assert!(
+            !text.contains("[NEEDS YOU]"),
+            "When shepherd is disabled, must not show [NEEDS YOU]"
+        );
+        assert!(
+            !text.contains("[blocked]"),
+            "When shepherd is disabled, must not show [blocked]"
+        );
+        assert!(
+            !text.contains("urgent attention needed"),
+            "When shepherd is disabled, must not show notice"
+        );
     }
 
     #[test]
@@ -875,7 +934,10 @@ mod tests {
             state: "blocked".into(),
             notice: Some("notice".into()),
         };
-        let snapshot = test_snapshot_with_agent(Some(shepherd_info), crate::api::schema::AgentStatus::Blocked);
+        let snapshot = test_snapshot_with_agent(
+            Some(shepherd_info),
+            crate::api::schema::AgentStatus::Blocked,
+        );
         let row = agent_row(&snapshot, "pane_1", &config, None).unwrap();
 
         let test_dimensions = [
@@ -906,7 +968,10 @@ mod tests {
             state: "working".into(),
             notice: None,
         };
-        let mut snapshot = test_snapshot_with_agent(Some(shepherd_info), crate::api::schema::AgentStatus::Working);
+        let mut snapshot = test_snapshot_with_agent(
+            Some(shepherd_info),
+            crate::api::schema::AgentStatus::Working,
+        );
         snapshot.workspaces[0].label = "repo".into();
         snapshot.tabs[0].label = "coder·gemini·crea-un-archivo-".into();
         snapshot.tabs[0].custom_label = true;
@@ -939,7 +1004,10 @@ mod tests {
             state: "blocked".into(),
             notice: None,
         };
-        let mut snapshot = test_snapshot_with_agent(Some(shepherd_info), crate::api::schema::AgentStatus::Blocked);
+        let mut snapshot = test_snapshot_with_agent(
+            Some(shepherd_info),
+            crate::api::schema::AgentStatus::Blocked,
+        );
         snapshot.workspaces[0].label = "repo".into();
         snapshot.tabs[0].label = "coder·gemini·crea-un-archivo-".into();
         snapshot.tabs[0].custom_label = true;

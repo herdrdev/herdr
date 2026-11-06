@@ -17,7 +17,10 @@ pub(super) fn plugin_path_env(plugin: &InstalledPluginInfo) -> Vec<(String, Stri
     let state_dir = plugin_state_dir(&plugin.plugin_id);
 
     vec![
-        ("SHEPHERD_PLUGIN_ROOT".to_string(), plugin.plugin_root.clone()),
+        (
+            "SHEPHERD_PLUGIN_ROOT".to_string(),
+            plugin.plugin_root.clone(),
+        ),
         (
             "SHEPHERD_PLUGIN_CONFIG_DIR".to_string(),
             config_dir.display().to_string(),

@@ -274,7 +274,10 @@ mod tests {
 
         assert_eq!(lines.len(), 1);
         assert_eq!(line_text(&lines[0].1), " • shepherd pane run ... now works");
-        assert_eq!(lines[0].1.spans[1].content.as_ref(), "shepherd pane run ...");
+        assert_eq!(
+            lines[0].1.spans[1].content.as_ref(),
+            "shepherd pane run ..."
+        );
         assert_eq!(lines[0].1.spans[1].style.fg, Some(palette.accent));
         assert_eq!(lines[0].1.spans[1].style.bg, Some(palette.surface0));
     }

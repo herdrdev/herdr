@@ -17,8 +17,9 @@ use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize}
 use serde_json::Value;
 use support::{
     cleanup_test_base, client_shell_handshake, drain_messages, register_runtime_dir,
-    register_spawned_shepherd_pid, send_detach, unregister_spawned_shepherd_pid, wait_for_disconnect,
-    wait_for_socket, wait_until, CURRENT_ENDPOINT_PROTOCOL_GENERATION as CURRENT_PROTOCOL,
+    register_spawned_shepherd_pid, send_detach, unregister_spawned_shepherd_pid,
+    wait_for_disconnect, wait_for_socket, wait_until,
+    CURRENT_ENDPOINT_PROTOCOL_GENERATION as CURRENT_PROTOCOL,
 };
 
 const CUSTOM_HEADLESS_SIZE_CONFIG: &str = r#"onboarding = false
@@ -127,7 +128,10 @@ fn spawn_server_with_config(
     cmd.env("XDG_RUNTIME_DIR", runtime_dir);
     cmd.env("SHEPHERD_SOCKET_PATH", api_socket_path);
     cmd.env_remove("SHEPHERD_CLIENT_SOCKET_PATH");
-    cmd.env("SHEPHERD_CONFIG_PATH", config_home.join("shepherd/config.toml"));
+    cmd.env(
+        "SHEPHERD_CONFIG_PATH",
+        config_home.join("shepherd/config.toml"),
+    );
     cmd.env("SHELL", "/bin/sh");
     cmd.env_remove("SHEPHERD_ENV");
 

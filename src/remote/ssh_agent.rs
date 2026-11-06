@@ -136,8 +136,10 @@ mod tests {
 
     #[test]
     fn registration_stops_when_the_server_rejects_the_agent() {
-        let socket_path =
-            std::env::temp_dir().join(format!("shepherd-agent-rejected-{}.sock", std::process::id()));
+        let socket_path = std::env::temp_dir().join(format!(
+            "shepherd-agent-rejected-{}.sock",
+            std::process::id()
+        ));
         let listener = UnixListener::bind(&socket_path).unwrap();
         let server = std::thread::spawn(move || {
             for expected in ["ping", "server.ssh_agent.register"] {

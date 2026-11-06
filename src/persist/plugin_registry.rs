@@ -317,7 +317,10 @@ mod tests {
 
         result.unwrap();
         assert!(preserved, "saving the registry must preserve its symlink");
-        assert_eq!(link_text.unwrap(), Path::new("dotfiles/shepherd/plugins.json"));
+        assert_eq!(
+            link_text.unwrap(),
+            Path::new("dotfiles/shepherd/plugins.json")
+        );
         assert!(same_content);
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].plugin_id, "example.second");

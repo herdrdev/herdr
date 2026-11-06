@@ -1199,7 +1199,10 @@ fn windows_hooks_decode_stdin_as_utf8() {
             "claude",
             include_str!("assets/claude/shepherd-agent-state.ps1"),
         ),
-        ("codex", include_str!("assets/codex/shepherd-agent-state.ps1")),
+        (
+            "codex",
+            include_str!("assets/codex/shepherd-agent-state.ps1"),
+        ),
         (
             "copilot",
             include_str!("assets/copilot/shepherd-agent-state.ps1"),
@@ -1208,8 +1211,14 @@ fn windows_hooks_decode_stdin_as_utf8() {
             "cursor",
             include_str!("assets/cursor/shepherd-agent-state.ps1"),
         ),
-        ("devin", include_str!("assets/devin/shepherd-agent-state.ps1")),
-        ("droid", include_str!("assets/droid/shepherd-agent-state.ps1")),
+        (
+            "devin",
+            include_str!("assets/devin/shepherd-agent-state.ps1"),
+        ),
+        (
+            "droid",
+            include_str!("assets/droid/shepherd-agent-state.ps1"),
+        ),
         ("grok", include_str!("assets/grok/shepherd-agent-state.ps1")),
         ("kimi", include_str!("assets/kimi/shepherd-agent-state.ps1")),
         (
@@ -1224,7 +1233,10 @@ fn windows_hooks_decode_stdin_as_utf8() {
             "qodercli",
             include_str!("assets/qodercli/shepherd-agent-state.ps1"),
         ),
-        ("qwen", include_str!("assets/qwen/shepherd-agent-session.ps1")),
+        (
+            "qwen",
+            include_str!("assets/qwen/shepherd-agent-session.ps1"),
+        ),
     ] {
         assert!(
             !asset.contains("[Console]::In.ReadToEnd()"),
@@ -2879,7 +2891,9 @@ fn opencode_recovery_copy_blocks_retry_before_parsing_or_asset_changes() {
     if symlink_file(&referent, &config) {
         let link_before = fs::read_link(&config).unwrap();
         let error = install_target(target).unwrap_err();
-        assert!(error.to_string().contains("preferences.json.shepherd-backup"));
+        assert!(error
+            .to_string()
+            .contains("preferences.json.shepherd-backup"));
         assert_eq!(fs::read_link(&config).unwrap(), link_before);
     }
     assert_eq!(fs::read_to_string(&plugin).unwrap(), "previous integration");
@@ -3386,8 +3400,9 @@ fn uninstall_hermes_preserves_empty_sequence_node_properties() {
             assert_eq!(update_hermes_enabled_plugin(&uninstalled, false), expected);
             assert_eq!(update_hermes_enabled_plugin(&uninstalled, true), input);
 
-            let flow =
-                format!("{header} {properties} [shepherd-agent-state, other-plugin] # keep\n{alias}");
+            let flow = format!(
+                "{header} {properties} [shepherd-agent-state, other-plugin] # keep\n{alias}"
+            );
             assert_eq!(
                 update_hermes_enabled_plugin(&flow, false),
                 format!("{header} {properties} # keep\n{indent}- other-plugin\n{alias}")
@@ -3681,7 +3696,8 @@ fn uninstall_hermes_preserves_quoted_inline_enabled_items() {
 
 #[test]
 fn uninstall_hermes_converts_single_inline_enabled_entry_to_empty_list() {
-    let config = update_hermes_enabled_plugin("plugins:\n  enabled: [shepherd-agent-state]\n", false);
+    let config =
+        update_hermes_enabled_plugin("plugins:\n  enabled: [shepherd-agent-state]\n", false);
     assert_eq!(config, "plugins:\n  enabled: []\n");
 }
 
@@ -5033,8 +5049,10 @@ fn antigravity_cli_v3_install_is_outdated_until_reinstalled() {
     fs::create_dir_all(&hook_dir).unwrap();
     fs::write(
         hook_dir.join(ANTIGRAVITY_CLI_HOOK_INSTALL_NAME),
-        ANTIGRAVITY_CLI_HOOK_ASSET
-            .replace("SHEPHERD_INTEGRATION_VERSION=4", "SHEPHERD_INTEGRATION_VERSION=3"),
+        ANTIGRAVITY_CLI_HOOK_ASSET.replace(
+            "SHEPHERD_INTEGRATION_VERSION=4",
+            "SHEPHERD_INTEGRATION_VERSION=3",
+        ),
     )
     .unwrap();
     std::env::set_var(ANTIGRAVITY_CLI_CONFIG_DIR_ENV_VAR, &agy_dir);

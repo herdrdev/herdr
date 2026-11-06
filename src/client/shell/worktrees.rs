@@ -208,7 +208,9 @@ impl ClientShellState {
                 workspace_id: workspace_id.clone(),
             },
             KeybindAction::RemoveWorktree if !linked => {
-                self.set_endpoint_error("This workspace is not a Shepherd-managed worktree checkout.");
+                self.set_endpoint_error(
+                    "This workspace is not a Shepherd-managed worktree checkout.",
+                );
                 outcome.repaint = true;
                 return;
             }

@@ -693,7 +693,9 @@ mod tests {
         assert_eq!(session_ref.kind, AgentSessionRefKind::Path);
         assert_eq!(session_ref.value, pi_session);
 
-        assert!(session_ref_from_report("shepherd:pi", "pi", Some("bad\nid".into()), None).is_none());
+        assert!(
+            session_ref_from_report("shepherd:pi", "pi", Some("bad\nid".into()), None).is_none()
+        );
         assert!(
             session_ref_from_report("shepherd:pi", "pi", None, Some("relative.jsonl".into()))
                 .is_none()
@@ -723,32 +725,45 @@ mod tests {
         .unwrap();
         assert_eq!(session_ref.kind, AgentSessionRefKind::Id);
         assert_eq!(session_ref.value, "omp-id");
+        assert!(session_ref_from_report(
+            "shepherd:omp",
+            "omp",
+            None,
+            Some("relative.jsonl".into())
+        )
+        .is_none());
+
         assert!(
-            session_ref_from_report("shepherd:omp", "omp", None, Some("relative.jsonl".into()))
+            session_ref_from_report("shepherd:claude", "claude", None, Some(claude_session))
                 .is_none()
         );
 
-        assert!(
-            session_ref_from_report("shepherd:claude", "claude", None, Some(claude_session)).is_none()
-        );
-
-        let session_ref =
-            session_ref_from_report("shepherd:copilot", "copilot", Some("copilot-id".into()), None)
-                .unwrap();
+        let session_ref = session_ref_from_report(
+            "shepherd:copilot",
+            "copilot",
+            Some("copilot-id".into()),
+            None,
+        )
+        .unwrap();
         assert_eq!(session_ref.kind, AgentSessionRefKind::Id);
         assert_eq!(session_ref.value, "copilot-id");
-        assert!(
-            session_ref_from_report("shepherd:copilot", "copilot", None, Some(copilot_session))
-                .is_none()
-        );
+        assert!(session_ref_from_report(
+            "shepherd:copilot",
+            "copilot",
+            None,
+            Some(copilot_session)
+        )
+        .is_none());
 
         let session_ref =
-            session_ref_from_report("shepherd:devin", "devin", Some("devin-id".into()), None).unwrap();
+            session_ref_from_report("shepherd:devin", "devin", Some("devin-id".into()), None)
+                .unwrap();
         assert_eq!(session_ref.kind, AgentSessionRefKind::Id);
         assert_eq!(session_ref.value, "devin-id");
 
         let session_ref =
-            session_ref_from_report("shepherd:droid", "droid", Some("droid-id".into()), None).unwrap();
+            session_ref_from_report("shepherd:droid", "droid", Some("droid-id".into()), None)
+                .unwrap();
         assert_eq!(session_ref.kind, AgentSessionRefKind::Id);
         assert_eq!(session_ref.value, "droid-id");
         assert!(session_ref_from_report(
@@ -779,9 +794,13 @@ mod tests {
         assert_eq!(session_ref.kind, AgentSessionRefKind::Id);
         assert_eq!(session_ref.value, "kilo-id");
 
-        let session_ref =
-            session_ref_from_report("shepherd:qodercli", "qodercli", Some("qoder-id".into()), None)
-                .unwrap();
+        let session_ref = session_ref_from_report(
+            "shepherd:qodercli",
+            "qodercli",
+            Some("qoder-id".into()),
+            None,
+        )
+        .unwrap();
         assert_eq!(session_ref.kind, AgentSessionRefKind::Id);
         assert_eq!(session_ref.value, "qoder-id");
 
@@ -790,9 +809,13 @@ mod tests {
         assert_eq!(session_ref.kind, AgentSessionRefKind::Id);
         assert_eq!(session_ref.value, "qwen-id");
 
-        let session_ref =
-            session_ref_from_report("shepherd:antigravity_cli", "agy", Some("agy-id".into()), None)
-                .unwrap();
+        let session_ref = session_ref_from_report(
+            "shepherd:antigravity_cli",
+            "agy",
+            Some("agy-id".into()),
+            None,
+        )
+        .unwrap();
         assert_eq!(session_ref.kind, AgentSessionRefKind::Id);
         assert_eq!(session_ref.value, "agy-id");
     }
@@ -842,7 +865,8 @@ mod tests {
     #[test]
     fn ids_are_data_not_shell_text() {
         let id = "abc; rm -rf /";
-        let codex_plan = plan("shepherd:codex", "codex", &AgentSessionRef::id(id).unwrap()).unwrap();
+        let codex_plan =
+            plan("shepherd:codex", "codex", &AgentSessionRef::id(id).unwrap()).unwrap();
         assert_eq!(codex_plan.argv, vec!["codex", "resume", id]);
 
         let copilot_plan = plan(
@@ -853,7 +877,8 @@ mod tests {
         .unwrap();
         assert_eq!(copilot_plan.argv, vec!["copilot", "--resume=abc; rm -rf /"]);
 
-        let devin_plan = plan("shepherd:devin", "devin", &AgentSessionRef::id(id).unwrap()).unwrap();
+        let devin_plan =
+            plan("shepherd:devin", "devin", &AgentSessionRef::id(id).unwrap()).unwrap();
         assert_eq!(devin_plan.argv, vec!["devin", "--resume", id]);
     }
 

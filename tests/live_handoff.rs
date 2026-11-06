@@ -15,9 +15,9 @@ use std::time::{Duration, Instant};
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 use support::{
     cleanup_test_base, client_shell_handshake, register_runtime_dir, register_spawned_shepherd_pid,
-    send_client_shell_shift_enter, unregister_spawned_shepherd_pid, wait_for_client_shell_bootstrap,
-    wait_for_message_variant, wait_for_socket, SERVER_MESSAGE_ENDPOINT_CONTROL,
-    SERVER_MESSAGE_SERVER_SHUTDOWN,
+    send_client_shell_shift_enter, unregister_spawned_shepherd_pid,
+    wait_for_client_shell_bootstrap, wait_for_message_variant, wait_for_socket,
+    SERVER_MESSAGE_ENDPOINT_CONTROL, SERVER_MESSAGE_SERVER_SHUTDOWN,
 };
 
 struct SpawnedShepherd {

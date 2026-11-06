@@ -18,11 +18,11 @@ use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize}
 use serde_json::Value;
 use support::{
     cleanup_test_base, client_shell_handshake, read_server_message, register_runtime_dir,
-    register_spawned_shepherd_pid, unregister_spawned_shepherd_pid, wait_for_client_shell_bootstrap,
-    wait_for_message_variant, wait_for_message_variants, wait_for_socket, wait_until,
-    CURRENT_ENDPOINT_PROTOCOL_GENERATION as CURRENT_PROTOCOL, SERVER_MESSAGE_PANE_SURFACE,
-    SERVER_MESSAGE_PANE_SURFACE_PATCH, SERVER_MESSAGE_SEMANTIC_NOTIFICATION,
-    SERVER_MESSAGE_SERVER_SHUTDOWN,
+    register_spawned_shepherd_pid, unregister_spawned_shepherd_pid,
+    wait_for_client_shell_bootstrap, wait_for_message_variant, wait_for_message_variants,
+    wait_for_socket, wait_until, CURRENT_ENDPOINT_PROTOCOL_GENERATION as CURRENT_PROTOCOL,
+    SERVER_MESSAGE_PANE_SURFACE, SERVER_MESSAGE_PANE_SURFACE_PATCH,
+    SERVER_MESSAGE_SEMANTIC_NOTIFICATION, SERVER_MESSAGE_SERVER_SHUTDOWN,
 };
 
 fn unique_test_dir() -> PathBuf {
@@ -1608,7 +1608,9 @@ fn drain_until_client_exits(
 /// client emits the mouse teardown after that point. The teardown markers also
 /// appear in normal attach output, so only bytes emitted after the trigger
 /// (past the watermark) count.
-fn assert_client_restores_terminal(trigger: impl FnOnce(&mut SpawnedShepherd, &mut SpawnedShepherd)) {
+fn assert_client_restores_terminal(
+    trigger: impl FnOnce(&mut SpawnedShepherd, &mut SpawnedShepherd),
+) {
     let _lock = test_lock();
     let base = unique_test_dir();
     let config_home = base.join("config");

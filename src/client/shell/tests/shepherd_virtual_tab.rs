@@ -226,7 +226,8 @@ fn test_tab_numbering_and_order_preserved() {
 
     // SwitchTab(0) corresponds to prefix+1 / Alt+1 -> switches to real tab 1 ("tab_1")
     let mut outcome = ClientShellInput::default();
-    let handled = state.handle_tab_navigation(crate::input::KeybindAction::SwitchTab(0), &mut outcome);
+    let handled =
+        state.handle_tab_navigation(crate::input::KeybindAction::SwitchTab(0), &mut outcome);
     assert!(handled);
     assert!(!state.is_shepherd_tab_active());
     let methods = endpoint_methods(&outcome);
@@ -240,7 +241,8 @@ fn test_tab_numbering_and_order_preserved() {
 
     // SwitchTab(1) corresponds to prefix+2 / Alt+2 -> switches to real tab 2 ("tab_2")
     let mut outcome2 = ClientShellInput::default();
-    let handled2 = state.handle_tab_navigation(crate::input::KeybindAction::SwitchTab(1), &mut outcome2);
+    let handled2 =
+        state.handle_tab_navigation(crate::input::KeybindAction::SwitchTab(1), &mut outcome2);
     assert!(handled2);
     assert!(!state.is_shepherd_tab_active());
     let methods2 = endpoint_methods(&outcome2);
@@ -276,13 +278,15 @@ fn test_tab_cycling_next_and_previous_coherent() {
     snap.focused_tab_id = Some("tab_1".into());
     state.set_snapshot(Box::new(snap.clone()));
     let mut outcome2 = ClientShellInput::default();
-    let handled2 = state.handle_tab_navigation(crate::input::KeybindAction::PreviousTab, &mut outcome2);
+    let handled2 =
+        state.handle_tab_navigation(crate::input::KeybindAction::PreviousTab, &mut outcome2);
     assert!(handled2);
     assert!(state.is_shepherd_tab_active());
 
     // Case 3: On Shepherd virtual tab, PreviousTab -> wraps around to last real tab (Tab 2)
     let mut outcome3 = ClientShellInput::default();
-    let handled3 = state.handle_tab_navigation(crate::input::KeybindAction::PreviousTab, &mut outcome3);
+    let handled3 =
+        state.handle_tab_navigation(crate::input::KeybindAction::PreviousTab, &mut outcome3);
     assert!(handled3);
     assert!(!state.is_shepherd_tab_active());
     let methods3 = endpoint_methods(&outcome3);
@@ -406,7 +410,10 @@ fn test_shepherd_tab_mouse_click_hit_testing() {
     assert!(state.hits.tabs.len() >= 2);
     let shepherd_rect = state.hits.tabs[0].0;
     let tab1_rect = state.hits.tabs[1].0;
-    assert_eq!(state.hits.tabs[0].1, crate::shepherd::SHEPHERD_VIRTUAL_TAB_ID);
+    assert_eq!(
+        state.hits.tabs[0].1,
+        crate::shepherd::SHEPHERD_VIRTUAL_TAB_ID
+    );
     assert_eq!(state.hits.tabs[1].1, "tab_1");
 
     // Click on Tab 1 -> deactivates Shepherd virtual tab
@@ -487,7 +494,8 @@ fn test_tick_shepherd_auto_refreshes_on_snapshot_and_interval() {
 
     // 2. Immediate subsequent tick within 100ms does NOT re-trigger
     let mut outcome2 = ClientShellInput::default();
-    let refreshed2 = state.tick_shepherd(now + std::time::Duration::from_millis(100), &mut outcome2);
+    let refreshed2 =
+        state.tick_shepherd(now + std::time::Duration::from_millis(100), &mut outcome2);
     assert!(!refreshed2);
 
     // 3. New snapshot arrives (e.g. from server when agents or panes are created)
@@ -496,12 +504,14 @@ fn test_tick_shepherd_auto_refreshes_on_snapshot_and_interval() {
 
     // 4. Tick immediately executes the pending refresh from the snapshot
     let mut outcome3 = ClientShellInput::default();
-    let refreshed3 = state.tick_shepherd(now + std::time::Duration::from_millis(200), &mut outcome3);
+    let refreshed3 =
+        state.tick_shepherd(now + std::time::Duration::from_millis(200), &mut outcome3);
     assert!(refreshed3);
     assert!(!state.pending_shepherd_refresh);
 
     // 5. Periodic tick after 2s fires
     let mut outcome4 = ClientShellInput::default();
-    let refreshed4 = state.tick_shepherd(now + std::time::Duration::from_millis(2500), &mut outcome4);
+    let refreshed4 =
+        state.tick_shepherd(now + std::time::Duration::from_millis(2500), &mut outcome4);
     assert!(refreshed4);
 }

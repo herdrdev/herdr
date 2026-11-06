@@ -490,8 +490,10 @@ mod tests {
         app.state.ensure_test_terminals();
         shutdown_test_runtimes(&mut app);
 
-        let source_cwd =
-            std::env::temp_dir().join(format!("shepherd-ws-explicit-source-{}", std::process::id()));
+        let source_cwd = std::env::temp_dir().join(format!(
+            "shepherd-ws-explicit-source-{}",
+            std::process::id()
+        ));
         std::fs::create_dir_all(&source_cwd).unwrap();
         let pane_id = app.state.workspaces[1].focused_pane_id().unwrap();
         let terminal_id = app.state.workspaces[1]

@@ -2076,8 +2076,10 @@ mod tests {
     #[test]
     fn read_clipboard_image_rejects_wayland_xclip_fallback_text_for_image_target() {
         let _guard = env_lock().lock().unwrap();
-        let temp_dir =
-            std::env::temp_dir().join(format!("shepherd-fake-wayland-xclip-{}", std::process::id()));
+        let temp_dir = std::env::temp_dir().join(format!(
+            "shepherd-fake-wayland-xclip-{}",
+            std::process::id()
+        ));
         std::fs::create_dir_all(&temp_dir).expect("temp dir should be created");
         let fake_wl_paste = temp_dir.join("wl-paste");
         let fake_xclip = temp_dir.join("xclip");

@@ -274,7 +274,8 @@ mod tests {
 
     #[test]
     fn server_without_an_agent_leaves_local_pane_agent_setup_alone() {
-        let directory = std::env::temp_dir().join(format!("shepherd-no-agent-{}", std::process::id()));
+        let directory =
+            std::env::temp_dir().join(format!("shepherd-no-agent-{}", std::process::id()));
         fs::create_dir(&directory).unwrap();
         let stable = directory.join("agent");
         for inherited in [None, Some(PathBuf::new())] {

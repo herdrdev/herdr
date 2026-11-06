@@ -1952,7 +1952,10 @@ position = "top-center"
         let config: Config = toml::from_str(toml).unwrap();
         assert_eq!(config.ui.toast.delivery, ToastDelivery::Terminal);
         assert_eq!(config.ui.toast.delay_seconds, 2);
-        assert_eq!(config.ui.toast.shepherd.position, ToastShepherdPosition::TopLeft);
+        assert_eq!(
+            config.ui.toast.shepherd.position,
+            ToastShepherdPosition::TopLeft
+        );
         assert!(!config.ui.toast.clipboard.enabled);
         assert_eq!(
             config.ui.toast.clipboard.position,

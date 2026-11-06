@@ -1571,7 +1571,8 @@ impl ClientShellState {
             }
             return;
         }
-        if self.is_shepherd_tab_active() && self.route_shepherd_section_mouse(mouse, point, outcome) {
+        if self.is_shepherd_tab_active() && self.route_shepherd_section_mouse(mouse, point, outcome)
+        {
             return;
         }
         if matches!(self.overlay, Some(ClientShellOverlay::Help(_))) {

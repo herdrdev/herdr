@@ -581,40 +581,42 @@ impl ClientShellState {
         self.hits.popup = None;
         if !shepherd_tab_active {
             if let Some(popup) = surface.popup.as_deref() {
-            let width = popup.width.map(client_popup_size);
-            let height = popup.height.map(client_popup_size);
-            if let Some(geometry) =
-                crate::popup_size::resolve_popup_geometry(width, height, layout.pane_surface)
-            {
-                occlusion.start_popup(geometry.outer);
-                let mut composed = frame.to_ratatui_buffer()?;
-                let block = ratatui::widgets::Block::default()
-                    .borders(ratatui::widgets::Borders::ALL)
-                    .border_style(ratatui::style::Style::default().fg(self.config.palette.accent))
-                    .title(popup.title.clone())
-                    .style(ratatui::style::Style::default().bg(self.config.palette.panel_bg));
-                ratatui::widgets::Widget::render(
-                    ratatui::widgets::Clear,
-                    geometry.outer,
-                    &mut composed,
-                );
-                ratatui::widgets::Widget::render(block, geometry.outer, &mut composed);
-                frame.replace_from_ratatui_buffer_preserving_effects(&composed, None);
-                blit_pane_surface(&mut frame, &popup.frame, geometry.inner);
-                self.hits.popup = Some(PaneHit {
-                    rect: geometry.outer,
-                    inner_rect: geometry.inner,
-                    scrollbar_rect: None,
-                    scroll: None,
-                    pane_id: popup.terminal_id.clone(),
-                    popup: true,
-                    mouse_reporting: popup.mouse_reporting,
-                    sgr_pixel_mouse: popup.sgr_pixel_mouse,
-                    pixel_width: popup.pixel_width,
-                    pixel_height: popup.pixel_height,
-                });
+                let width = popup.width.map(client_popup_size);
+                let height = popup.height.map(client_popup_size);
+                if let Some(geometry) =
+                    crate::popup_size::resolve_popup_geometry(width, height, layout.pane_surface)
+                {
+                    occlusion.start_popup(geometry.outer);
+                    let mut composed = frame.to_ratatui_buffer()?;
+                    let block = ratatui::widgets::Block::default()
+                        .borders(ratatui::widgets::Borders::ALL)
+                        .border_style(
+                            ratatui::style::Style::default().fg(self.config.palette.accent),
+                        )
+                        .title(popup.title.clone())
+                        .style(ratatui::style::Style::default().bg(self.config.palette.panel_bg));
+                    ratatui::widgets::Widget::render(
+                        ratatui::widgets::Clear,
+                        geometry.outer,
+                        &mut composed,
+                    );
+                    ratatui::widgets::Widget::render(block, geometry.outer, &mut composed);
+                    frame.replace_from_ratatui_buffer_preserving_effects(&composed, None);
+                    blit_pane_surface(&mut frame, &popup.frame, geometry.inner);
+                    self.hits.popup = Some(PaneHit {
+                        rect: geometry.outer,
+                        inner_rect: geometry.inner,
+                        scrollbar_rect: None,
+                        scroll: None,
+                        pane_id: popup.terminal_id.clone(),
+                        popup: true,
+                        mouse_reporting: popup.mouse_reporting,
+                        sgr_pixel_mouse: popup.sgr_pixel_mouse,
+                        pixel_width: popup.pixel_width,
+                        pixel_height: popup.pixel_height,
+                    });
+                }
             }
-        }
         }
         if !layout.mobile_header.is_empty()
             && self.mode == ClientShellMode::Navigate

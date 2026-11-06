@@ -283,7 +283,11 @@ fn root_and_command_group_help_point_agents_to_plain_text_docs() {
             .env_remove("SHEPHERD_ENV")
             .output()
             .unwrap();
-        assert!(output.status.success(), "shepherd {} failed", args.join(" "));
+        assert!(
+            output.status.success(),
+            "shepherd {} failed",
+            args.join(" ")
+        );
         let stdout = String::from_utf8_lossy(&output.stdout);
         for expected in [
             "Are you an AI? Use these resources ONLY IF your task specifically asks you to:",

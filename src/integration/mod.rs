@@ -17,7 +17,8 @@ pub(crate) use actions::{
 #[cfg(test)]
 pub(crate) use env::integration_env_lock;
 pub(crate) use env::{
-    apply_pane_base_env, SHEPHERD_PANE_ID_ENV_VAR, SHEPHERD_TAB_ID_ENV_VAR, SHEPHERD_WORKSPACE_ID_ENV_VAR,
+    apply_pane_base_env, SHEPHERD_PANE_ID_ENV_VAR, SHEPHERD_TAB_ID_ENV_VAR,
+    SHEPHERD_WORKSPACE_ID_ENV_VAR,
 };
 pub(crate) use registry::{
     experimental_letta_integration_status, installed_integration_statuses,

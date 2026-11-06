@@ -548,7 +548,9 @@ mod tests {
         }
         for invalid in [
             &["shepherd", "agent", "rename", "reviewer"][..],
-            &["shepherd", "agent", "rename", "reviewer", "worker", "--clear"][..],
+            &[
+                "shepherd", "agent", "rename", "reviewer", "worker", "--clear",
+            ][..],
         ] {
             assert!(super::command().try_get_matches_from(invalid).is_err());
         }

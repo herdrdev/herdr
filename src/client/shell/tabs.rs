@@ -22,18 +22,19 @@ pub(crate) fn render_tab_bar(
         .iter()
         .filter(|tab| Some(tab.workspace_id.as_str()) == snapshot.focused_workspace_id.as_deref())
         .collect::<Vec<_>>();
-    let shepherd_tab = (config.shepherd_enabled && snapshot.focused_workspace_id.is_some()).then(|| {
-        ClientShellTab {
-            tab_id: crate::shepherd::SHEPHERD_VIRTUAL_TAB_ID.to_string(),
-            workspace_id: snapshot.focused_workspace_id.clone().unwrap_or_default(),
-            number: 0,
-            label: crate::shepherd::SHEPHERD_TAB_LABEL.to_string(),
-            custom_label: false,
-            zoomed: false,
-            focused: shepherd_tab_active,
-            agent_status: crate::api::schema::AgentStatus::Idle,
-        }
-    });
+    let shepherd_tab =
+        (config.shepherd_enabled && snapshot.focused_workspace_id.is_some()).then(|| {
+            ClientShellTab {
+                tab_id: crate::shepherd::SHEPHERD_VIRTUAL_TAB_ID.to_string(),
+                workspace_id: snapshot.focused_workspace_id.clone().unwrap_or_default(),
+                number: 0,
+                label: crate::shepherd::SHEPHERD_TAB_LABEL.to_string(),
+                custom_label: false,
+                zoomed: false,
+                focused: shepherd_tab_active,
+                agent_status: crate::api::schema::AgentStatus::Idle,
+            }
+        });
     let mut tabs = Vec::with_capacity(real_tabs.len() + 1);
     if let Some(ref stab) = shepherd_tab {
         tabs.push(stab);

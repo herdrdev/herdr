@@ -677,8 +677,10 @@ contains = ["{contains}"]
     fn auto_update_reloads_manifest_cache_after_remote_commit() {
         with_state_dir("auto-update-reloads-cache", || {
             let old_catalog_url = std::env::var_os(CATALOG_URL_ENV);
-            let web_dir = std::env::temp_dir()
-                .join(format!("shepherd-manifest-update-web-{}", std::process::id()));
+            let web_dir = std::env::temp_dir().join(format!(
+                "shepherd-manifest-update-web-{}",
+                std::process::id()
+            ));
             let _ = fs::remove_dir_all(&web_dir);
             fs::create_dir_all(&web_dir).unwrap();
             fs::write(

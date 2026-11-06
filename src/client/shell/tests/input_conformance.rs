@@ -406,7 +406,8 @@ impl ShepherdPath {
         for outcome in outcomes {
             shepherd_owned |= self.absorb(outcome, &mut events);
         }
-        shepherd_owned |= self.state.mode != ClientShellMode::Terminal || self.state.overlay.is_some();
+        shepherd_owned |=
+            self.state.mode != ClientShellMode::Terminal || self.state.overlay.is_some();
         if shepherd_owned {
             return None;
         }
@@ -556,7 +557,8 @@ fn run_keyboard_conformance() -> Report {
                 let page_key_scrolls_shepherd = *mods == 0
                     && matches!(def.name, "pageup" | "pagedown")
                     && shepherd.runtime.plain_page_keys_use_host_scrollback() == Some(true);
-                let (Some(press), Some(release), false) = (press, release, page_key_scrolls_shepherd)
+                let (Some(press), Some(release), false) =
+                    (press, release, page_key_scrolls_shepherd)
                 else {
                     report.owned.push(format!(
                         "{}\t{}\t{}+{}",
@@ -1335,7 +1337,9 @@ fn layout_keystroke_through_shepherd(
     };
     let mut shepherd = ShepherdPath::new(host, pane_mode);
     let pane_press = shepherd.feed(&keystroke.0).expect("press reaches the pane");
-    let pane_release = shepherd.feed(&keystroke.1).expect("release reaches the pane");
+    let pane_release = shepherd
+        .feed(&keystroke.1)
+        .expect("release reaches the pane");
     (
         keystroke,
         show(&direct),
@@ -1584,7 +1588,9 @@ async fn layout_chord_releases_pair_when_modifiers_change_first() {
 
         let mut shepherd = ShepherdPath::new(HostProfile::Kitty, pane_mode);
         let press = shepherd.feed(&host_press).expect("press reaches the pane");
-        let release = shepherd.feed(&host_release).expect("release reaches the pane");
+        let release = shepherd
+            .feed(&host_release)
+            .expect("release reaches the pane");
         assert_eq!(
             show(&[press, release].concat()),
             want,

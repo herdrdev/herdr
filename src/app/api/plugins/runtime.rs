@@ -71,7 +71,10 @@ impl App {
             env.push(("SHEPHERD_PANE_ID".to_string(), pane_id.clone()));
         }
         if let Some(clicked_url) = context.clicked_url.as_ref() {
-            env.push(("SHEPHERD_PLUGIN_CLICKED_URL".to_string(), clicked_url.clone()));
+            env.push((
+                "SHEPHERD_PLUGIN_CLICKED_URL".to_string(),
+                clicked_url.clone(),
+            ));
         }
         if let Some(link_handler_id) = context.link_handler_id.as_ref() {
             env.push((

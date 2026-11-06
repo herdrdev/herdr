@@ -608,9 +608,11 @@ impl App {
         }
         if manifest_check_enabled {
             let manifest_update_tx = event_tx.clone();
-            if let Err(err) = crate::thread_spawn::spawn_named("shepherd-manifest-check", move || {
-                crate::detect::manifest_update::auto_update(manifest_update_tx)
-            }) {
+            if let Err(err) =
+                crate::thread_spawn::spawn_named("shepherd-manifest-check", move || {
+                    crate::detect::manifest_update::auto_update(manifest_update_tx)
+                })
+            {
                 tracing::warn!(err = %err, "failed to spawn agent manifest check thread");
             }
         }
@@ -721,7 +723,10 @@ impl App {
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_nanos())
                 .unwrap_or(0);
-            Some(std::env::temp_dir().join(format!("shepherd-shep-test-{}-{nonce}", std::process::id())))
+            Some(
+                std::env::temp_dir()
+                    .join(format!("shepherd-shep-test-{}-{nonce}", std::process::id())),
+            )
         } else if let Some(ref s) = session {
             Some(crate::session::data_dir_for(Some(s)).join("shepherd"))
         } else {

@@ -813,7 +813,8 @@ fn install_windows_update_with_installer(
 
 #[cfg(windows)]
 fn windows_installed_shepherd_exe_path() -> Result<PathBuf, String> {
-    if let Some(install_dir) = env::var_os("SHEPHERD_INSTALL_DIR").filter(|value| !value.is_empty()) {
+    if let Some(install_dir) = env::var_os("SHEPHERD_INSTALL_DIR").filter(|value| !value.is_empty())
+    {
         return Ok(PathBuf::from(install_dir).join("shepherd.exe"));
     }
 
@@ -1704,7 +1705,11 @@ fn wait_for_server_shutdown_at(socket_path: &Path, timeout: Duration) -> Result<
 
 #[cfg(not(windows))]
 fn stop_running_server_for_update(plan: &RunningServerUpdatePlan) -> Result<(), String> {
-    eprintln!("stopping shepherd {} {}...", plan.target_noun(), plan.label());
+    eprintln!(
+        "stopping shepherd {} {}...",
+        plan.target_noun(),
+        plan.label()
+    );
     stop_server_via_api_at(plan.socket_path(), SERVER_STOP_RESPONSE_TIMEOUT)?;
     wait_for_server_shutdown_at(plan.socket_path(), SERVER_HANDOFF_CONFIRM_TIMEOUT)?;
     Ok(())
@@ -2202,7 +2207,9 @@ fn legacy_self_update(options: SelfUpdateOptions) -> Result<Version, String> {
     }
 
     if running_inside_shepherd() {
-        return Err("run `shepherd update` outside shepherd after detaching from the session".into());
+        return Err(
+            "run `shepherd update` outside shepherd after detaching from the session".into(),
+        );
     }
 
     eprintln!("checking {} channel for updates...", channel.as_str());
@@ -2268,7 +2275,9 @@ fn legacy_self_update(options: SelfUpdateOptions) -> Result<Version, String> {
             && !prompt_to_complete_plain_update(&server_update_decisions, &release)?
         {
             eprintln!("Shepherd was not updated.");
-            eprintln!("Stop running Shepherd sessions when ready, then run `shepherd update` again.");
+            eprintln!(
+                "Stop running Shepherd sessions when ready, then run `shepherd update` again."
+            );
             return Ok(current);
         }
         install_downloaded_update(downloaded_update)?;
@@ -3458,7 +3467,10 @@ mod tests {
     fn explicit_session_update_targets_only_that_session() {
         let _guard = env_lock().lock().unwrap();
         let config_home = set_test_config_home("explicit-session");
-        std::env::set_var(crate::api::SOCKET_PATH_ENV_VAR, "/tmp/ignored-shepherd.sock");
+        std::env::set_var(
+            crate::api::SOCKET_PATH_ENV_VAR,
+            "/tmp/ignored-shepherd.sock",
+        );
         std::env::remove_var(crate::session::SESSION_ENV_VAR);
         crate::session::clear_explicit_session_for_test();
         let args = vec![

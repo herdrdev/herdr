@@ -1249,10 +1249,15 @@ mouse_capture = false
     #[test]
     fn config_load_falls_back_to_herdr_config_when_shepherd_config_absent() {
         let _guard = crate::config::test_config_env_lock().lock().unwrap();
-        let temp_dir = std::env::temp_dir().join(format!("shepherd-test-cfg-fallback-{}", std::process::id()));
+        let temp_dir =
+            std::env::temp_dir().join(format!("shepherd-test-cfg-fallback-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&temp_dir);
         let shepherd_cfg = temp_dir.join(app_dir_name());
-        let herdr_name = if cfg!(debug_assertions) { "herdr-dev" } else { "herdr" };
+        let herdr_name = if cfg!(debug_assertions) {
+            "herdr-dev"
+        } else {
+            "herdr"
+        };
         let herdr_cfg = temp_dir.join(herdr_name);
         std::fs::create_dir_all(&herdr_cfg).unwrap();
 
@@ -1277,7 +1282,10 @@ mouse_capture = false
         .unwrap();
 
         let loaded_primary = Config::load();
-        assert_eq!(loaded_primary.config.terminal.default_shell, "shepherd-shell");
+        assert_eq!(
+            loaded_primary.config.terminal.default_shell,
+            "shepherd-shell"
+        );
 
         // Verify config_path() points to shepherd, not herdr
         assert_eq!(config_path(), shepherd_cfg.join("config.toml"));

@@ -83,7 +83,9 @@ fn caller_target(
     if current.is_some() && current > explicit {
         let caller = caller.map(super::normalize_pane_id);
         if require_current_caller && caller.is_none() {
-            return Err(ParseError::Usage("--current requires SHEPHERD_PANE_ID".into()));
+            return Err(ParseError::Usage(
+                "--current requires SHEPHERD_PANE_ID".into(),
+            ));
         }
         return Ok(caller);
     }

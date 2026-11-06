@@ -413,7 +413,8 @@ impl Leaf {
 
     pub(super) fn request(&self, args: &[String]) -> Result<Request, ParseError> {
         let mut method = projection::parse(
-            self.command().bin_name(format!("shepherd pane {}", self.name)),
+            self.command()
+                .bin_name(format!("shepherd pane {}", self.name)),
             args,
             self.method,
         )?;
@@ -606,7 +607,9 @@ pub(super) const LEAVES: &[Leaf] = &[
             if matches.get_flag("current") {
                 params.pane_id = crate::cli::target::caller_pane_id()
                     .map(|value| crate::cli::normalize_pane_id(&value))
-                    .ok_or_else(|| ParseError::Usage("--current requires SHEPHERD_PANE_ID".into()))?;
+                    .ok_or_else(|| {
+                        ParseError::Usage("--current requires SHEPHERD_PANE_ID".into())
+                    })?;
             }
             Ok(Method::PaneInputSet(params))
         },

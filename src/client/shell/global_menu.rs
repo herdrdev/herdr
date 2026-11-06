@@ -43,10 +43,7 @@ pub(super) fn global_menu_items(
             "shepherd",
             ClientGlobalMenuAction::Binding(crate::input::KeybindAction::Shepherd),
         ));
-        items.push((
-            "launch agent",
-            ClientGlobalMenuAction::ShepherdSpawn,
-        ));
+        items.push(("launch agent", ClientGlobalMenuAction::ShepherdSpawn));
     }
     if snapshot.update_available.is_some() || snapshot.latest_release_notes_available {
         items.push((

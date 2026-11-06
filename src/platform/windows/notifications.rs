@@ -517,7 +517,8 @@ mod tests {
     fn notification_text_remains_literal_xml_and_unicode() {
         let _apartment = ComApartment::new().expect("COM");
         let title = "Agent <done> & 😀";
-        let xml = notification_xml(title, Some("body & <tag>"), "shepherd-test://1/123").expect("XML");
+        let xml =
+            notification_xml(title, Some("body & <tag>"), "shepherd-test://1/123").expect("XML");
         let texts = xml
             .GetElementsByTagName(&HSTRING::from("text"))
             .expect("texts");

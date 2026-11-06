@@ -318,7 +318,8 @@ pub(in crate::remote) mod tests {
         let Ok(mode) = std::env::var("SHEPHERD_PIPE_FIXTURE") else {
             return;
         };
-        let root = std::path::PathBuf::from(std::env::var_os("SHEPHERD_PIPE_FIXTURE_ROOT").unwrap());
+        let root =
+            std::path::PathBuf::from(std::env::var_os("SHEPHERD_PIPE_FIXTURE_ROOT").unwrap());
         let release = root.join("release");
         thread::spawn(move || {
             let deadline = Instant::now() + Duration::from_secs(30);

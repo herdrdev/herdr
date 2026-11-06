@@ -990,7 +990,9 @@ mod tests {
         );
         assert_eq!(
             parse_reported_cwd(b"C:\\Users\\shepherd\\src\\shepherd"),
-            Some(std::path::PathBuf::from("C:\\Users\\shepherd\\src\\shepherd"))
+            Some(std::path::PathBuf::from(
+                "C:\\Users\\shepherd\\src\\shepherd"
+            ))
         );
         assert_eq!(
             parse_reported_cwd(b"\"C:\\my proj\""),

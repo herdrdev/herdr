@@ -117,8 +117,10 @@ fn remote_client_preferences_keep_the_same_identity_across_bridge_processes() {
         Some(r#"["dev", "agents"]"#),
     );
     assert_eq!(first.preferences_path, next.preferences_path);
-    let root =
-        std::env::temp_dir().join(format!("shepherd-remote-preferences-{}", std::process::id()));
+    let root = std::env::temp_dir().join(format!(
+        "shepherd-remote-preferences-{}",
+        std::process::id()
+    ));
     let first_path = root.join(
         first
             .preferences_path

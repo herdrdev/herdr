@@ -929,7 +929,8 @@ mod tests {
 
     #[test]
     fn test_binary_matcher_rejects_other_binaries() {
-        let nested_build = Path::new(env!("CARGO_MANIFEST_DIR")).join("other/target/debug/shepherd");
+        let nested_build =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("other/target/debug/shepherd");
         let sibling_build = Path::new(env!("CARGO_BIN_EXE_shepherd"))
             .parent()
             .unwrap()

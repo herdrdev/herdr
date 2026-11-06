@@ -55,7 +55,8 @@ mod tests {
 
     #[test]
     fn verifies_matching_sha256() {
-        let path = std::env::temp_dir().join(format!("shepherd-checksum-test-{}", std::process::id()));
+        let path =
+            std::env::temp_dir().join(format!("shepherd-checksum-test-{}", std::process::id()));
         fs::write(&path, b"shepherd").unwrap();
         let result = super::verify_sha256(
             &path,

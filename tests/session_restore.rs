@@ -62,7 +62,10 @@ fn server_restores_while_git_metadata_is_blocked() {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let base = PathBuf::from(format!("/tmp/shepherd-restore-{}-{nonce}", std::process::id()));
+        let base = PathBuf::from(format!(
+            "/tmp/shepherd-restore-{}-{nonce}",
+            std::process::id()
+        ));
         fs::create_dir_all(&base).unwrap();
         let base = fs::canonicalize(base).unwrap();
         let config_home = base.join("config");

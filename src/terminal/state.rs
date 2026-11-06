@@ -1398,7 +1398,11 @@ impl TerminalState {
                 "codex",
                 Some("startup" | "clear" | "resume" | "compact")
             ) | ("shepherd:mastracode", "mastracode", Some("startup"))
-                | ("shepherd:hermes", "hermes", Some("startup" | "new" | "resume"))
+                | (
+                    "shepherd:hermes",
+                    "hermes",
+                    Some("startup" | "new" | "resume")
+                )
                 | ("shepherd:opencode", "opencode", Some("select"))
                 | ("shepherd:pi", "pi", Some("new" | "resume" | "fork"))
                 | ("shepherd:grok", "grok", Some("new"))

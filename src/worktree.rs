@@ -614,7 +614,12 @@ mod tests {
         );
         assert_eq!(
             repository_git_args(Path::new("/repo/shepherd"), true),
-            ["-c", "safe.directory=/repo/shepherd", "-C", "/repo/shepherd",]
+            [
+                "-c",
+                "safe.directory=/repo/shepherd",
+                "-C",
+                "/repo/shepherd",
+            ]
         );
     }
 

@@ -1270,7 +1270,11 @@ mod tests {
         let buf = build_procargs2(
             "/opt/homebrew/bin/nono",
             &["nono", "run", "SHEPHERD_AGENT=codex", "--", "claude"],
-            &["PATH=/usr/bin", "SHEPHERD_AGENT=claude", "TERM=xterm-256color"],
+            &[
+                "PATH=/usr/bin",
+                "SHEPHERD_AGENT=claude",
+                "TERM=xterm-256color",
+            ],
         );
 
         let env = procargs2_env(&buf).expect("expected env block");
