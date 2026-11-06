@@ -187,6 +187,11 @@ const EMBEDDED_SKILLS: &[EmbeddedSkill] = &[
         extra_files: &[],
     },
     EmbeddedSkill {
+        name: "shepherd-control",
+        skill_md: include_str!("../assets/skills/shepherd-control/SKILL.md"),
+        extra_files: &[],
+    },
+    EmbeddedSkill {
         name: "shepherd-events",
         skill_md: include_str!("../assets/skills/shepherd-events/SKILL.md"),
         extra_files: &[],

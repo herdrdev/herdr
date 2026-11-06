@@ -179,9 +179,9 @@ impl OrchestrationService {
         let session_dir = self.service_config.agent_session_dir(&agent.id);
         let catalog = skills::Catalog::load(Some(&root_path), Some(&skills::user_skills_dir()));
         let (_, langs) = skills::detect_checks(&root_path);
-        // Every agent learns how to talk to the others; pattern agents also learn the topic tools.
+        // Every agent learns how to talk to the others and to drive Shepherd's terminals; pattern agents also learn the topic tools.
         let mut skill_adjust = req.skills.clone();
-        let mut baseline = vec!["shepherd-comms"];
+        let mut baseline = vec!["shepherd-comms", "shepherd-control"];
         if req.pattern_prompt.is_some() {
             baseline.push("shepherd-events");
         }

@@ -2269,6 +2269,7 @@ fn role_worktree_default_is_skipped_outside_git_and_every_agent_gets_comms() {
         .expect("a plain folder must not fail with not_git_worktree");
     assert!(agent.worktree.is_empty(), "no worktree outside git");
     assert!(agent.active_skills.iter().any(|s| s == "shepherd-comms"));
+    assert!(agent.active_skills.iter().any(|s| s == "shepherd-control"));
     assert!(agent.active_skills.iter().any(|s| s == "shepherd-events"));
 }
 

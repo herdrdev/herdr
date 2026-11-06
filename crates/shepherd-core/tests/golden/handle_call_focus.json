@@ -3,7 +3,8 @@
     "shepherd-comms",
     "implement-task",
     "write-tests",
-    "conventional-commits"
+    "conventional-commits",
+    "shepherd-control"
   ],
   "branch": "shep/1-focus-test-task",
   "delivery_cursor": 0,
