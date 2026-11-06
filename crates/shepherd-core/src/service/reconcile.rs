@@ -125,6 +125,24 @@ impl OrchestrationService {
                         continue;
                     }
                     Err(err) if is_missing_terminal_error(&err) => {
+                        // One failed lookup is not proof the terminal is gone: try the agent's name
+                        // too, and only give up after two ticks in a row.
+                        if let Ok(st) = self.terminals.agent_status(&agent.id) {
+                            if st.state != "finished" {
+                                self.missing_strikes.lock().unwrap().remove(&agent.id);
+                                continue;
+                            }
+                        }
+                        let strikes = {
+                            let mut m = self.missing_strikes.lock().unwrap();
+                            let n = m.entry(agent.id.clone()).or_insert(0);
+                            *n += 1;
+                            *n
+                        };
+                        if strikes < 2 {
+                            continue;
+                        }
+                        self.missing_strikes.lock().unwrap().remove(&agent.id);
                         agent.state = "exited".into();
                         agent.notice.clear();
                         agent.updated = now_str.clone();
@@ -135,6 +153,7 @@ impl OrchestrationService {
                     }
                     Err(err) => return Err(err.to_string()),
                 };
+                self.missing_strikes.lock().unwrap().remove(&agent.id);
 
                 match status.status.as_str() {
                     "working" => {

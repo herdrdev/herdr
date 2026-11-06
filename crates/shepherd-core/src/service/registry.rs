@@ -116,6 +116,10 @@ impl OrchestrationService {
                             .map_err(|e| format!("failed to remove session dir for {id}: {e}"))?;
                     }
                     registry.remove(&id);
+                    self.removed_agents
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .insert(id.clone());
                     cleaned.push(id);
                 }
             }

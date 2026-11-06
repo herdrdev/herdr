@@ -450,6 +450,12 @@ fn req3_periodic_reconciliation_blocked_once_and_non_mcp_quiet_screen_done() {
     // 4. Missing pane -> transitions to "exited"
     terminals.remove_status(&mcp_agent.id);
     let reg = service.reconcile_once().unwrap();
+    assert_ne!(
+        reg.result(&mcp_agent.id).unwrap().state,
+        "exited",
+        "one failed lookup is not proof the terminal is gone"
+    );
+    let reg = service.reconcile_once().unwrap();
     assert_eq!(reg.result(&mcp_agent.id).unwrap().state, "exited");
 }
 
@@ -2372,4 +2378,54 @@ fn pattern_and_spawner_agents_learn_the_shepherd_cli() {
             .any(|s| s == "shepherd-orchestrate"),
         "a plain non-spawner does not need it"
     );
+}
+
+#[test]
+fn a_stale_snapshot_does_not_drop_agents_spawned_meanwhile() {
+    let tmp = TestDir::new("test");
+    let (service, _terminals, _clock) = test_service(tmp.path());
+    let first = service
+        .spawn(ServiceSpawnRequest {
+            root: tmp.path().to_path_buf(),
+            role: "docs".into(),
+            task: "t".into(),
+            ..ServiceSpawnRequest::default()
+        })
+        .unwrap();
+    // a slow thread (reconcile, first-prompt delivery) loads the registry...
+    let stale = service.load_registry().unwrap();
+    // ...meanwhile the pattern spawns another agent...
+    let second = service
+        .spawn(ServiceSpawnRequest {
+            root: tmp.path().to_path_buf(),
+            role: "tester".into(),
+            task: "t".into(),
+            ..ServiceSpawnRequest::default()
+        })
+        .unwrap();
+    // ...and then the slow thread saves its old copy.
+    service.save_registry(&stale).unwrap();
+    let after = service.load_registry().unwrap();
+    assert!(after.result(&first.id).is_some());
+    assert!(
+        after.result(&second.id).is_some(),
+        "the newer agent must survive a stale save"
+    );
+}
+
+#[test]
+fn cleaned_agents_stay_removed() {
+    let tmp = TestDir::new("test");
+    let (service, _terminals, _clock) = test_service(tmp.path());
+    let a = service
+        .spawn(ServiceSpawnRequest {
+            root: tmp.path().to_path_buf(),
+            role: "docs".into(),
+            task: "t".into(),
+            ..ServiceSpawnRequest::default()
+        })
+        .unwrap();
+    service.kill(&a.id).unwrap();
+    service.clean(&[a.id.clone()], None).unwrap();
+    assert!(service.load_registry().unwrap().result(&a.id).is_none());
 }

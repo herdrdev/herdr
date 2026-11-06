@@ -294,6 +294,10 @@ impl OrchestrationService {
             Err(err) => {
                 // Keep monotonic counters (`seq` and `next`) intact even when spawn fails!
                 registry.remove(&agent.id);
+                self.removed_agents
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .insert(agent.id.clone());
                 let _ = self.save_registry(&registry);
                 return Err(err);
             }

@@ -292,6 +292,12 @@ pub struct OrchestrationService {
     pub(crate) active_vendors_override: Option<Vec<String>>,
     pub(crate) mcp_url: Arc<Mutex<Option<String>>>,
     pub(crate) blocked_announced: Arc<Mutex<HashSet<String>>>,
+    /// Serializes registry writes: the spawn thread, delivery threads and the reconcile loop all save it.
+    pub(crate) registry_io: Arc<Mutex<()>>,
+    /// Agents removed on purpose, so a merge with the file on disk does not bring them back.
+    pub(crate) removed_agents: Arc<Mutex<HashSet<String>>>,
+    /// Consecutive reconcile ticks in which an agent's terminal could not be found.
+    pub(crate) missing_strikes: Arc<Mutex<HashMap<String, u32>>>,
     /// Highest unread message id an idle MCP agent was already told about.
     pub(crate) nudged: Arc<Mutex<HashMap<String, i64>>>,
     pub(crate) quiet_screens: Arc<Mutex<HashMap<String, ScreenQuietTracker>>>,
@@ -331,6 +337,9 @@ impl OrchestrationService {
             active_vendors_override: None,
             mcp_url: Arc::new(Mutex::new(None)),
             blocked_announced: Arc::new(Mutex::new(HashSet::new())),
+            registry_io: Arc::new(Mutex::new(())),
+            removed_agents: Arc::new(Mutex::new(HashSet::new())),
+            missing_strikes: Arc::new(Mutex::new(HashMap::new())),
             nudged: Arc::new(Mutex::new(HashMap::new())),
             quiet_screens: Arc::new(Mutex::new(HashMap::new())),
             failed_requests: Arc::new(Mutex::new(Vec::new())),
@@ -369,9 +378,37 @@ impl OrchestrationService {
         load_agent_registry(self.service_config.registry_path()).map_err(|e| e.to_string())
     }
 
+    /// Saves the registry without losing what other threads wrote since `registry` was loaded: agents
+    /// that are only on disk are kept, and the caller's copy wins for the rest. Several
+    /// threads (spawning a pattern's agents, first-prompt delivery, the reconcile loop) read, change
+    /// and save the whole file, and a stale snapshot used to drop freshly spawned agents.
     pub fn save_registry(&self, registry: &AgentRegistryFile) -> Result<(), String> {
-        save_agent_registry(self.service_config.registry_path(), registry)
-            .map_err(|e| e.to_string())
+        let _io = self.registry_io.lock().unwrap_or_else(|e| e.into_inner());
+        let path = self.service_config.registry_path();
+        let removed: HashSet<String> = std::mem::take(
+            &mut *self
+                .removed_agents
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()),
+        );
+        let mut merged = registry.clone();
+        merged.agents.retain(|a| !removed.contains(&a.id));
+        if let Ok(disk) = load_agent_registry(path.clone()) {
+            for theirs in disk.agents {
+                if removed.contains(&theirs.id) {
+                    continue;
+                }
+                if !merged.agents.iter().any(|a| a.id == theirs.id) {
+                    merged.agents.push(theirs);
+                }
+            }
+            merged.seq = merged.seq.max(disk.seq);
+            for (role, n) in disk.next {
+                let e = merged.next.entry(role).or_insert(0);
+                *e = (*e).max(n);
+            }
+        }
+        save_agent_registry(path, &merged).map_err(|e| e.to_string())
     }
 
     pub fn failed_requests(&self) -> Vec<FailedRequestLogEntry> {
