@@ -231,6 +231,29 @@ impl OrchestrationService {
         worktree: Option<&str>,
         confirm_over_limit: bool,
     ) -> Result<PatternRun, String> {
+        self.start_pattern_run_in(
+            root,
+            pattern_name,
+            pattern_obj,
+            task,
+            worktree,
+            confirm_over_limit,
+            None,
+        )
+    }
+
+    /// Like `start_pattern_run`, with every agent placed in `workspace` (the one the run was launched from).
+    #[allow(clippy::too_many_arguments)] // mirrors start_pattern_run plus the workspace
+    pub fn start_pattern_run_in(
+        &self,
+        root: &Path,
+        pattern_name: Option<&str>,
+        pattern_obj: Option<crate::patterns::Pattern>,
+        task: Option<&str>,
+        worktree: Option<&str>,
+        confirm_over_limit: bool,
+        workspace: Option<&str>,
+    ) -> Result<PatternRun, String> {
         let pattern = if let Some(pat) = pattern_obj {
             pat
         } else if let Some(name) = pattern_name {
@@ -337,6 +360,7 @@ impl OrchestrationService {
                     mcp_url: self.mcp_url(),
                     confirm_over_limit,
                     deliver_prompt: true,
+                    workspace: workspace.map(str::to_owned),
                 };
 
                 let spawned = match self.spawn(spawn_req) {

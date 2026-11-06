@@ -753,14 +753,23 @@ impl ClientShellState {
                 task,
                 worktree,
             } => {
+                // Through `shepherd.call` so the endpoint contract of `shepherd.pattern.run.start` stays
+                // frozen: the agents join the workspace the user is looking at.
+                let workspace_id = self
+                    .snapshot
+                    .as_deref()
+                    .and_then(|s| s.focused_workspace_id.clone());
                 self.push_endpoint_method_with_kind(
-                    crate::api::schema::Method::ShepherdPatternRunStart(
-                        crate::api::schema::ShepherdPatternRunStartParams {
-                            root: None,
-                            pattern,
-                            task,
-                            worktree,
-                            confirm_over_limit: false,
+                    crate::api::schema::Method::ShepherdCall(
+                        crate::api::schema::ShepherdCallParams {
+                            op: "pattern_run_start".to_string(),
+                            args: serde_json::json!({
+                                "pattern": pattern,
+                                "task": task,
+                                "worktree": worktree,
+                                "confirm_over_limit": false,
+                                "workspace_id": workspace_id,
+                            }),
                         },
                     ),
                     PendingEndpointKind::ShepherdCall {

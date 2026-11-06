@@ -242,6 +242,13 @@ pub struct ServiceSpawnRequest {
     /// the role's workflow script and the `## Your task` section of the first prompt.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pattern_prompt: Option<String>,
+    /// Workspace the agent must join (the one the user launched it from). Wins over the parent's.
+    #[serde(
+        default,
+        alias = "workspace_id",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub workspace: Option<String>,
 }
 
 impl Default for ServiceSpawnRequest {
@@ -260,6 +267,7 @@ impl Default for ServiceSpawnRequest {
             confirm_over_limit: false,
             deliver_prompt: true,
             pattern_prompt: None,
+            workspace: None,
         }
     }
 }
@@ -1001,13 +1009,15 @@ impl OrchestrationService {
                     .get("confirm_over_limit")
                     .and_then(Value::as_bool)
                     .unwrap_or(false);
-                let run = self.start_pattern_run(
+                let workspace = args.get("workspace_id").and_then(Value::as_str);
+                let run = self.start_pattern_run_in(
                     &root,
                     pattern_name,
                     pattern_obj,
                     task,
                     worktree,
                     confirm,
+                    workspace,
                 )?;
                 serde_json::to_value(run).map_err(|e| e.to_string())
             }

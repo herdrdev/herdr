@@ -251,21 +251,23 @@ impl OrchestrationService {
 
         // Agents join the workspace of whoever started them, else of the live agents of the same
         // task or pattern run, so a task or run never scatters across workspaces.
-        let home_workspace = registry
-            .agents
-            .iter()
-            .filter(|a| a.id != agent.id && !a.gone() && !a.workspace.is_empty())
-            .find(|a| !agent.parent_id.is_empty() && a.id == agent.parent_id)
-            .or_else(|| {
-                registry.agents.iter().find(|a| {
-                    a.id != agent.id
-                        && !a.gone()
-                        && !a.workspace.is_empty()
-                        && !task_id.is_empty()
-                        && a.task_id == task_id
+        let home_workspace = req.workspace.clone().filter(|w| !w.is_empty()).or_else(|| {
+            registry
+                .agents
+                .iter()
+                .filter(|a| a.id != agent.id && !a.gone() && !a.workspace.is_empty())
+                .find(|a| !agent.parent_id.is_empty() && a.id == agent.parent_id)
+                .or_else(|| {
+                    registry.agents.iter().find(|a| {
+                        a.id != agent.id
+                            && !a.gone()
+                            && !a.workspace.is_empty()
+                            && !task_id.is_empty()
+                            && a.task_id == task_id
+                    })
                 })
-            })
-            .map(|a| a.workspace.clone());
+                .map(|a| a.workspace.clone())
+        });
 
         let open_req = OpenAgentRequest {
             root: root_path.clone(),

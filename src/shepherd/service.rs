@@ -65,6 +65,7 @@ fn spawn_params_to_request(
         confirm_over_limit: params.confirm_over_limit,
         deliver_prompt: params.deliver_prompt,
         pattern_prompt: None,
+        workspace: None,
     }
 }
 

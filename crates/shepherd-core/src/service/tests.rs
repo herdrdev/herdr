@@ -2271,3 +2271,48 @@ fn role_worktree_default_is_skipped_outside_git_and_every_agent_gets_comms() {
     assert!(agent.active_skills.iter().any(|s| s == "shepherd-comms"));
     assert!(agent.active_skills.iter().any(|s| s == "shepherd-events"));
 }
+
+#[test]
+fn explicit_workspace_wins_for_agents_and_whole_pattern_runs() {
+    let tmp = TestDir::new("test");
+    let (service, _terminals, _clock) = test_service(tmp.path());
+    let brain = service
+        .spawn(ServiceSpawnRequest {
+            root: tmp.path().to_path_buf(),
+            role: "brain".into(),
+            task: "t".into(),
+            ..ServiceSpawnRequest::default()
+        })
+        .unwrap();
+    let chosen = service
+        .spawn(ServiceSpawnRequest {
+            root: tmp.path().to_path_buf(),
+            role: "coder".into(),
+            task: "t".into(),
+            parent_id: Some(brain.id.clone()),
+            workspace: Some("w-selected".into()),
+            ..ServiceSpawnRequest::default()
+        })
+        .unwrap();
+    assert_eq!(
+        chosen.workspace, "w-selected",
+        "the selected workspace beats the parent's"
+    );
+
+    let run = service
+        .start_pattern_run_in(
+            tmp.path(),
+            Some("orchestrator-worker"),
+            None,
+            Some("x"),
+            None,
+            true,
+            Some("w-selected"),
+        )
+        .unwrap();
+    let registry = service.load_registry().unwrap();
+    for slot in &run.agents {
+        assert_eq!(registry.result(&slot.id).unwrap().workspace, "w-selected");
+    }
+    assert!(!run.agents.is_empty());
+}
