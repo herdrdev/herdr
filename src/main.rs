@@ -450,6 +450,8 @@ pane_history = false
 
 // Bundled at build time so the printed skill always matches this binary's release.
 const SKILL: &str = include_str!("../skills/herdr/SKILL.md");
+const SHEPHERD_SKILL: &str =
+    include_str!("../crates/shepherd-core/assets/skills/shepherd-orchestrate/SKILL.md");
 
 fn should_block_nested(config: &config::Config) -> bool {
     should_block_nested_for_env(config, std::env::var(SHEPHERD_ENV_VAR).ok().as_deref())
@@ -548,7 +550,7 @@ fn main() -> io::Result<()> {
         && !args.iter().any(|a| {
             matches!(
                 a.as_str(),
-                "--help" | "-h" | "--version" | "-V" | "--default-config" | "--skill"
+                "--help" | "-h" | "--version" | "-V" | "--default-config" | "--skill" | "--shepherd-skill"
             )
         })
     {
@@ -712,6 +714,7 @@ fn main() -> io::Result<()> {
         println!("  --handoff           Opt into live handoff for update or remote attach");
         println!("  --default-config    Print default configuration and exit");
         println!("  --skill             Print the agent skill file and exit");
+        println!("  --shepherd-skill    Print the Shepherd orchestration skill and exit");
         println!("  --version, -V       Print version and exit");
         println!("  --help, -h          Show this help");
         println!();
@@ -736,6 +739,12 @@ fn main() -> io::Result<()> {
         return Ok(());
     }
 
+    if args.iter().any(|a| a == "--shepherd-skill") {
+        platform::begin_cli_output();
+        print!("{SHEPHERD_SKILL}");
+        return Ok(());
+    }
+
     if args.iter().any(|a| a == "--skill") {
         platform::begin_cli_output();
         print!("{SKILL}");
@@ -752,6 +761,7 @@ fn main() -> io::Result<()> {
         "-V",
         "--default-config",
         "--skill",
+        "--shepherd-skill",
         "--help",
         "-h",
     ];

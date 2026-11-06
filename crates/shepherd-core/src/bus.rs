@@ -349,6 +349,15 @@ impl MessageBus {
         Ok(pending)
     }
 
+    /// Unread directed messages for `recipient`, without marking them read.
+    pub fn peek_pending(
+        &self,
+        recipient: &str,
+    ) -> Result<Vec<Message>, Box<dyn std::error::Error + Send + Sync>> {
+        let state = self.state.lock().map_err(|_| "message bus lock poisoned")?;
+        Ok(state.pending.get(recipient).cloned().unwrap_or_default())
+    }
+
     /// Read messages since a given global ID.
     pub fn since(
         &self,

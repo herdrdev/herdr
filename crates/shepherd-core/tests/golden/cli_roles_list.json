@@ -9,6 +9,7 @@
     "role": "brain",
     "skills": [
       "shepherd-comms",
+      "shepherd-orchestrate",
       "plan-tasks",
       "pr-workflow",
       "docs-lookup"

@@ -106,11 +106,11 @@ pub fn maybe_run(args: &[String]) -> std::io::Result<CommandOutcome> {
         return shepherd::run_shepherd_command(&args[1..]).map(CommandOutcome::Handled);
     }
 
-    // `config path|validate` inspect Shepherd's own config; the other subcommands keep the inherited behavior.
+    // `config path|validate|enable` inspect Shepherd's own config; the other subcommands keep the inherited behavior.
     if command == "config"
         && matches!(
             args.get(2).map(String::as_str),
-            Some("path") | Some("validate")
+            Some("path") | Some("validate") | Some("enable")
         )
     {
         return shepherd::run_shepherd_command(&args[1..]).map(CommandOutcome::Handled);
@@ -423,7 +423,9 @@ fn config_reset_keys(args: &[String]) -> std::io::Result<i32> {
         path.display()
     );
     println!("Built-in v2 keybindings will apply after Shepherd restarts or reloads config.");
-    println!("If a Shepherd server is running, run `shepherd server reload-config` to apply this now.");
+    println!(
+        "If a Shepherd server is running, run `shepherd server reload-config` to apply this now."
+    );
     println!(
         "To restore: cp {} {}",
         backup_path.display(),

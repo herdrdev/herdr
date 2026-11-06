@@ -239,6 +239,7 @@ pub(crate) enum LocalCommand {
     },
     ConfigPath,
     ConfigValidate,
+    ConfigEnable,
     RolesList,
     VendorsList,
     TaskShow {
@@ -274,7 +275,7 @@ pub(crate) enum ShepherdOperation {
 }
 
 pub(crate) const USAGE_STRING: &str =
-    "usage: shepherd attach [shepherd-agent-name-or-pane-id] [--takeover] | shepherd mcp serve [port] | shepherd run <task-id> [--mcp-url <url>] [--auto-push] [--wait] [--json] | shepherd approve <task-id> plan|<subtask-number> [--json] | shepherd reject <task-id> plan|<subtask-number> [--reason <text>] [--json] | shepherd spawn <role> <task...> [--task-id <id>] [--vendor <name>] [--model <name>] [--mcp-url <url>] [--json] | shepherd agents [--json] | shepherd skills list [--json] | shepherd runs list [--json] | shepherd roles list [--json] | shepherd vendors list [--json] | shepherd config path|validate [--json] | shepherd task new <title> [--description <text>] [--criteria <text>]... [--id <number>] [--json] | task list [--archived] [--json] | task show <id-or-name> [section] [--json] | task plan <id-or-name> [--save] [--json] | task edit <id-or-name> [section] | task path <id-or-name> [--json] | task archive <id-or-name> [--json] | shepherd pattern list [--json] | pattern show <name> [--json] | pattern new <name> --from <template|name> [--global] [--json] | pattern validate <name|--file path> [--json] | pattern delete <name> [--json] | pattern edit <name> | pattern run <name> [--task <task>] [--worktree <path>] [--confirm-over-limit] [--json] | pattern runs [--json] | pattern pause <id> [--json] | pattern resume <id> [--json] | pattern stop <id> [--confirm] [--json] | shepherd topic list [--json] | topic create <name> [--partitions <n>] [--json] | topic publish <topic> <content> [--key <key>] [--partition <p>] [--from <from>] [--json] | topic tail <topic> [--partition <p>] [--limit <n>] [--json] | topic replay <topic> [--partition <p>] [--from <offset>] [--limit <n>] [--json] | topic groups [topic] [--json]";
+    "usage: shepherd attach [shepherd-agent-name-or-pane-id] [--takeover] | shepherd mcp serve [port] | shepherd run <task-id> [--mcp-url <url>] [--auto-push] [--wait] [--json] | shepherd approve <task-id> plan|<subtask-number> [--json] | shepherd reject <task-id> plan|<subtask-number> [--reason <text>] [--json] | shepherd spawn <role> <task...> [--task-id <id>] [--vendor <name>] [--model <name>] [--mcp-url <url>] [--json] | shepherd agents [--json] | shepherd skills list [--json] | shepherd runs list [--json] | shepherd roles list [--json] | shepherd vendors list [--json] | shepherd config path|validate|enable [--json] | shepherd task new <title> [--description <text>] [--criteria <text>]... [--id <number>] [--json] | task list [--archived] [--json] | task show <id-or-name> [section] [--json] | task plan <id-or-name> [--save] [--json] | task edit <id-or-name> [section] | task path <id-or-name> [--json] | task archive <id-or-name> [--json] | shepherd pattern list [--json] | pattern show <name> [--json] | pattern new <name> --from <template|name> [--global] [--json] | pattern validate <name|--file path> [--json] | pattern delete <name> [--json] | pattern edit <name> | pattern run <name> [--task <task>] [--worktree <path>] [--confirm-over-limit] [--json] | pattern runs [--json] | pattern pause <id> [--json] | pattern resume <id> [--json] | pattern stop <id> [--confirm] [--json] | shepherd topic list [--json] | topic create <name> [--partitions <n>] [--json] | topic publish <topic> <content> [--key <key>] [--partition <p>] [--from <from>] [--json] | topic tail <topic> [--partition <p>] [--limit <n>] [--json] | topic replay <topic> [--partition <p>] [--from <offset>] [--limit <n>] [--json] | topic groups [topic] [--json]";
 
 // =========================================================================
 // Command Definitions
@@ -1236,6 +1237,14 @@ pub(crate) fn parse_operation(args: &[String]) -> Result<ShepherdOperation, Pars
                     )?;
                     let _ = LocalEmptyProjection::from_matches(&matches)?;
                     Ok(ShepherdOperation::Local(LocalCommand::ConfigValidate))
+                }
+                "enable" => {
+                    let matches = parse_matches(
+                        Command::new("enable").args(LocalEmptyProjection::arguments()),
+                        sub_args,
+                    )?;
+                    let _ = LocalEmptyProjection::from_matches(&matches)?;
+                    Ok(ShepherdOperation::Local(LocalCommand::ConfigEnable))
                 }
                 _ => Err(ParseError::Usage(USAGE_STRING.to_string())),
             }

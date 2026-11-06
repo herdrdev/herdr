@@ -12,4 +12,5 @@ pr-workflow	default	Use when taking work from branch to pull request - branch na
 security-review	default	Use when reviewing a change for security - secrets, injection, input validation, authentication and authorization, unsafe file or process handling, and dependencies.
 shepherd-comms	default	Use when you are an agent running under shepherd and need to spawn sub-agents, message other agents, wait for results, or deliver your own result. Explains the shepherd MCP tools and the fallback for agents without MCP.
 shepherd-events	default	Use when collaborating via event topics, partitioned message streams, consumer groups, offsets, acknowledgments, and replays in Shepherd multi-agent patterns.
+shepherd-orchestrate	default	Use when you are asked to plan, delegate or run work with Shepherd (tasks, patterns, coder/reviewer agents), to check that Shepherd is enabled, or to unblock an agent that never received its task. Explains the CLI, the safe order of steps and how to recover.
 write-tests	default	Use when writing or fixing tests - table-driven cases, edge cases, and avoiding mocks that do not earn their keep.

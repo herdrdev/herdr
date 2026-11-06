@@ -257,7 +257,9 @@ impl Default for Config {
                 vendor: "claude".into(),
                 model: "opus".into(),
                 can_spawn: true,
-                skills: words("shepherd-comms plan-tasks pr-workflow docs-lookup"),
+                skills: words(
+                    "shepherd-comms shepherd-orchestrate plan-tasks pr-workflow docs-lookup",
+                ),
                 ..Role::default()
             },
         );

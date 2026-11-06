@@ -357,6 +357,50 @@ impl OrchestrationService {
         Ok(())
     }
 
+    /// An idle MCP agent only reads the bus when it calls `read_messages`, which an idle agent never
+    /// does. Type one short line telling it to look, once per new message.
+    pub(crate) fn nudge_idle_mcp_agents(&self, registry: &AgentRegistryFile) {
+        let Ok(bus) = self.bus() else { return };
+        for agent in &registry.agents {
+            if !agent.mcp || agent.gone() || agent.state != "idle" {
+                continue;
+            }
+            let Ok(pending) = bus.peek_pending(&agent.id) else {
+                continue;
+            };
+            let Some(newest) = pending.iter().map(|m| m.id).max() else {
+                continue;
+            };
+            if self
+                .nudged
+                .lock()
+                .unwrap()
+                .get(&agent.id)
+                .is_some_and(|&seen| seen >= newest)
+            {
+                continue;
+            }
+            if !self.is_pane_free_for_delivery(agent) {
+                continue;
+            }
+            let target = if agent.pane.is_empty() {
+                &agent.id
+            } else {
+                &agent.pane
+            };
+            let line = format!(
+                "[shep] You have {} unread message(s). Call read_messages() now and act on them.",
+                pending.len()
+            );
+            if matches!(
+                self.terminals.prompt(target, &line, None),
+                Ok(PromptOutcome::Delivered)
+            ) {
+                self.nudged.lock().unwrap().insert(agent.id.clone(), newest);
+            }
+        }
+    }
+
     pub(crate) fn deliver_pending_non_mcp_messages(&self, registry: &mut AgentRegistryFile) {
         let bus = match self.bus() {
             Ok(b) => b,

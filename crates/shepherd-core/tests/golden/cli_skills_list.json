@@ -91,6 +91,13 @@
     "scope": "default"
   },
   {
+    "description": "Use when you are asked to plan, delegate or run work with Shepherd (tasks, patterns, coder/reviewer agents), to check that Shepherd is enabled, or to unblock an agent that never received its task. Explains the CLI, the safe order of steps and how to recover.",
+    "dir": "embedded:shepherd-orchestrate",
+    "global": false,
+    "name": "shepherd-orchestrate",
+    "scope": "default"
+  },
+  {
     "description": "Use when writing or fixing tests - table-driven cases, edge cases, and avoiding mocks that do not earn their keep.",
     "dir": "embedded:write-tests",
     "global": false,

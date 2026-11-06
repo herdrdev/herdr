@@ -169,10 +169,19 @@ impl OrchestrationService {
                                 "system",
                                 "brain",
                                 KIND_SYSTEM,
-                                format!(
-                                    "agent {} ({}) is blocked waiting for human attention in pane {}",
-                                    agent.id, agent.role, agent.pane
-                                ),
+                                {
+                                    let tail = self
+                                        .terminals
+                                        .read_screen(&agent.pane, 40)
+                                        .unwrap_or_default();
+                                    let lines: Vec<&str> =
+                                        tail.lines().filter(|l| !l.trim().is_empty()).collect();
+                                    let shown = lines[lines.len().saturating_sub(8)..].join("\n");
+                                    format!(
+                                        "agent {} ({}) is blocked waiting for human attention in pane {}. The pane shows:\n{}",
+                                        agent.id, agent.role, agent.pane, shown
+                                    )
+                                },
                             ));
                         }
                     }
@@ -244,6 +253,7 @@ impl OrchestrationService {
 
             self.auto_snapshot_tick(&registry);
             self.deliver_pending_non_mcp_messages(&mut registry);
+            self.nudge_idle_mcp_agents(&registry);
             self.wake_dormant_topic_subscribers(&mut registry, None);
             let _ = self.reconcile_pattern_runs(&registry, None);
 

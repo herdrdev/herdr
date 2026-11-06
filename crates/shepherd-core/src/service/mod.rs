@@ -284,6 +284,8 @@ pub struct OrchestrationService {
     pub(crate) active_vendors_override: Option<Vec<String>>,
     pub(crate) mcp_url: Arc<Mutex<Option<String>>>,
     pub(crate) blocked_announced: Arc<Mutex<HashSet<String>>>,
+    /// Highest unread message id an idle MCP agent was already told about.
+    pub(crate) nudged: Arc<Mutex<HashMap<String, i64>>>,
     pub(crate) quiet_screens: Arc<Mutex<HashMap<String, ScreenQuietTracker>>>,
     pub(crate) failed_requests: Arc<Mutex<Vec<FailedRequestLogEntry>>>,
     pub(crate) topic_wake_notified: Arc<Mutex<HashMap<(String, String), (u64, u64)>>>,
@@ -321,6 +323,7 @@ impl OrchestrationService {
             active_vendors_override: None,
             mcp_url: Arc::new(Mutex::new(None)),
             blocked_announced: Arc::new(Mutex::new(HashSet::new())),
+            nudged: Arc::new(Mutex::new(HashMap::new())),
             quiet_screens: Arc::new(Mutex::new(HashMap::new())),
             failed_requests: Arc::new(Mutex::new(Vec::new())),
             topic_wake_notified: Arc::new(Mutex::new(HashMap::new())),

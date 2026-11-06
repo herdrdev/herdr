@@ -1124,12 +1124,17 @@ fn req7_deliver_bus_messages_order_once_non_mcp_and_persists_cursor() {
         ]
     );
 
-    // 2. Neither MCP agent nor user received prompts
+    // 2. The MCP agent never gets message bodies typed in; an idle one only gets one nudge line.
+    let mcp_prompts: Vec<_> = bus_prompts
+        .iter()
+        .filter(|(t, _)| t == &mcp.pane || t == &mcp.id)
+        .collect();
     assert!(
-        !bus_prompts
-            .iter()
-            .any(|(t, _)| t == &mcp.pane || t == &mcp.id),
-        "MCP agents must NOT receive prompts in terminal"
+        mcp_prompts.len() <= 1
+            && mcp_prompts
+                .iter()
+                .all(|(_, text)| text.starts_with("[shep] You have 1 unread message(s)")),
+        "MCP agents only get a read_messages nudge: {mcp_prompts:?}"
     );
     assert!(
         !bus_prompts.iter().any(|(t, _)| t == "user"),
@@ -2160,4 +2165,56 @@ fn test_pattern_run_reconciles_on_resume_on_startup() {
     // Missing panes during resume_on_startup become 'exited', so all failed/exited -> Failed
     assert_eq!(fetched.state, patterns_run::PatternRunState::Failed);
     assert!(fetched.finished_at.is_some());
+}
+
+#[test]
+fn idle_mcp_agent_is_nudged_once_per_new_message() {
+    let tmp = TestDir::new("test");
+    let (service, terminals, _clock) = test_service(tmp.path());
+    let mcp = service
+        .spawn(ServiceSpawnRequest {
+            root: tmp.path().to_path_buf(),
+            role: "coder".into(),
+            task: "code-task".into(),
+            mcp_url: Some("http://127.0.0.1:9999/mcp".into()),
+            ..ServiceSpawnRequest::default()
+        })
+        .unwrap();
+    terminals.set_status(
+        &mcp.id,
+        TerminalAgentStatus {
+            state: "live".into(),
+            status: "idle".into(),
+            pane: mcp.pane.clone(),
+            tab: mcp.tab.clone(),
+            title: mcp.label.clone(),
+            seq: 10,
+        },
+    );
+    let nudges = || {
+        terminals
+            .prompts()
+            .into_iter()
+            .filter(|(_, text)| text.starts_with("[shep] You have"))
+            .count()
+    };
+    service.reconcile_once().unwrap();
+    assert_eq!(nudges(), 0, "nothing unread, nothing typed");
+
+    let bus = service.bus().unwrap();
+    bus.send(Message::directed("brain-1", mcp.id.clone(), "msg", "do it"))
+        .unwrap();
+    service.reconcile_once().unwrap();
+    service.reconcile_once().unwrap();
+    assert_eq!(nudges(), 1, "one nudge however many ticks pass");
+
+    bus.send(Message::directed(
+        "brain-1",
+        mcp.id.clone(),
+        "msg",
+        "and this",
+    ))
+    .unwrap();
+    service.reconcile_once().unwrap();
+    assert_eq!(nudges(), 2, "a newer message nudges again");
 }

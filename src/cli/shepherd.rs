@@ -756,6 +756,30 @@ fn execute_local_command(
             }
             Ok(0)
         }
+        LocalCommand::ConfigEnable => match crate::config::enable_shepherd_layer() {
+            Ok((path, changed)) => {
+                if is_json {
+                    let _ = writeln!(
+                        writer,
+                        "{}",
+                        serde_json::json!({"path": path.display().to_string(), "changed": changed, "restart_required": changed})
+                    );
+                } else if changed {
+                    let _ = writeln!(writer, "Shepherd enabled in {}. Restart the server to apply it (this closes running terminals).", path.display());
+                } else {
+                    let _ = writeln!(
+                        writer,
+                        "Shepherd was already enabled in {}.",
+                        path.display()
+                    );
+                }
+                Ok(0)
+            }
+            Err(e) => {
+                eprintln!("shepherd: {e}");
+                Ok(1)
+            }
+        },
         LocalCommand::ConfigValidate => {
             if let Err(e) = shepherd_core::cli::config_validate(root, is_json, writer) {
                 eprintln!("shepherd: {e}");
