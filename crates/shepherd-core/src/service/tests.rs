@@ -2218,3 +2218,38 @@ fn idle_mcp_agent_is_nudged_once_per_new_message() {
     service.reconcile_once().unwrap();
     assert_eq!(nudges(), 2, "a newer message nudges again");
 }
+
+#[test]
+fn agents_join_the_workspace_of_their_parent_and_of_their_task() {
+    let tmp = TestDir::new("test");
+    let (service, _terminals, _clock) = test_service(tmp.path());
+    let spawn = |role: &str, parent: Option<&str>, task: Option<&str>| {
+        service
+            .spawn(ServiceSpawnRequest {
+                root: tmp.path().to_path_buf(),
+                role: role.into(),
+                task: "t".into(),
+                parent_id: parent.map(str::to_owned),
+                task_id: task.map(str::to_owned),
+                confirm_over_limit: true,
+                ..ServiceSpawnRequest::default()
+            })
+            .unwrap()
+    };
+    let brain = spawn("brain", None, None);
+    let child = spawn("coder", Some(&brain.id), None);
+    assert_eq!(child.workspace, brain.workspace, "child joins its parent");
+
+    let first = spawn("coder", None, Some("run-x"));
+    let second = spawn("reviewer", None, Some("run-x"));
+    assert_eq!(
+        second.workspace, first.workspace,
+        "same run, same workspace"
+    );
+
+    let other = spawn("coder", None, Some("run-y"));
+    assert_ne!(
+        other.workspace, first.workspace,
+        "another run keeps its own"
+    );
+}

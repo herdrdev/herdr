@@ -387,6 +387,13 @@ impl ShepherdClient {
         Ok(result.get("agent").cloned().unwrap_or(result))
     }
 
+    pub fn close_workspace(&self, workspace_id: &str) -> Result<Value, ShepherdError> {
+        self.call(
+            "workspace.close",
+            serde_json::json!({"workspace_id": workspace_id}),
+        )
+    }
+
     pub fn close_tab(&self, tab_id: &str) -> Result<Value, ShepherdError> {
         self.call("tab.close", serde_json::json!({"tab_id":tab_id}))
     }

@@ -338,6 +338,7 @@ fn spawn_in_terminals(
         label: label.clone(),
         env,
         worktree,
+        workspace: None,
     })?;
 
     let mut prompt = role_prompt(&request.root, &request.role, &config.roles[&request.role]);

@@ -257,9 +257,13 @@ mod tests {
                     branch: "shep/1-task".into(),
                     base: Some("main".into()),
                 }),
+                workspace: None,
             })
             .unwrap();
-        assert_eq!(opened.workspace, "w1");
+        assert_eq!(
+            opened.workspace, "w-existing",
+            "joins the workspace of its repo"
+        );
         assert_eq!(opened.tab, "w1:t1");
         assert_eq!(opened.pane, "w1:p1");
         assert_eq!(opened.worktree, "/repo/.worktrees/shep-1");
@@ -308,6 +312,10 @@ mod tests {
         let recorded = calls.lock().unwrap();
         let methods: Vec<&str> = recorded.iter().map(|(m, _)| m.as_str()).collect();
         assert!(methods.contains(&"worktree.create"));
+        assert!(
+            methods.contains(&"workspace.close"),
+            "the worktree's own workspace is closed"
+        );
         assert!(methods.contains(&"tab.create"));
         assert!(methods.contains(&"agent.start"));
         assert!(methods.contains(&"agent.prompt"));

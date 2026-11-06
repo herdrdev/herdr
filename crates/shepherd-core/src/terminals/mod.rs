@@ -86,6 +86,9 @@ pub struct OpenAgentRequest {
     pub label: String,
     pub env: HashMap<String, String>,
     pub worktree: Option<WorktreeSpec>,
+    /// Workspace the agent must join (its parent's, or its task/run siblings'). `None` = the
+    /// workspace of `root`, created if missing. Agents never get a workspace of their own.
+    pub workspace: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -255,8 +258,28 @@ pub(super) fn shepherd_open_agent(
 ) -> Result<OpenedAgent, TerminalError> {
     let mut worktree_path = String::new();
     let mut branch = String::new();
-    let workspace_id;
-    let initial_tab_id;
+    let snapshot = client.snapshot()?;
+    let workspace_id = match request
+        .workspace
+        .clone()
+        .filter(|id| workspace_exists(&snapshot, id))
+        .or_else(|| find_workspace(&snapshot, &request.root))
+    {
+        Some(id) => id,
+        None => {
+            let label = request
+                .root
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy();
+            let created = client.create_workspace(&request.root.display().to_string(), &label)?;
+            nested_string(&created, &["workspace", "workspace_id"])?
+        }
+    };
+    // The worktree is created on disk by the server, which also opens a workspace for it. The agent
+    // runs in that checkout but belongs to `workspace_id`, so that extra workspace is closed (closing a
+    // linked worktree workspace never removes the checkout).
+    let mut extra_workspace = String::new();
     if let Some(wt) = &request.worktree {
         let created = client.create_worktree(
             &request.root.display().to_string(),
@@ -264,26 +287,10 @@ pub(super) fn shepherd_open_agent(
             wt.base.as_deref(),
             &request.label,
         )?;
-        workspace_id = nested_string(&created, &["workspace", "workspace_id"])?;
-        initial_tab_id = nested_string(&created, &["tab", "tab_id"])?;
+        extra_workspace = nested_string(&created, &["workspace", "workspace_id"])?;
         worktree_path = nested_string(&created, &["worktree", "path"])?;
         branch =
             nested_string(&created, &["worktree", "branch"]).unwrap_or_else(|_| wt.branch.clone());
-    } else {
-        workspace_id = match find_workspace(&client.snapshot()?, &request.root) {
-            Some(id) => id,
-            None => {
-                let label = request
-                    .root
-                    .file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy();
-                let created =
-                    client.create_workspace(&request.root.display().to_string(), &label)?;
-                nested_string(&created, &["workspace", "workspace_id"])?
-            }
-        };
-        initial_tab_id = String::new();
     }
     let cwd = if worktree_path.is_empty() {
         request.root.display().to_string()
@@ -293,8 +300,8 @@ pub(super) fn shepherd_open_agent(
     let created_tab = client.create_tab(&workspace_id, &cwd, &request.label, &request.env)?;
     let tab_id = nested_string(&created_tab, &["tab", "tab_id"])?;
     let pane_id = nested_string(&created_tab, &["root_pane", "pane_id"])?;
-    if !initial_tab_id.is_empty() {
-        let _ = client.close_tab(&initial_tab_id);
+    if !extra_workspace.is_empty() && extra_workspace != workspace_id {
+        let _ = client.close_workspace(&extra_workspace);
     }
     let _ = client.rename_pane(&pane_id, &request.label);
     let _ = client.report_metadata(
@@ -598,14 +605,37 @@ pub(super) fn start_socket_event_subscription(
     }
 }
 
+fn workspace_exists(snapshot: &Value, id: &str) -> bool {
+    snapshot
+        .get("workspaces")
+        .and_then(Value::as_array)
+        .is_some_and(|all| {
+            all.iter()
+                .any(|w| w.get("workspace_id").and_then(Value::as_str) == Some(id))
+        })
+}
+
 fn find_workspace(snapshot: &Value, root: &Path) -> Option<String> {
-    let workspaces = snapshot.get("workspaces")?.as_array()?;
-    workspaces.iter().find_map(|workspace| {
-        let worktree = workspace.get("worktree")?;
-        let checkout = worktree.get("checkout_path")?.as_str()?;
-        (Path::new(checkout) == root)
-            .then(|| workspace.get("workspace_id")?.as_str().map(str::to_owned))
-            .flatten()
+    let by_checkout = snapshot
+        .get("workspaces")
+        .and_then(Value::as_array)
+        .and_then(|workspaces| {
+            workspaces.iter().find_map(|workspace| {
+                let checkout = workspace.get("worktree")?.get("checkout_path")?.as_str()?;
+                (Path::new(checkout) == root)
+                    .then(|| workspace.get("workspace_id")?.as_str().map(str::to_owned))
+                    .flatten()
+            })
+        });
+    // A workspace's git info lands a moment after it is created, and non-git folders never have it:
+    // fall back to a workspace that has a pane started in `root`.
+    by_checkout.or_else(|| {
+        snapshot
+            .get("panes")?
+            .as_array()?
+            .iter()
+            .find(|pane| pane.get("cwd").and_then(Value::as_str).map(Path::new) == Some(root))
+            .and_then(|pane| pane.get("workspace_id")?.as_str().map(str::to_owned))
     })
 }
 

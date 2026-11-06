@@ -459,6 +459,7 @@ mod tests {
             label: "coder".into(),
             env: HashMap::new(),
             worktree: None,
+            workspace: None,
         })
         .unwrap();
 

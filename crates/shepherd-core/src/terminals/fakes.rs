@@ -628,7 +628,10 @@ impl Terminals for InMemoryTerminals {
         }
         state.next_id += 1;
         let n = state.next_id;
-        let workspace = format!("ws-{n}");
+        let workspace = request
+            .workspace
+            .clone()
+            .unwrap_or_else(|| format!("ws-{n}"));
         let tab = format!("tab-{n}");
         let pane = format!("pane-{n}");
         let (worktree, branch) = match &request.worktree {
@@ -937,6 +940,7 @@ mod tests {
                     branch: "shep/1-task".into(),
                     base: Some("main".into()),
                 }),
+                workspace: None,
             })
             .unwrap();
         assert_eq!(opened.pane, "pane-1");
@@ -1057,6 +1061,7 @@ esac
                 label: "coder·codex·test".into(),
                 env: HashMap::from([("SHEP_AGENT_ID".into(), "coder-1".into())]),
                 worktree: None,
+                workspace: None,
             })
             .unwrap();
         assert_eq!(opened.pane, "t7");
