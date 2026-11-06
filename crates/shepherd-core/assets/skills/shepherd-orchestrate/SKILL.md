@@ -68,6 +68,20 @@ Start the pattern objective with `Tarea #<id>:` so the run is linked to the task
 4. Once the pane is at the agent's input prompt, deliver the task with `shepherd agent prompt <id> "<text>" --wait`.
 5. Do not start a second implementation agent for the same task while the first one is alive. If a vendor is unusable (quota, login), close that agent and spawn one with another vendor, after the human agrees.
 
+## 6. Your workspace, tabs and panes
+
+You run in a pane of a Shepherd workspace (`SHEPHERD_ENV=1`). Every agent Shepherd starts for you opens as a new **tab of the same workspace**, in the same folder (or in its own git worktree when its role asks for one), so the whole team stays together.
+
+```bash
+shepherd workspace list                     # spaces; yours is the focused one
+shepherd tab list --workspace <id>          # one tab per agent
+shepherd pane list --workspace <id>         # panes with their agent and status
+shepherd agent read <id> --lines 60         # what an agent shows
+shepherd tab create --workspace <id> --label notes   # an extra terminal next to the team
+```
+
+Prefer `shepherd spawn` / `shepherd pattern run` over creating tabs by hand: they register the agent, give it its skills and deliver its first prompt. Do not close workspaces or tabs you did not create, and do not move agents to another workspace.
+
 ## Rules
 
 - Never `git push`, open PRs, merge or release without explicit human approval.

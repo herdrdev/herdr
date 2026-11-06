@@ -329,7 +329,7 @@ impl OrchestrationService {
         };
 
         let starters = pattern.starter_ids();
-        let mut run_agents = Vec::new();
+        let mut run_agents: Vec<PatternRunAgent> = Vec::new();
         for agent_def in &pattern.agents {
             let count = agent_def.count.max(1);
             for idx in 0..count {
@@ -366,6 +366,10 @@ impl OrchestrationService {
                 let spawned = match self.spawn(spawn_req) {
                     Ok(ag) => ag,
                     Err(e) => {
+                        // Nothing is left half-created: the agents already started for this run are closed.
+                        for started in &run_agents {
+                            let _ = self.kill(&started.id);
+                        }
                         let failed_run = PatternRun {
                             id: run_id.clone(),
                             pattern: pattern.name.clone(),

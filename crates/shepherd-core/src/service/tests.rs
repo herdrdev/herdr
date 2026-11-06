@@ -2316,3 +2316,59 @@ fn explicit_workspace_wins_for_agents_and_whole_pattern_runs() {
     }
     assert!(!run.agents.is_empty());
 }
+
+#[test]
+fn failed_pattern_run_closes_the_agents_it_already_started() {
+    let tmp = TestDir::new("test");
+    let (service, _terminals, _clock) = test_service(tmp.path());
+    // limit is 4: orchestrator-worker needs more, and is not confirmed -> fails before spawning anything
+    let big = service.start_pattern_run(
+        tmp.path(),
+        Some("hierarchical"),
+        None,
+        Some("x"),
+        None,
+        false,
+    );
+    assert!(big.is_err());
+    let registry = service.load_registry().unwrap();
+    assert!(
+        registry.live().is_empty(),
+        "a refused run leaves no live agent: {:?}",
+        registry.live().iter().map(|a| &a.id).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn pattern_and_spawner_agents_learn_the_shepherd_cli() {
+    let tmp = TestDir::new("test");
+    let (service, _terminals, _clock) = test_service(tmp.path());
+    let worker = service
+        .spawn(ServiceSpawnRequest {
+            root: tmp.path().to_path_buf(),
+            role: "docs".into(),
+            task: "t".into(),
+            pattern_prompt: Some("p".into()),
+            ..ServiceSpawnRequest::default()
+        })
+        .unwrap();
+    assert!(worker
+        .active_skills
+        .iter()
+        .any(|s| s == "shepherd-orchestrate"));
+    let plain = service
+        .spawn(ServiceSpawnRequest {
+            root: tmp.path().to_path_buf(),
+            role: "docs".into(),
+            task: "t".into(),
+            ..ServiceSpawnRequest::default()
+        })
+        .unwrap();
+    assert!(
+        !plain
+            .active_skills
+            .iter()
+            .any(|s| s == "shepherd-orchestrate"),
+        "a plain non-spawner does not need it"
+    );
+}

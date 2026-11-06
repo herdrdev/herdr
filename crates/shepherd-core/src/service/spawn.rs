@@ -185,6 +185,11 @@ impl OrchestrationService {
         if req.pattern_prompt.is_some() {
             baseline.push("shepherd-events");
         }
+        // Whoever can start others, and every pattern agent, also learns the CLI: tasks, patterns,
+        // agents, workspaces, tabs and panes.
+        if role_cfg.can_spawn || req.pattern_prompt.is_some() {
+            baseline.push("shepherd-orchestrate");
+        }
         for name in baseline {
             if !role_cfg.skills.iter().any(|n| n == name)
                 && !skill_adjust.add.iter().any(|n| n == name)
