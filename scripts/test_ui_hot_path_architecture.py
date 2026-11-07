@@ -148,6 +148,19 @@ def find_violations(paths, rules) -> list[str]:
 
 
 class UiHotPathArchitectureTests(unittest.TestCase):
+    def test_client_event_loop_does_not_persist_endpoint_selection_inline(self) -> None:
+        violations = find_violations(
+            (PROJECT_ROOT / "src" / "client" / "mod.rs",),
+            ((re.compile(r"(?:\.|::)store_selection\b"), "synchronous endpoint persistence"),),
+        )
+
+        self.assertEqual(
+            violations,
+            [],
+            "Client navigation must not wait for durable endpoint selection writes:\n"
+            + "\n".join(violations),
+        )
+
     def test_render_hot_paths_avoid_known_expensive_runtime_queries(self) -> None:
         violations = find_violations(HOT_PATH_SOURCES, FORBIDDEN_CALLS)
 

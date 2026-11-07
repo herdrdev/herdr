@@ -31,6 +31,7 @@ mod image_files;
 mod input;
 mod loop_config;
 mod notifications;
+mod selection_writer;
 mod shell;
 mod shell_runtime;
 mod startup;
@@ -452,6 +453,7 @@ async fn run_client_loop(
     let draw_host_cursor = attach_escape.is_none() && should_draw_host_cursor(config.host_cursor);
     let is_remote_client = is_remote_client_process();
     let local_unavailable = initial.is_none();
+    let mut selection_writer = selection_writer::SelectionWriter::new(&endpoint_catalog);
 
     let mut state = ClientState {
         blit_encoder: render_ansi::BlitEncoder::new(),
@@ -1430,9 +1432,7 @@ async fn run_client_loop(
                 if !endpoint_catalog.select_endpoint(&endpoint_id) {
                     continue;
                 }
-                if let Err(error) = endpoint_catalog.store_selection() {
-                    warn!(%error, "failed to persist desired endpoint selection");
-                }
+                selection_writer.schedule(&endpoint_catalog);
                 begin_endpoint_activation(
                     &mut state,
                     &mut write_stream,
