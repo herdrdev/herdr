@@ -450,12 +450,27 @@ fn hermes_installer_agent_name(argv: &[String]) -> Option<String> {
         return None;
     }
 
-    // Recognize the captured installer bootstrap, not arbitrary Python source.
-    // Both root literals must agree; reject escapes or quotes rather than parse Python.
+    let code = code.strip_prefix("import os, re, sys\n")?;
+    let (expanded, code) = if code.starts_with("import ") {
+        (true, code.split_once('\n')?.1)
+    } else {
+        (false, code)
+    };
     let rest = code.strip_prefix(HERMES_INSTALLER_PREFIX)?;
     let (root, rest) = rest.split_once("')\n")?;
     if root.is_empty() || root.contains(['\'', '\\', '\n', '\r']) {
         return None;
+    }
+    if expanded {
+        // Recovery helpers change independently of the interactive entry point.
+        return (rest.ends_with(HERMES_INSTALLER_ENTRY)
+            && rest.lines().any(|line| {
+                matches!(
+                    line,
+                    "import hermes_bootstrap" | "    import hermes_bootstrap"
+                )
+            }))
+        .then(|| agent_label(Agent::Hermes).to_string());
     }
     let rest = rest
         .strip_prefix(HERMES_INSTALLER_MIDDLE)?
@@ -463,10 +478,13 @@ fn hermes_installer_agent_name(argv: &[String]) -> Option<String> {
     (rest == HERMES_INSTALLER_SUFFIX).then(|| agent_label(Agent::Hermes).to_string())
 }
 
-// Installer source captured in #4910. Only the installation root varies. Unknown
-// bootstrap revisions deliberately fall back to ordinary process identification.
-const HERMES_INSTALLER_PREFIX: &str = "import os, re, sys
-os.environ.pop('PYTHONHOME', None)
+const HERMES_INSTALLER_ENTRY: &str = r"from hermes_cli.main import main
+sys.argv[0] = re.sub(r'(-script\.pyw|\.exe)?$', '', sys.argv[0])
+sys.exit(main())
+";
+
+// Short installer source captured in #4910. Only the installation root varies.
+const HERMES_INSTALLER_PREFIX: &str = "os.environ.pop('PYTHONHOME', None)
 os.environ.pop('PYTHONPATH', None)
 sys.path.insert(0, '";
 const HERMES_INSTALLER_MIDDLE: &str =
@@ -1432,11 +1450,13 @@ mod tests {
     }
 
     fn hermes_installer_capture() -> crate::platform::ForegroundJob {
-        // Exact reporter capture from #4910; private path components were redacted.
-        let capture: serde_json::Value = serde_json::from_str(include_str!(
+        hermes_installer_capture_from(include_str!(
             "../../tests/fixtures/hermes-installer-process-info-4910.json"
         ))
-        .unwrap();
+    }
+
+    fn hermes_installer_capture_from(capture: &str) -> crate::platform::ForegroundJob {
+        let capture: serde_json::Value = serde_json::from_str(capture).unwrap();
         let info = &capture["result"]["process_info"];
         crate::platform::ForegroundJob {
             process_group_id: info["foreground_process_group_id"].as_u64().unwrap() as u32,
@@ -1469,6 +1489,68 @@ mod tests {
             identify_agent_in_job(&job),
             Some((Agent::Hermes, "hermes".to_string()))
         );
+    }
+
+    #[test]
+    fn identify_agent_in_job_detects_newer_hermes_installer_capture() {
+        let mut job = hermes_installer_capture_from(include_str!(
+            "../../tests/fixtures/hermes-installer-process-info-5068.json"
+        ));
+        assert_eq!(
+            identify_agent_in_job(&job),
+            Some((Agent::Hermes, "hermes".to_string()))
+        );
+        let process = job.processes.last_mut().unwrap();
+        let argv = process.argv.as_mut().unwrap();
+        argv[3] = argv[3]
+            .replace(
+                "/Users/username/.hermes/hermes-agent",
+                "/opt/another install/hermes-agent",
+            )
+            .replace(
+                "import contextlib, hashlib, io, pathlib, shutil, subprocess",
+                "import contextlib, hashlib, io, pathlib, shutil, subprocess, warnings",
+            );
+        argv.push("--resume".into());
+        argv.push("session-id".into());
+        assert_eq!(
+            identify_agent_in_job(&job),
+            Some((Agent::Hermes, "hermes".to_string()))
+        );
+    }
+
+    #[test]
+    fn newer_hermes_installer_rejects_non_entry_source_and_helper_modes() {
+        let job = hermes_installer_capture_from(include_str!(
+            "../../tests/fixtures/hermes-installer-process-info-5068.json"
+        ));
+        let mut argv = job.processes.last().unwrap().argv.clone().unwrap();
+        let original = argv[3].clone();
+        for code in [
+            "print('hermes_cli.main')".to_string(),
+            format!("'''{original}'''"),
+            original.lines().map(|line| format!("# {line}\n")).collect(),
+            original.replace(
+                "from hermes_cli.main import main",
+                "from unrelated.main import main",
+            ),
+            original.replace("sys.exit(main())", "sys.exit(0)"),
+            original.replace("import hermes_bootstrap", "import unrelated_bootstrap"),
+            original.replace("/Users/username", r"/Users/has\escape"),
+            original.replace("/Users/username", "/Users/has'quote"),
+        ] {
+            argv[3] = code;
+            assert_eq!(hermes_installer_agent_name(&argv), None);
+        }
+        argv[3] = original;
+        for mode in ["--run-module", "--print-runtime-command"] {
+            argv.truncate(4);
+            argv.push(mode.into());
+            assert_eq!(hermes_installer_agent_name(&argv), None);
+        }
+        argv.truncate(4);
+        argv[1] = "-m".into();
+        assert_eq!(hermes_installer_agent_name(&argv), None);
     }
 
     #[test]

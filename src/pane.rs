@@ -4019,16 +4019,17 @@ impl PaneRuntime {
         (release_tx, writer)
     }
 
-    pub(crate) fn test_process_pty_bytes(&self, bytes: &[u8]) {
+    pub(crate) fn test_process_pty_bytes(&self, bytes: &[u8]) -> Vec<Bytes> {
         let _content_write_guard = match self.content_write_lock.lock() {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
         };
         self.content_seq.fetch_add(1, Ordering::AcqRel);
         let (tx, _rx) = mpsc::channel(1);
-        let _ = self.terminal.process_pty_bytes(self.pane_id, 0, bytes, &tx);
+        let result = self.terminal.process_pty_bytes(self.pane_id, 0, bytes, &tx);
         self.content_seq.fetch_add(1, Ordering::Release);
         self.compression.wake();
+        result.terminal_responses
     }
 
     pub(crate) fn test_with_scrollback_bytes(

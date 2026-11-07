@@ -115,6 +115,40 @@ pub(super) fn wait_with_output_timeout(
     timeout: Duration,
     cancelled: Arc<AtomicBool>,
 ) -> io::Result<Output> {
+    wait_with_output(child, input, timeout, cancelled, None)
+}
+
+#[cfg(any(unix, test))]
+pub(super) fn wait_with_output_limit(
+    child: Child,
+    timeout: Duration,
+    cancelled: Arc<AtomicBool>,
+    limit: usize,
+) -> io::Result<Output> {
+    wait_with_output(child, None, timeout, cancelled, Some(limit))
+}
+
+fn read_output(mut pipe: CancellablePipe, limit: Option<usize>) -> io::Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    if let Some(limit) = limit {
+        io::Read::by_ref(&mut pipe)
+            .take((limit + 1) as u64)
+            .read_to_end(&mut bytes)?;
+        // Drain excess so a full pipe cannot manufacture a command timeout.
+        io::copy(&mut pipe, &mut io::sink())?;
+    } else {
+        pipe.read_to_end(&mut bytes)?;
+    }
+    Ok(bytes)
+}
+
+fn wait_with_output(
+    child: Child,
+    input: Option<Vec<u8>>,
+    timeout: Duration,
+    cancelled: Arc<AtomicBool>,
+    limit: Option<usize>,
+) -> io::Result<Output> {
     let mut child = OwnedSshChild(child);
     let control = PipeControl::new(cancelled);
     let stdout = crate::platform::ChildPipe::new_reader(
@@ -137,18 +171,12 @@ pub(super) fn wait_with_output_timeout(
         .take()
         .map(crate::platform::ChildPipe::new_writer)
         .transpose()?;
-    let mut stdout = CancellablePipe::new(stdout, &control);
-    let mut stderr = CancellablePipe::new(stderr, &control);
+    let stdout = CancellablePipe::new(stdout, &control);
+    let stderr = CancellablePipe::new(stderr, &control);
     let stdin = stdin.map(|pipe| CancellablePipe::new(pipe, &control));
     thread::scope(|scope| {
-        let stdout = scope.spawn(move || {
-            let mut bytes = Vec::new();
-            stdout.read_to_end(&mut bytes).map(|_| bytes)
-        });
-        let stderr = scope.spawn(move || {
-            let mut bytes = Vec::new();
-            stderr.read_to_end(&mut bytes).map(|_| bytes)
-        });
+        let stdout = scope.spawn(move || read_output(stdout, limit));
+        let stderr = scope.spawn(move || read_output(stderr, limit));
         let stdin = scope.spawn(move || match (stdin, input) {
             (Some(mut stdin), Some(input)) => stdin.write_all(&input),
             (None, Some(_)) => Err(io::Error::other("ssh bootstrap stdin missing")),
@@ -317,12 +345,45 @@ pub(in crate::remote) mod tests {
                     .write_all(&vec![b'x'; 2 * 1024 * 1024])
                     .unwrap();
             }
+            if mode == "output-limit" {
+                eprintln!("Permission denied (publickey)");
+                io::stdout().write_all(&vec![b'x'; 1024 * 1024]).unwrap();
+                io::stderr().write_all(&vec![b'y'; 1024 * 1024]).unwrap();
+            }
             println!("final child output");
             eprintln!("Permission denied (publickey)");
         }
-        if mode != "exit" && mode != "bridge-final" {
+        if mode != "exit" && mode != "bridge-final" && mode != "output-limit" {
             thread::sleep(Duration::from_secs(30));
         }
+    }
+
+    #[test]
+    fn diagnostic_capture_drains_flooded_pipes_with_bounded_memory() {
+        let fixture = PipeFixture::new("output-limit");
+        let child = fixture
+            .command()
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let descendant = fixture.ready();
+        let limit = 16 * 1024;
+        let output = wait_with_output_limit(
+            child,
+            Duration::from_secs(5),
+            Arc::new(AtomicBool::new(false)),
+            limit,
+        )
+        .unwrap();
+        assert!(
+            output.status.success(),
+            "capture must drain instead of blocking the child"
+        );
+        assert_eq!(output.stdout.len(), limit + 1);
+        assert_eq!(output.stderr.len(), limit + 1);
+        assert!(String::from_utf8_lossy(&output.stderr).contains("Permission denied (publickey)"));
+        assert!(crate::platform::process_exists(descendant));
     }
 
     #[test]
@@ -375,7 +436,13 @@ pub(in crate::remote) mod tests {
             let error = wait_with_output_timeout(
                 child,
                 Some(vec![b'x'; 1024 * 1024]),
-                Duration::from_millis(200),
+                // Test cancellation independently of the scheduler's ability
+                // to run its thread within the timeout branch's 100 ms margin.
+                if cancel {
+                    Duration::from_secs(5)
+                } else {
+                    Duration::from_millis(200)
+                },
                 stopped,
             )
             .unwrap_err();

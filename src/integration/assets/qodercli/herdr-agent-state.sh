@@ -1,7 +1,7 @@
 #!/bin/sh
 # managed by herdr; reinstalling the integration replaces this file.
 # HERDR_INTEGRATION_ID=qodercli
-# HERDR_INTEGRATION_VERSION=3
+# HERDR_INTEGRATION_VERSION=4
 
 [ "${1:-}" = "session" ] || exit 0
 [ "${HERDR_ENV:-}" = "1" ] || exit 0

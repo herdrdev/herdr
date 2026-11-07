@@ -592,7 +592,9 @@ mod tests {
     async fn replacement_waits_for_queued_connection_teardown() {
         use crate::protocol::endpoint::{EndpointServerWelcome, ENDPOINT_WELCOME_KIND};
         use crate::protocol::{self, ClientMessage, ServerMessage};
-        use interprocess::local_socket::traits::{Listener as _, Stream as _};
+        #[cfg(unix)]
+        use interprocess::local_socket::traits::Listener as _;
+        use interprocess::local_socket::traits::Stream as _;
         let path = std::env::temp_dir().join(format!("hretired-{}.sock", std::process::id()));
         let listener = crate::ipc::bind_private_local_listener(&path).unwrap();
         let now = Instant::now();
@@ -672,7 +674,9 @@ mod tests {
     async fn wake_replacement_waits_for_the_obsolete_attempt_to_close() {
         use crate::platform::HostPowerEvent::*;
         use crate::protocol::{self, ClientMessage};
-        use interprocess::local_socket::traits::{Listener as _, Stream as _};
+        #[cfg(unix)]
+        use interprocess::local_socket::traits::Listener as _;
+        use interprocess::local_socket::traits::Stream as _;
         for observed_suspend in [true, false] {
             let path = std::env::temp_dir().join(format!(
                 "hwake-{}-{observed_suspend}.sock",
@@ -759,7 +763,9 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn retiring_or_shutting_down_a_silent_attempt_closes_its_connection() {
         use crate::protocol::{self, ClientMessage};
-        use interprocess::local_socket::traits::{Listener as _, Stream as _};
+        #[cfg(unix)]
+        use interprocess::local_socket::traits::Listener as _;
+        use interprocess::local_socket::traits::Stream as _;
         for shutdown in [false, true] {
             let path = std::env::temp_dir()
                 .join(format!("hcancel-{}-{shutdown}.sock", std::process::id()));

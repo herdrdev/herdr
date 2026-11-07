@@ -256,6 +256,7 @@ mod tests {
 
     #[test]
     fn status_timeout_closes_a_stalled_probe() {
+        #[cfg(unix)]
         use interprocess::local_socket::traits::Listener as _;
         let path =
             std::env::temp_dir().join(format!("herdr-status-timeout-{}.sock", std::process::id()));

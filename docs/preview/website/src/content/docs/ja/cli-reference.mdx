@@ -424,13 +424,14 @@ herdr integration status [--outdated-only]
 
 ```bash
 herdr plugin install <owner>/<repo>[/subdir...] [--ref REF] [--yes]
+herdr plugin update [<plugin_id|owner/repo[/subdir...]>...] [--yes]
 herdr plugin list [--plugin ID] [--json]
 herdr plugin uninstall <plugin_id|owner/repo[/subdir...]>
 herdr plugin enable <plugin_id>
 herdr plugin disable <plugin_id>
 ```
 
-`plugin install` は `ogulcancelik/herdr-plugin-examples/worktree-bootstrap` のような GitHub 省略記法のみを受け付けます。`git` を使い、対話的なターミナルでは信頼プレビューを表示し、サポートされるマニフェストのビルドコマンドを実行し、GitHub インストールを Herdr 管理のディレクトリに保存します。非対話的なインストールには `--yes` を使ってください。GitHub 管理プラグインの再インストールは、その管理チェックアウトを置き換えます。ローカルにリンクされたプラグインへの上書きインストールは拒否されます。プラグインのマニフェストは `min_herdr_version` を宣言しなければならず、プラグインがより新しい Herdr バイナリを要求する場合、install と link は失敗します。`plugin list` はデフォルトで人間可読です。生の API レスポンスが欲しいときは `--json` を渡してください。
+`plugin install` は `ogulcancelik/herdr-plugin-examples/worktree-bootstrap` のような GitHub 省略記法のみを受け付けます。`git` を使い、対話的なターミナルでは信頼プレビューを表示し、サポートされるマニフェストのビルドコマンドを実行し、GitHub インストールを Herdr 管理のディレクトリに保存します。非対話的なインストールには `--yes` を使ってください。`plugin update` は対象を省略すると GitHub 管理の全プラグインを、指定すると該当する id または GitHub ソースだけを更新します。記録された ref を使い、変更のないコミットと一括更新時のローカルリンクをスキップします。再インストールは新しいディレクトリを作成します。実行中のプラグインは元のファイルを、新しい呼び出しは新しい版を使います。ローカルにリンクされたプラグインへの上書きインストールは拒否されます。プラグインのマニフェストは `min_herdr_version` を宣言しなければならず、プラグインがより新しい Herdr バイナリを要求する場合、install と link は失敗します。`plugin list` はデフォルトで人間可読です。生の API レスポンスが欲しいときは `--json` を渡してください。
 
 ローカル開発:
 
@@ -439,7 +440,7 @@ herdr plugin link <path> [--disabled]
 herdr plugin unlink <plugin_id>
 ```
 
-`plugin link` は `herdr-plugin.toml` を含むプラグインディレクトリ、またはマニフェストへの直接パスを受け付けます。ローカルチェックアウトからプラグインを作成・テストしている間はこれが正しいコマンドです。`plugin unlink` はプラグインの登録を解除し、ファイルには触れません。`plugin uninstall` はプラグインの登録を解除し、Herdr 管理の GitHub チェックアウトファイルも削除します。GitHub インストールの場合、uninstall はプラグイン id と、install で使うのと同じ `owner/repo[/subdir...]` 省略記法の両方を受け付けます。アクション、イベントフック、ペイン、リンクハンドラーはマニフェストで宣言します。ランタイムでのアクション登録は v1 の範囲外です。
+`plugin link` は `herdr-plugin.toml` を含むプラグインディレクトリ、またはマニフェストへの直接パスを受け付けます。ローカルチェックアウトからプラグインを作成・テストしている間はこれが正しいコマンドです。`plugin unlink` と `plugin uninstall` は登録を解除し、実行中のプラグインが完了できるようファイルを残します。更新や再インストールも古い版を保持し、新しい呼び出しは設定の再読み込みなしで新しい版を使います。使用中のサーバーが終了した後、次に成功したインストール／更新、またはサーバー起動時に不要な管理インストールを削除します。設定の再読み込みでは解放されません。プラグインは親コマンドやペインの終了前に、切り離したバックグラウンドプロセスを停止する必要があります。サーバー終了後も残るプロセスは削除から保護されません。削除追跡のない旧インストールとローカルリンクのファイルは保持します。GitHub インストールの場合、uninstall はプラグイン id と、install で使うのと同じ `owner/repo[/subdir...]` 省略記法の両方を受け付けます。アクション、イベントフック、ペイン、リンクハンドラーはマニフェストで宣言します。ランタイムでのアクション登録は v1 の範囲外です。
 
 設定ディレクトリ:
 
@@ -474,7 +475,7 @@ herdr plugin pane close <pane_id>
 
 `plugin pane open` は、プラグインがリンクされ、有効で、現在のプラットフォームと互換であることを要求します。マニフェストで宣言された `[[panes]]` コマンドを Herdr 管理のターミナルペインとして起動します。マニフェストのデフォルトは `overlay` で、アクティブなペインの上に一時的なズームオーバーレイを開きます。分割、新しいタブ、ズームされたペイン、またはタブレイアウトを変更しないセッションモーダルな `popup` として開くこともできます。`--width` と `--height` は、外側のポップアップ寸法をターミナルセル数または `80%` のような割合で指定します。省略した寸法はデフォルトでターミナルの半分になり、小さすぎる値はポップアップの最小サイズに制限されます。ポップアップは Herdr ペインではなく、`HERDR_PANE_ID` を受け取らず、pane API やエージェント API に参加しません。ターミナル以外のネイティブなプラグインペインは今後の対応面です。
 
-新しいペインでは `TERM_PROGRAM=herdr` として識別され、`TERM_PROGRAM_VERSION` には Herdr のバージョンが設定されます。`TERM=xterm-256color` と `COLORTERM=truecolor` は維持されます。Herdr は、明示的な起動環境の値を適用する前に、継承した外側のターミナルのセッションマーカー（iTerm2、WezTerm、Kitty、Windows Terminal、tmux、screen、Zellij）、iTerm2 の `LC_TERMINAL` 識別子、既知の Claude Code、Codex、OMP セッションマーカーを削除します。これにより、新しいペインがサーバーを最初に起動したターミナルやエージェントのセッションを名乗ることを防ぎます。API キーやディスプレイ設定を含む通常の環境変数は、アタッチ中クライアントの環境に置き換えられず、引き続き継承されます。SSH エージェント転送には独自の再接続処理があります。このクリーンアップによって既存ペインのプロセスは変更されません。
+新しいペインでは `TERM_PROGRAM=herdr` として識別され、`TERM_PROGRAM_VERSION` には Herdr のバージョンが設定されます。`TERM=xterm-256color` と `COLORTERM=truecolor` は維持されます。リサイズ時に Herdr がテキストを折り返し直すため、`fish_handle_reflow=0` も設定します。継承した値や明示的な `fish_handle_reflow` の指定は優先されます。Herdr は、明示的な起動環境の値を適用する前に、継承した外側のターミナルのセッションマーカー（iTerm2、WezTerm、Kitty、Windows Terminal、tmux、screen、Zellij）、iTerm2 の `LC_TERMINAL` 識別子、既知の Claude Code、Codex、OMP セッションマーカーを削除します。これにより、新しいペインがサーバーを最初に起動したターミナルやエージェントのセッションを名乗ることを防ぎます。API キーやディスプレイ設定を含む通常の環境変数は、アタッチ中クライアントの環境に置き換えられず、引き続き継承されます。SSH エージェント転送には独自の再接続処理があります。このクリーンアップによって既存ペインのプロセスは変更されません。
 
 `--env KEY=VALUE` はプロセスを起動するコマンドで繰り返し指定できます。新しく起動されるプロセスにのみ適用されます。`HERDR_SOCKET_PATH`、`HERDR_BIN_PATH`、`HERDR_ENV`、`HERDR_WORKSPACE_ID`、`HERDR_TAB_ID`、`HERDR_PANE_ID`、`HERDR_PLUGIN_ID`、`HERDR_PLUGIN_ROOT`、`HERDR_PLUGIN_CONFIG_DIR`、`HERDR_PLUGIN_STATE_DIR`、`HERDR_PLUGIN_ENTRYPOINT_ID`、`HERDR_PLUGIN_CONTEXT_JSON` のような Herdr 管理の変数は、呼び出し側が与えた環境変数と衝突した場合も権威を保ちます。
 

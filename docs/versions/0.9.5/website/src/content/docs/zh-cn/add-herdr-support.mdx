@@ -1,0 +1,114 @@
+---
+title: 为你的智能体添加 Herdr 支持
+description: 在不为 Herdr 添加原生支持的情况下,从你自己的代码向 Herdr 上报编码智能体的状态和恢复命令。
+---
+
+如果你在开发编码智能体,只靠你自己的代码就能让它在 Herdr 中获得一等支持。不需要向 Herdr 提交拉取请求,也不需要等待 Herdr 发布新版本。
+
+智能体向 Herdr 上报后,用户会得到:
+
+- 在侧边栏和 `herdr agent list` 中显示的智能体名称以及 `idle`、`working` 或 `blocked` 状态
+- 智能体完成或需要用户决策时的通知
+- `herdr agent wait` 以及其他等待智能体状态的自动化
+- Herdr 服务器重启后,同一个窗格中恢复同一个会话
+
+对于厂商没有提供集成的智能体,由 Herdr 维护集成。如果你维护自己的智能体,自己掌握集成就可以按自己的发布节奏修复问题。
+
+## 工作方式
+
+Herdr 窗格中的每个进程都会继承这些环境变量:
+
+| 变量 | 含义 |
+| --- | --- |
+| `HERDR_ENV` | 在 Herdr 中为 `1` |
+| `HERDR_PANE_ID` | 智能体所在的窗格 |
+| `HERDR_BIN_PATH` | 管理这个窗格的 Herdr 可执行文件 |
+| `HERDR_SOCKET_PATH` | Herdr 的 API 套接字 |
+
+你的智能体通过 `"$HERDR_BIN_PATH"` 发送三类上报:
+
+1. **状态。** 每当 `idle`、`working` 或 `blocked` 发生变化时上报。
+2. **恢复命令。** 上报重新打开当前会话的命令。
+3. **释放。** 智能体退出时释放窗格。
+
+仅在 `HERDR_ENV=1` 且其他变量都存在时上报。在 Herdr 之外,集成不应执行任何操作。
+
+## 上报状态
+
+```bash
+"$HERDR_BIN_PATH" pane report-agent "$HERDR_PANE_ID" \
+  --source my-agent \
+  --agent my-agent \
+  --state working \
+  --seq 1
+```
+
+- 一轮开始时上报 `working`,可以接收输入时上报 `idle`,需要用户做决定时上报 `blocked`。可以用 `--message` 说明阻塞原因。
+- `--agent` 是用户看到的名称。请使用你自己智能体的名称,不要使用 Herdr 已经支持的智能体的名称。
+- `--source` 用于标识你的集成。保持稳定且唯一。不要以 `herdr:` 开头,这个前缀由 Herdr 自己的集成使用。
+- `--seq` 可以省略,但建议加上。它必须随来自你的来源的每次上报递增,跨会话和智能体重启也要继续递增。时间戳就很合适。Herdr 会忽略编号不大于上次已接受编号的上报,所以迟到或乱序的上报不会覆盖更新的状态。
+
+如果想在不改变状态的情况下改变智能体的显示方式,例如标题或自定义状态文字,请参阅[自定义状态标签](/zh-cn/docs/integrations/#自定义状态标签)。
+
+## 上报恢复命令
+
+把恢复当前会话的命令放在 `--` 之后。带上该会话需要的选项,例如模型或权限模式,这样恢复后的会话行为一致:
+
+```bash
+"$HERDR_BIN_PATH" pane report-agent "$HERDR_PANE_ID" \
+  --source my-agent \
+  --agent my-agent \
+  --state idle \
+  --seq 2 \
+  --agent-session-id "$SESSION_ID" \
+  -- my-agent --resume "$SESSION_ID" --model my-model
+```
+
+命令可以附在任何一次状态上报中,只有会话变化时也可以用 `pane report-agent-session` 发送。每当智能体切换会话时,请重新上报。
+
+Herdr 服务器重启后,Herdr 会在同一目录中打开该窗格并在其中运行这条命令。命令必须遵守以下规则:
+
+- 第一个词是用户 `PATH` 上的普通命令名,例如 `my-agent`,不能是路径。
+- 任何参数都不能包含撇号或控制字符。
+- 最多 64 个参数,总长度不超过 8 KiB。
+- 你的来源必须先持有该窗格,所以请在发送命令之前或同时用 `report-agent` 上报状态。否则 Herdr 会返回 `resume_not_accepted`。
+
+违反前三条规则的命令会被 Herdr 以 `invalid_resume_argv` 拒绝,该次上报也不会生效。用户可以用 `[session] resume_agents_on_restore = false` 关闭恢复。
+
+## 退出时释放
+
+```bash
+"$HERDR_BIN_PATH" pane release-agent "$HERDR_PANE_ID" \
+  --source my-agent \
+  --agent my-agent \
+  --seq 3
+```
+
+释放会立即从窗格中清除智能体的名称、状态和恢复命令。只在用户真正退出时释放。如果智能体在同一个进程中用一个会话替换另一个会话,请上报新会话,而不是释放。
+
+如果智能体退出时没有释放,Herdr 会在窗格回到空闲的 shell 提示符后察觉,并清除该智能体及其恢复命令。通常需要一两秒。这只是兜底机制,不能代替释放。
+
+## 不要拖慢智能体
+
+- 不要让 Herdr 拖慢你的智能体。在后台或用较短的超时发送上报,并忽略失败。
+- 只发送最新状态。如果一次上报正在发送时积累了多个变化,丢弃较旧的那些。
+- 恢复命令需要 Herdr 0.9.2 或更高版本。旧版会忽略它,状态上报和释放照常工作。
+
+## 直接使用套接字
+
+`HERDR_BIN_PATH` 和 CLI 是可移植的选择,包括在 Windows 上。如果你的智能体需要直接 IPC,可以发送 [Socket API](/zh-cn/docs/socket-api/) 中说明的等效 `pane.report_agent`、`pane.report_agent_session` 和 `pane.release_agent` 请求。恢复命令放在 `resume_argv` 数组中。
+
+## 检查你的集成
+
+在 Herdr 窗格中启动你的智能体,然后查看 Herdr 看到了什么:
+
+```bash
+herdr pane get "$HERDR_PANE_ID"
+herdr agent list
+```
+
+要在不影响日常会话的情况下测试恢复,请使用单独的命名会话:
+
+1. 启动 `herdr --session my-agent-test`,然后在一个窗格中运行你的智能体。
+2. 用 `herdr session stop my-agent-test` 停止该会话。
+3. 再次启动 `herdr --session my-agent-test`。窗格应当运行你的恢复命令,智能体应当再次上报。

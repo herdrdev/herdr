@@ -20,7 +20,7 @@ pub(crate) use super::unix_common::{
     remote_private_temp_base, remote_reattach_argument, remote_reattach_program,
     remote_ssh_config_paths, set_default_plugin_pane_pwd, shutdown_client_stream,
     status_commands_supported, wait_client_stream_readable, write_client_stream,
-    ClientStreamReader, StatusCommandGuard,
+    ClientStreamReader, PinnedSshControlSocket, StatusCommandGuard,
 };
 
 mod bootstrap;
@@ -30,6 +30,9 @@ mod shutdown;
 pub(crate) use shutdown::monitor_host_shutdown;
 mod power;
 pub(crate) use power::monitor_host_power;
+
+mod launchd_spawn;
+pub(crate) use launchd_spawn::{leave_launchd_job, spawn_launchd_job};
 
 #[cfg(test)]
 mod config_file_tests;

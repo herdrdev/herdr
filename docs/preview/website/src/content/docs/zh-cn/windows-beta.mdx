@@ -49,6 +49,19 @@ Windows 构建同时通过稳定版和预览版更新通道提供。新安装默
 
 本地持久会话会在客户端分离或终端窗口关闭后继续运行。通过 Windows OpenSSH 启动的服务器和窗格进程也会在注销后继续运行;再次运行 `herdr` 即可重新连接。
 
+提升权限的 Windows 服务器默认要求管理员客户端,包括通过提升权限的 SSH 登录启动的服务器。普通服务器接受同一账户的普通和管理员客户端;连接不会改变服务器权限。
+
+若要主动与普通客户端共享管理员会话,请设置:
+
+```toml
+[server]
+allow_unelevated_clients = true
+```
+
+此 Windows 专用设置默认关闭,在新服务器启动时生效,包括自动启动。重新加载配置不会改变运行中服务器的访问策略。也可以在管理员终端运行 `herdr server --allow-unelevated-clients`（命名会话使用 `herdr --session <name> server --allow-unelevated-clients`）,只为该服务器进程启用共享。即使配置为 false,此标志仍会启用共享。
+
+两种方式都会允许同一账户的普通本地进程控制管理员窗格;其他账户仍被排除。除非配置中已启用共享,否则重启后必须再次指定标志。现有服务器在停止并用更新版本重启前保持原来的访问策略;停止会关闭窗格。配置和恢复文件仍保留基于账户的权限。
+
 Windows 智能体进程检测会扫描窗格 shell 的后代进程,识别直接运行的智能体和常见的命令包装器,包括 npm/Node 和 Git Bash 进程链。它会跨越模拟的 `exec` 边界跟踪从 Git Bash 启动的智能体,但这和 Unix 前台进程组检测不是一回事。
 
 Windows 目前支持安装 Pi、OMP、Claude Code、Codex、GitHub Copilot CLI、Devin CLI、OpenCode、Kilo Code CLI、Droid、Kimi Code CLI、Qoder CLI 和 Antigravity CLI 集成。可用范围比 Unix 更窄;安装格式不受 Windows 支持的集成会被隐藏或拒绝。
@@ -112,6 +125,8 @@ Windows 终端并不都以相同形式报告带修饰键的按键。Herdr 在 Wi
 Herdr 的窗格文本复制在 Windows 上可用。在窗格内拖选文本即可通过 Herdr 复制。
 
 文本粘贴请在 Windows Terminal 中使用 `ctrl+shift+v`。多行文本粘贴是带括号的 (bracketed),因此 shell 和智能体提示符会把它作为一次粘贴接收,而不是逐行提交。按住 `shift` 再右键,可以使用外层终端的粘贴操作,而不把点击发给 Herdr。
+
+如果 WezTerm 用原始粘贴标记包住完整的 Win32 字符按下／释放记录对,Windows 客户端也能恢复其中的文本。此兼容规则不会解码混合文本或不完整记录。仅包含完整匹配 Win32 记录的字面剪贴板文本无法与这种编码区分,也会被解码。
 
 ## Windows 不支持
 

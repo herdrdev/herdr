@@ -984,6 +984,13 @@ fn federated_launch_opens_local_directly_while_saved_ssh_is_unavailable() {
     }
 }
 
+/// CI runners are heavily loaded, and a saved remote can need several connection
+/// attempts plus activation retries (each activation phase has its own deadline)
+/// before it is usable. These budgets only slow the failure path: every
+/// `wait_until` below returns as soon as its condition holds.
+const REMOTE_READY_TIMEOUT: Duration = Duration::from_secs(30);
+const REMOTE_INPUT_TIMEOUT: Duration = Duration::from_secs(20);
+
 #[test]
 fn federated_client_starts_without_local_and_survives_its_restart() {
     use std::os::unix::fs::PermissionsExt;
@@ -1041,7 +1048,7 @@ fn federated_client_starts_without_local_and_survives_its_restart() {
     let ssh_commands = base.join("ssh-commands");
     let bridge_pid = base.join("bridge-pid");
     fs::write(bin.join("ssh"), format!(
-        "#!/bin/sh\nexport HOME={} XDG_CONFIG_HOME={} XDG_RUNTIME_DIR={} HERDR_SOCKET_PATH={}\nunset HERDR_CLIENT_SOCKET_PATH HERDR_SESSION\nfor arg do last=\"$arg\"; done\nprintf '%s\\n' \"$last\" >> {}\ncase \"$last\" in *remote-client-bridge*) printf '%s\\n' \"$$\" > {};; esac\nexec /bin/sh -c \"$last\"\n",
+        "#!/bin/sh\nexport HOME={} XDG_CONFIG_HOME={} XDG_RUNTIME_DIR={} HERDR_SOCKET_PATH={}\nunset HERDR_CLIENT_SOCKET_PATH HERDR_SESSION\ncontrol=; previous=; configuration=\nfor arg do\n  if [ \"$previous\" = -S ]; then control=$arg; fi\n  if [ \"$arg\" = -G ]; then configuration=yes; fi\n  previous=$arg; last=$arg\ndone\nif [ -n \"$configuration\" ]; then printf 'controlpath %s\\n' \"$control\"; exit 0; fi\nprintf '%s\\n' \"$last\" >> {}\ncase \"$last\" in *remote-client-bridge*) printf '%s\\n' \"$$\" > {};; esac\nexec /bin/sh -c \"$last\"\n",
         quote(&base.join("home")), quote(&remote_config), quote(&remote_runtime), quote(&remote_api), quote(&ssh_commands), quote(&bridge_pid),
     )).unwrap();
     fs::set_permissions(bin.join("ssh"), fs::Permissions::from_mode(0o700)).unwrap();
@@ -1067,7 +1074,7 @@ fn federated_client_starts_without_local_and_survives_its_restart() {
         terminal_screen::text(&bytes, 80, 24)
     };
     assert!(
-        wait_until(Duration::from_secs(12), Duration::from_millis(20), || {
+        wait_until(REMOTE_READY_TIMEOUT, Duration::from_millis(20), || {
             screen_text().contains("REMOTE_INITIAL_FRAME")
         }),
         "remote must be usable before Local exists: {}",
@@ -1098,7 +1105,7 @@ fn federated_client_starts_without_local_and_survives_its_restart() {
             "remote reconnect {cycle} must restore the visible screen without switching machines"
         );
         assert!(
-            wait_until(Duration::from_secs(8), Duration::from_millis(100), || {
+            wait_until(REMOTE_INPUT_TIMEOUT, Duration::from_millis(100), || {
                 if screen_text().contains(&format!("REMOTE_ALIVE_INPUT_{cycle}")) {
                     return true;
                 }
@@ -1134,7 +1141,7 @@ fn federated_client_starts_without_local_and_survives_its_restart() {
     local.close_master();
     drop(local);
     assert!(
-        wait_until(Duration::from_secs(8), Duration::from_millis(20), || {
+        wait_until(REMOTE_INPUT_TIMEOUT, Duration::from_millis(20), || {
             if screen_text().contains("REMOTE_SURVIVED") {
                 return true;
             }
@@ -1260,7 +1267,7 @@ fn federated_client_starts_without_local_and_survives_its_restart() {
     );
     // A coherent frame precedes the final host-effects fence; input stays gated until then.
     assert!(
-        wait_until(Duration::from_secs(8), Duration::from_millis(100), || {
+        wait_until(REMOTE_INPUT_TIMEOUT, Duration::from_millis(100), || {
             if screen_text().contains("LOCAL_INPUT_RECOVERED") {
                 return true;
             }

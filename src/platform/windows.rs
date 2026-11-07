@@ -25,6 +25,53 @@ pub(crate) use power::monitor_host_power;
 
 static ALLOW_UNELEVATED_CLIENTS: OnceLock<bool> = OnceLock::new();
 
+pub(crate) struct PrivateLocalListener {
+    listener: interprocess::os::windows::named_pipe::PipeListener<
+        interprocess::os::windows::named_pipe::pipe_mode::Bytes,
+        interprocess::os::windows::named_pipe::pipe_mode::Bytes,
+    >,
+    stream_nonblocking: std::sync::atomic::AtomicBool,
+}
+
+impl PrivateLocalListener {
+    pub(crate) fn bind(path: &std::path::Path) -> std::io::Result<Self> {
+        use interprocess::os::windows::{
+            named_pipe::PipeListenerOptions, security_descriptor::SecurityDescriptor,
+        };
+
+        let sddl = widestring::U16CString::from_str("D:P(A;;GA;;;SY)(A;;GA;;;OW)")
+            .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidInput, err))?;
+        let security_descriptor = SecurityDescriptor::deserialize(&sddl)?;
+        // The default 512-byte buffers serialize busy SSH output behind reader polling.
+        let listener = PipeListenerOptions::new()
+            .path(format!(r"\\.\pipe\{}", path.to_string_lossy()))
+            .input_buffer_size_hint(64 * 1024)
+            .output_buffer_size_hint(64 * 1024)
+            .security_descriptor(Some(security_descriptor))
+            .create_duplex()?;
+        Ok(Self {
+            listener,
+            stream_nonblocking: std::sync::atomic::AtomicBool::new(false),
+        })
+    }
+
+    pub(crate) fn accept(&self) -> std::io::Result<crate::ipc::LocalStream> {
+        let stream = self.listener.accept()?;
+        stream.set_nonblocking(self.stream_nonblocking.load(AtomicOrdering::Acquire))?;
+        Ok(crate::ipc::LocalStream::NamedPipe(stream.into()))
+    }
+
+    pub(crate) fn set_nonblocking(
+        &self,
+        mode: interprocess::local_socket::ListenerNonblockingMode,
+    ) -> std::io::Result<()> {
+        self.listener.set_nonblocking(mode.accept_nonblocking())?;
+        self.stream_nonblocking
+            .store(mode.stream_nonblocking(), AtomicOrdering::Release);
+        Ok(())
+    }
+}
+
 pub(crate) struct ChildPipe(std::fs::File);
 
 impl ChildPipe {
@@ -4261,6 +4308,7 @@ mod tests {
 
     #[test]
     fn windows_process_cwd_reads_normalized_child_launch_directory() {
+        use std::io::{Read, Write};
         use std::path::PathBuf;
 
         let name = format!("Herdr-Cwd-Case-{}", std::process::id());
@@ -4282,37 +4330,66 @@ mod tests {
                 .args(["/D", "/Q", "/K"])
                 .current_dir(super::normalize_cwd_for_launch_platform(&launch_cwd))
                 .stdin(Stdio::piped())
-                .stdout(Stdio::null())
+                .stdout(Stdio::piped())
                 .stderr(Stdio::null())
                 .spawn()
                 .expect("spawn cmd");
-            let observe = |expected: &PathBuf| {
-                let deadline = Instant::now() + Duration::from_secs(5);
+            let mut stdout = super::ChildPipe::new_reader(child.stdout.take().unwrap())
+                .expect("read cmd output");
+            // The inherited cwd is readable before cmd is ready to execute input.
+            let mut wait_for = |marker: &[u8]| {
+                let deadline = Instant::now() + Duration::from_secs(15);
+                let mut output = Vec::new();
                 loop {
-                    let observed = super::process_cwd(child.id());
-                    if observed.as_ref() == Some(expected) || Instant::now() >= deadline {
-                        break observed;
+                    let mut buffer = [0; 1024];
+                    match stdout.read(&mut buffer) {
+                        Ok(0) => break,
+                        Ok(len) => {
+                            output.extend_from_slice(&buffer[..len]);
+                            if output.windows(marker.len()).any(|part| part == marker) {
+                                return Ok(());
+                            }
+                        }
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+                        Err(error) => return Err(error.to_string()),
+                    }
+                    if Instant::now() >= deadline {
+                        break;
                     }
                     thread::sleep(Duration::from_millis(20));
                 }
+                Err(format!(
+                    "cmd did not acknowledge {}: {}",
+                    String::from_utf8_lossy(marker),
+                    String::from_utf8_lossy(&output)
+                ))
             };
-            let initial = observe(&cwd);
-            use std::io::Write;
+            writeln!(child.stdin.as_ref().unwrap(), "echo herdr-cwd-ready\r")
+                .expect("check cmd readiness");
+            let ready = wait_for(b"herdr-cwd-ready");
+            let initial = super::process_cwd(child.id());
             writeln!(
                 child.stdin.as_ref().unwrap(),
-                "cd /d \"{}\"\r",
+                "cd /d \"{}\" 2>&1 && echo herdr-cwd-changed\r",
                 changed.display()
             )
             .expect("change cmd cwd");
-            let after_cd = observe(&changed);
+            let cd_completed = wait_for(b"herdr-cwd-changed");
+            let after_cd = super::process_cwd(child.id());
             let pane_cwd = super::pane_process_cwd(child.id());
             let _ = child.kill();
             let _ = child.wait();
-            observations.push((shell, initial, after_cd, pane_cwd));
+            observations.push((shell, ready, initial, cd_completed, after_cd, pane_cwd));
         }
         let _ = fs::remove_dir_all(&cwd);
-        for (shell, initial, after_cd, pane_cwd) in observations {
+        for (shell, ready, initial, cd_completed, after_cd, pane_cwd) in observations {
+            assert!(ready.is_ok(), "{} readiness: {ready:?}", shell.display());
             assert_eq!(initial, Some(cwd.clone()), "{} launch cwd", shell.display());
+            assert!(
+                cd_completed.is_ok(),
+                "{} cd completion: {cd_completed:?}",
+                shell.display()
+            );
             assert_eq!(
                 after_cd,
                 Some(changed.clone()),

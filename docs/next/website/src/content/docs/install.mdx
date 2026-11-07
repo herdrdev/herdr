@@ -137,6 +137,8 @@ For direct installs, changing channels checks the selected channel and installs 
 
 Preview builds are regularly published GitHub prereleases from the current development branch. They are useful when you want fixes before the next stable release, but they can regress. Homebrew, mise, and Nix installs do not use the preview channel.
 
+The preview channel also installs stable releases when their version is higher than the latest preview's base version. It stays configured for preview, so a later preview based on that stable release becomes available automatically. Update checks do not offer releases based on an older version than the installed binary.
+
 Stable is the recommended channel for normal Windows use. Preview receives fixes sooner but can regress, so opt in only when you want that tradeoff. Existing Windows preview installs remain on preview until you switch them explicitly. If an older preview build rejects `herdr channel set stable`, run `herdr update` once on preview, then retry the channel switch.
 
 By default, `herdr update` installs the new binary and leaves endpoint-generation-1 servers and their pane processes running. Start Herdr again to reconnect with the updated client. Client-only changes work immediately. A new server-side action stays unavailable until that server is updated and restarted; the client shows a notice instead of disconnecting. Servers from before endpoint generation 1 need one final stop during update.

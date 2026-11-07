@@ -2,11 +2,15 @@ use super::*;
 
 /// Run the headless server. This is the entry point called from main.rs.
 pub fn run_server() -> io::Result<()> {
+    let launcher_warning = crate::platform::leave_launcher_job();
     crate::platform::ignore_server_hangup();
     let args: Vec<String> = std::env::args().collect();
     let handoff_import = args.get(2).map(String::as_str) == Some("--handoff-import");
     let process_context = crate::platform::prepare_server_process(handoff_import);
     init_logging();
+    if let Some(warning) = launcher_warning {
+        warn!("{warning}");
+    }
     match process_context {
         Ok(true) => info!("server using persistent user service context"),
         Ok(false) => {}

@@ -319,19 +319,47 @@ fn set_sigpipe_disposition(handler: libc::sighandler_t) {
     }
 }
 
-extern "C" fn discard_signal(_signal: libc::c_int) {}
+static LAST_SERVER_HANGUP_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn monotonic_millis() -> u64 {
+    let mut now: libc::timespec = unsafe { std::mem::zeroed() };
+    if unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut now) } != 0 {
+        return 0;
+    }
+    (now.tv_sec as u64)
+        .saturating_mul(1000)
+        .saturating_add(now.tv_nsec as u64 / 1_000_000)
+        .saturating_add(1)
+}
+
+fn record_server_hangup() {
+    LAST_SERVER_HANGUP_MS.store(monotonic_millis(), std::sync::atomic::Ordering::Relaxed);
+}
+
+fn within_server_hangup_window(hangup_ms: u64, now_ms: u64) -> bool {
+    hangup_ms != 0
+        && now_ms
+            .checked_sub(hangup_ms)
+            .is_some_and(|elapsed| elapsed <= 5_000)
+}
+
+pub(crate) fn server_hangup_is_recent() -> bool {
+    within_server_hangup_window(
+        LAST_SERVER_HANGUP_MS.load(std::sync::atomic::Ordering::Relaxed),
+        monotonic_millis(),
+    )
+}
 
 /// The server must outlive the terminal or shell that launched it, like tmux.
 /// Installed at process start so SIGHUP cannot stop the server before its event
 /// loop runs. A handler, unlike SIG_IGN, resets to the default on exec, so
 /// child processes keep normal hangup behavior.
 pub(crate) fn ignore_server_hangup() {
-    let mut action: libc::sigaction = unsafe { std::mem::zeroed() };
-    action.sa_sigaction = discard_signal as extern "C" fn(libc::c_int) as libc::sighandler_t;
-    action.sa_flags = libc::SA_RESTART;
-    unsafe {
-        libc::sigemptyset(&mut action.sa_mask);
-        libc::sigaction(libc::SIGHUP, &action, std::ptr::null_mut());
+    // Record before async pane-exit handling, even if Tokio has not polled SIGHUP yet.
+    if let Err(err) =
+        unsafe { signal_hook::low_level::register(libc::SIGHUP, record_server_hangup) }
+    {
+        tracing::warn!(%err, "failed to install SIGHUP handler");
     }
 }
 
@@ -618,6 +646,22 @@ mod tests {
     use super::*;
 
     #[test]
+    fn server_hangup_evidence_expires() {
+        assert!(!within_server_hangup_window(0, 100));
+        assert!(within_server_hangup_window(100, 100));
+        assert!(within_server_hangup_window(100, 5_100));
+        assert!(!within_server_hangup_window(100, 5_101));
+        assert!(!within_server_hangup_window(100, 99));
+    }
+
+    #[test]
+    fn server_hangup_is_recorded_before_async_handling() {
+        ignore_server_hangup();
+        assert_eq!(unsafe { libc::raise(libc::SIGHUP) }, 0);
+        assert!(server_hangup_is_recent());
+    }
+
+    #[test]
     fn server_signal_monitor_survives_hangup_and_reports_terminate() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -625,12 +669,15 @@ mod tests {
             .unwrap();
         runtime.block_on(async {
             let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+            ignore_server_hangup();
             spawn_server_signal_monitor(move |signal| {
                 let _ = tx.send(signal);
             });
 
             // An unhandled SIGHUP would end the test process here.
-            assert_eq!(unsafe { libc::kill(libc::getpid(), libc::SIGHUP) }, 0);
+            // raise() runs the handler on this thread before returning, unlike kill().
+            assert_eq!(unsafe { libc::raise(libc::SIGHUP) }, 0);
+            assert!(server_hangup_is_recent());
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
             assert!(rx.try_recv().is_err());
 
@@ -731,9 +778,118 @@ fn validate_shared_ssh_dir(dir: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+pub(crate) struct PinnedSshControlSocket {
+    pub(crate) alias: PathBuf,
+    original: PathBuf,
+    dev: u64,
+    ino: u64,
+}
+
+impl PinnedSshControlSocket {
+    pub(crate) fn new(path: &Path) -> std::io::Result<Self> {
+        use std::os::unix::fs::{DirBuilderExt, FileTypeExt, MetadataExt};
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT_PIN: AtomicU64 = AtomicU64::new(0);
+
+        let parent = path.parent().ok_or(std::io::ErrorKind::InvalidInput)?;
+        validate_shared_ssh_dir(parent)?;
+        let metadata = std::fs::symlink_metadata(path)?;
+        if !metadata.file_type().is_socket() || metadata.uid() != unsafe { libc::geteuid() } {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "SSH control path must be a socket owned by the current user",
+            ));
+        }
+        let directory = parent.join(format!(
+            "r-{}-{}",
+            std::process::id(),
+            NEXT_PIN.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::DirBuilder::new().mode(0o700).create(&directory)?;
+        let pinned = Self {
+            alias: directory.join("ctl"),
+            original: path.to_owned(),
+            dev: metadata.dev(),
+            ino: metadata.ino(),
+        };
+        // A separate name pins the old inode; a replacement cannot receive its stop request.
+        std::fs::hard_link(path, &pinned.alias)?;
+        let linked = std::fs::symlink_metadata(&pinned.alias)?;
+        if (linked.dev(), linked.ino()) != (pinned.dev, pinned.ino) {
+            return Err(std::io::ErrorKind::NotFound.into());
+        }
+        Ok(pinned)
+    }
+
+    pub(crate) fn is_current(&self) -> std::io::Result<bool> {
+        use std::os::unix::fs::MetadataExt;
+        match std::fs::symlink_metadata(&self.original) {
+            Ok(metadata) => Ok((metadata.dev(), metadata.ino()) == (self.dev, self.ino)),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(error) => Err(error),
+        }
+    }
+}
+
+impl Drop for PinnedSshControlSocket {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.alias);
+        if let Some(directory) = self.alias.parent() {
+            let _ = std::fs::remove_dir(directory);
+        }
+    }
+}
+
 #[cfg(test)]
 mod shared_ssh_tests {
     use super::*;
+
+    #[test]
+    fn pinned_ssh_socket_connects_old_listener_after_original_is_replaced() {
+        use std::io::{Read as _, Write as _};
+        use std::os::unix::net::{UnixListener, UnixStream};
+
+        let directory = create_remote_ssh_config_dir("ctl").unwrap();
+        let path = directory.join("ctl");
+        let old = UnixListener::bind(&path).unwrap();
+        let pinned = PinnedSshControlSocket::new(&path).unwrap();
+        assert!(pinned.is_current().unwrap());
+        std::fs::remove_file(&path).unwrap();
+        let replacement = UnixListener::bind(&path).unwrap();
+        assert!(!pinned.is_current().unwrap());
+        let mut client = UnixStream::connect(&pinned.alias).unwrap();
+        let (mut server, _) = old.accept().unwrap();
+        server.write_all(b"old").unwrap();
+        let mut reply = [0; 3];
+        client.read_exact(&mut reply).unwrap();
+        assert_eq!(&reply, b"old");
+        let alias = pinned.alias.clone();
+        drop(pinned);
+        assert!(!alias.exists());
+        let _client = UnixStream::connect(&path).unwrap();
+        replacement.accept().unwrap();
+        drop((old, replacement));
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn ssh_socket_pin_rejects_files_symlinks_and_public_parent() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+        use std::os::unix::net::UnixListener;
+
+        let directory = create_remote_ssh_config_dir("ctl").unwrap();
+        let file = directory.join("file");
+        std::fs::write(&file, b"not a socket").unwrap();
+        assert!(PinnedSshControlSocket::new(&file).is_err());
+        let path = directory.join("ctl");
+        let _listener = UnixListener::bind(&path).unwrap();
+        let link = directory.join("link");
+        symlink(&path, &link).unwrap();
+        assert!(PinnedSshControlSocket::new(&link).is_err());
+        std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(PinnedSshControlSocket::new(&path).is_err());
+        std::fs::remove_dir_all(directory).unwrap();
+    }
 
     #[test]
     fn shared_ssh_control_path_is_stable_scoped_and_bounded() {

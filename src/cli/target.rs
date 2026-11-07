@@ -80,6 +80,7 @@ pub(super) fn api_client() -> io::Result<ApiClient> {
                     &target.profile.target,
                     &target.profile.session,
                     true,
+                    true,
                 )
                 .map_err(|error| {
                     io::Error::new(
@@ -123,20 +124,23 @@ pub(super) fn server_status(
         let Some(bridge) = target.bridge.as_ref() else {
             return Err(error);
         };
-        let Some(failure) = bridge.reported_failure() else {
-            return Err(error);
-        };
-        if !bridge.used_cached_metadata
-            || !crate::remote::SavedSshApiBridge::stale_metadata_failure(&failure)
-        {
-            return Err(failure.into());
+        let failure = bridge.reported_failure();
+        let stale_metadata = bridge.used_cached_metadata
+            && failure
+                .as_ref()
+                .is_some_and(crate::remote::SavedSshApiBridge::stale_metadata_failure);
+        if !bridge.can_retry || (!stale_metadata && !bridge.recover_transport()) {
+            return Err(failure.map(Into::into).unwrap_or(error));
         }
-        bridge.invalidate_metadata();
+        if stale_metadata {
+            bridge.invalidate_metadata();
+        }
         target.bridge.take();
         target.bridge = Some(crate::remote::SavedSshApiBridge::start(
             target.profile.id.as_str(),
             &target.profile.target,
             &target.profile.session,
+            !stale_metadata,
             false,
         )?);
         Ok(())

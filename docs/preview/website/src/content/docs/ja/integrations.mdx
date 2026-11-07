@@ -61,7 +61,7 @@ Herdr は Linux/macOS の統合設定と全プラットフォームの新規フ�
 
 どのインテグレーションも、エージェントが今どのセッションにいるかを Herdr に伝えるので、サーバーの再起動後に Herdr がそのセッションを resume できます。`[session] resume_agents_on_restore = false` で無効にできます。
 
-Pi、OMP、Kimi Code CLI、OpenCode、Kilo Code CLI、MastraCode のインテグレーションは、エージェントの状態も報告します。報告している間、Herdr は画面を読む代わりにその報告を使います。その他のインテグレーションでは、状態は画面検出に任せます。
+Pi、OMP、Kimi Code CLI、OpenCode、Kilo Code CLI、MastraCode のインテグレーションは、エージェントの状態も報告します。報告している間、Herdr は画面を読む代わりにその報告を使います。Codex は `--no-daemon` で起動した場合にターン状態を報告し、表示中のブロッカーは引き続き画面検出で扱います。その他のインテグレーションでは、状態は画面検出に任せます。
 
 エージェントネイティブのセッション復元には最新の Herdr インテグレーションが必要です: Pi インテグレーションはバージョン `2`、OMP は `3`、Claude Code は `6`、Codex は `5`、GitHub Copilot CLI は `2`、Devin CLI は `2`、Droid は `2`、Kimi Code CLI は `3`、Qoder CLI は `2`、Qwen Code は `1`、Letta Code は `1`、Cursor Agent CLI は `1`、Grok CLI は `2`、OpenCode は `5`、Kilo Code CLI は `1`、Hermes Agent は `5`、MastraCode は `1`、Antigravity CLI は `1` です。インストール済みバージョンは `herdr integration status` で確認してください。
 
@@ -125,7 +125,7 @@ Codex フックをインストールします:
 herdr integration install codex
 ```
 
-Codex フックは、他のインテグレーションと同じローカルソケット API を通じてセッション識別を報告します。Codex の状態は Herdr のスクリーンマニフェスト検出から得られます。
+Codex を `--no-daemon` で起動すると、フックがローカルソケット API を通じてセッション識別とターンの開始・終了を報告します。表示中のブロッカーやフックが使えない場合は、引き続き画面検出が補います。共有 Codex デーモンは別のペインへフックを送ることがあるため、確実な報告には `--no-daemon` を使ってください。デーモンの自動起動を無効にするだけでは、既存のデーモンは停止しません。
 
 Herdr はデフォルトで `~/.codex` を使い、`CODEX_HOME` が設定されていればそちらを使います。Codex の設定ディレクトリはあらかじめ存在している必要があります。インストールは `herdr-agent-state.sh` を書き込み、`hooks.json` を更新し、`config.toml` に `[features] hooks = true` があることを保証します。非推奨のトップレベル `codex_hooks` フラグが存在すれば削除もします。アンインストールは `hooks.json` から Herdr のエントリを削除してフックスクリプトを削除しますが、`config.toml` は変更しません。
 

@@ -4019,6 +4019,101 @@ fn client_shell_host_theme_follows_foreground_client() {
     assert!(!server.app.state.host_terminal_appearance_explicit);
 }
 
+#[tokio::test]
+async fn foreground_switch_coalesces_pending_appearance_before_releasing_colors() {
+    use crate::terminal::{TerminalId, TerminalRuntime};
+    use crate::terminal_theme::{HostAppearance, RgbColor, TerminalTheme};
+
+    for incoming in [Some(HostAppearance::Dark), None] {
+        let mut server = test_headless_server();
+        server.app.set_host_terminal_theme(TerminalTheme {
+            background: Some(RgbColor {
+                r: 17,
+                g: 17,
+                b: 17,
+            }),
+            ..Default::default()
+        });
+        server
+            .app
+            .set_host_terminal_appearance_state(Some(HostAppearance::Dark), true);
+        let (runtime, mut rx) = TerminalRuntime::test_with_channel(80, 24);
+        runtime.apply_host_terminal_theme(server.app.state.host_terminal_theme);
+        runtime.apply_host_terminal_appearance(Some(HostAppearance::Dark));
+        runtime.test_process_pty_bytes(b"\x1b[?2031h");
+        let id = TerminalId::alloc();
+        server.app.terminal_runtimes.insert(id.clone(), runtime);
+        server
+            .app
+            .set_host_terminal_appearance_state(Some(HostAppearance::Light), true);
+        assert!(rx.try_recv().is_err());
+
+        let mut client = ClientConnection::new(
+            (80, 24),
+            crate::kitty_graphics::HostCellSize::default(),
+            2,
+            RenderEncoding::SemanticFrame,
+            None,
+        );
+        client.host_terminal_theme.background = Some(RgbColor {
+            r: 255,
+            g: 255,
+            b: 255,
+        });
+        client.host_terminal_appearance = incoming;
+        client.host_terminal_appearance_explicit = incoming.is_some();
+        server.clients.insert(2, client);
+        server.foreground_client_id = Some(2);
+        server.sync_foreground_client_state();
+        assert!(
+            rx.try_recv().is_err(),
+            "must not announce outgoing client A Light"
+        );
+        let expected =
+            incoming.map(|appearance| bytes::Bytes::from_static(appearance.color_scheme_report()));
+        assert_eq!(
+            server
+                .app
+                .terminal_runtimes
+                .get(&id)
+                .unwrap()
+                .test_process_pty_bytes(b"\x1b[?996n"),
+            expected.into_iter().collect::<Vec<_>>()
+        );
+    }
+}
+
+#[test]
+fn pending_host_appearance_is_released_by_headless_deadline() {
+    use crate::terminal_theme::{HostAppearance, RgbColor, TerminalTheme};
+
+    let mut server = test_headless_server();
+    server.app.set_host_terminal_theme(TerminalTheme {
+        background: Some(RgbColor {
+            r: 17,
+            g: 17,
+            b: 17,
+        }),
+        ..Default::default()
+    });
+    server
+        .app
+        .set_host_terminal_appearance_state(Some(HostAppearance::Dark), true);
+    server
+        .app
+        .set_host_terminal_appearance_state(Some(HostAppearance::Light), true);
+    let deadline = server.app.pending_host_appearance_deadline.unwrap();
+    assert!(
+        server
+            .app
+            .next_headless_loop_deadline_with_git_refresh(Instant::now(), false, false)
+            .unwrap()
+            <= deadline
+    );
+    server.handle_scheduled_tasks_headless(deadline, false);
+    assert!(server.app.pending_host_appearance_deadline.is_none());
+}
+
 #[test]
 fn terminal_clients_store_known_cell_geometry_independently_of_pixel_mouse() {
     let mut server = test_headless_server();

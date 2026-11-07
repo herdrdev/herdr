@@ -272,7 +272,10 @@ impl App {
             AppEvent::PaneDied {
                 pane_id,
                 exit_reason,
-            } if exit_reason.requires_session_checkpoint() && self.find_pane(*pane_id).is_some() && !self.overlay_panes.contains_key(pane_id)
+            } if (exit_reason.requires_session_checkpoint()
+                || (*exit_reason == crate::platform::ChildExitReason::Exited
+                    && (self.server_hangup_probe)()))
+                && self.find_pane(*pane_id).is_some() && !self.overlay_panes.contains_key(pane_id)
         );
         if checkpointed_pane_exit {
             self.checkpoint_session_before_pane_exit();
@@ -611,7 +614,7 @@ impl App {
             cwd,
             self.state.pane_scrollback_limit_bytes,
             self.state.host_terminal_theme,
-            self.state.host_terminal_appearance,
+            self.pane_host_terminal_appearance(),
             crate::pane::PaneShellConfig::new(&self.state.default_shell, self.state.shell_mode),
             &launch_env,
             self.event_tx.clone(),

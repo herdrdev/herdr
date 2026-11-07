@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## [0.9.5] - 2026-10-14
+
+This is a hotfix release for v0.9.4. See the v0.9.4 notes for the full feature release: https://github.com/herdrdev/herdr/releases/tag/v0.9.4
+
+### Fixed
+- Prefix shortcuts work again when the terminal sends the next key as plain text. This affected Tern, Chinese, Japanese and Korean input methods on macOS, and Ghostty `text:` keybinds that send the prefix and a key together. Workspace navigation had the same problem. (#5255)
+- Codex sessions no longer start with a "clamping Interrupt hook timeout" warning. Herdr no longer installs Codex turn hooks, and Codex status comes from screen detection again. Run `herdr integration install codex` to update. (#5246, #5278)
+- Claude Code questions show as blocked in named sessions. (#4573, #5192)
+- On Windows, plugin panes start even when a folder on `PATH` has the same name as the plugin's program. (#5267, #5269, thanks @JJLiebig)
+- On Windows, Claude Code session tracking works when the user folder name contains non-ASCII characters, such as Korean. (#5253, #5270, thanks @JJLiebig)
+- Adding a Windows machine no longer prints raw PowerShell progress output. (#4639, #5282, thanks @JJLiebig)
+
 ## [0.9.4] - 2026-10-13
 
 ### Added

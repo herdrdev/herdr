@@ -64,6 +64,12 @@ The full keymap and the binding syntax live in the [keybinding reference](/docs/
 
 The Goto picker (`prefix+g`) lists each agent or terminal on its own row, grouped by workspace. Split tabs never hide their panes behind another row. Click a row or press Enter to jump directly to it. Press `/` to search names, agent kinds, tabs, workspaces, branches, or paths; use Up/Down or `j/k` to move between rows when not typing a search. Left/Right jumps to the first agent or terminal in the previous/next workspace section, without wrapping. While editing a search, Left/Right moves the text cursor instead. Outside search, `b/w/i/d` filter blocked, working, idle, or done agents, and `a` shows all terminals again. The selected destination's location and path appear below the list. When the list overflows, use the mouse wheel, click the scrollbar track, or drag its thumb to scroll without opening a destination.
 
+Press Esc or Ctrl+[ to leave workspace navigation. In the Go To picker, `/` also opens search on layouts that require Shift to type it.
+
+Pane input follows the keyboard modes requested by the app. Plain shells receive Ctrl+Shift+letter as its control byte; Super, Hyper, and Meta chords are dropped when the pane cannot represent them. Apps using Kitty keyboard input receive the modifiers and key events they request. Without report-all mode, modified Enter, Tab, and Backspace do not receive release reports. Keypad keys and modifier-only presses are not forwarded.
+
+On non-Latin layouts, Ctrl-only shortcuts such as Ctrl+W can use the physical base key reported by a Kitty-capable host. Latin layout characters, Ctrl+Shift chords, and AltGr keep their layout meaning. Terminals that do not report physical keys cannot provide the same layout-independent shortcuts.
+
 ## Editing text fields
 
 Herdr's naming dialogs, worktree branch fields, filters, and copy-mode search support editing at the cursor. These shortcuts apply to Herdr-owned fields, not to the shell or agent inside a pane.

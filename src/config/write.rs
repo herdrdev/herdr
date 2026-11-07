@@ -49,7 +49,7 @@ impl ConfigEdit<'_> {
 pub(crate) fn update_file_at(
     path: &std::path::Path,
     description: &str,
-    update: impl FnOnce(&str) -> String,
+    update: impl FnOnce(&str) -> Result<String, String>,
 ) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
@@ -64,13 +64,13 @@ pub(crate) fn update_file_at(
             ));
         }
     };
-    std::fs::write(path, update(&content))
-        .map_err(|error| format!("failed to save {description}: {error}"))
+    let updated = update(&content)?;
+    std::fs::write(path, updated).map_err(|error| format!("failed to save {description}: {error}"))
 }
 
 pub(crate) fn write_edit(edit: ConfigEdit<'_>) -> Result<(), String> {
     update_file_at(&super::config_path(), edit.description(), |content| {
-        edit.apply(content)
+        Ok(edit.apply(content))
     })
 }
 
@@ -90,7 +90,11 @@ mod tests {
         .unwrap();
 
         update_file_at(&path, "onboarding setting", |content| {
-            crate::config::upsert_top_level_bool(content, "onboarding", false)
+            Ok(crate::config::upsert_top_level_bool(
+                content,
+                "onboarding",
+                false,
+            ))
         })
         .unwrap();
 

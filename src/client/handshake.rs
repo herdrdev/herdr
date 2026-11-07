@@ -314,6 +314,7 @@ mod tests {
     use super::*;
 
     fn stream_pair() -> (LocalStream, LocalStream) {
+        #[cfg(unix)]
         use interprocess::local_socket::traits::Listener as _;
         let path = std::env::temp_dir().join(format!(
             "hhs-{}-{:x}.sock",

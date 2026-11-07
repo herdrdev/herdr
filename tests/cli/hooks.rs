@@ -60,11 +60,15 @@ fn run_shell_hook_with_env(
     fs::create_dir_all(&base).unwrap();
     let socket_path = base.join("herdr.sock");
     let listener = UnixListener::bind(&socket_path).unwrap();
+    let hook_exited = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let server_hook_exited = hook_exited.clone();
 
+    // Accept until the hook has exited instead of racing a timer on slow runners.
     let server = thread::spawn(move || {
         listener.set_nonblocking(true).unwrap();
-        let deadline = Instant::now() + Duration::from_millis(700);
-        while Instant::now() < deadline {
+        loop {
+            // Read before accept so a connection made just before exit is still seen.
+            let exited = server_hook_exited.load(std::sync::atomic::Ordering::Acquire);
             match listener.accept() {
                 Ok((mut stream, _)) => {
                     let mut line = String::new();
@@ -75,13 +79,13 @@ fn run_shell_hook_with_env(
                     let _ = stream.flush();
                     return Some(line);
                 }
+                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock && exited => return None,
                 Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
                     thread::sleep(Duration::from_millis(10));
                 }
                 Err(err) => panic!("accept failed: {err}"),
             }
         }
-        None
     });
 
     let hook_path = Path::new(env!("CARGO_MANIFEST_DIR")).join(asset_path);
@@ -106,6 +110,7 @@ fn run_shell_hook_with_env(
     drop(stdin);
 
     let output = child.wait_with_output().unwrap();
+    hook_exited.store(true, std::sync::atomic::Ordering::Release);
     assert!(
         output.status.success(),
         "hook failed: status={:?} stderr={} stdout={}",
@@ -222,21 +227,6 @@ fn codex_hook_reports_persisted_root_session_and_ignores_ephemeral_or_nested_ses
         &[("CODEX_THREAD_ID", "parent-session")],
     )
     .is_none());
-
-    for (action, event) in [
-        ("working", "UserPromptSubmit"),
-        ("idle", "Stop"),
-        ("idle", "Interrupt"),
-    ] {
-        let request = run_codex_hook(
-            action,
-            &format!(r#"{{"hook_event_name":"{event}","session_id":"codex-session"}}"#),
-        )
-        .expect("Codex turn hook should report state");
-        assert_eq!(request["method"], "pane.report_agent");
-        assert_eq!(request["params"]["state"], action);
-        assert_eq!(request["params"]["agent_session_id"], "codex-session");
-    }
 }
 
 #[test]

@@ -15,6 +15,8 @@ On Linux and macOS clients, when `remote.manage_ssh_config=true`, Herdr shares a
 
 The shared connection uses `ControlPersist 600` (10 minutes of idle time); this is not MFA validity. Active connections can remain open, while corporate policy, the SSH server, or the network may end them sooner. Local Windows recovery is not supported yet. For unmanaged SSH connections, authentication remains your responsibility: running `ssh` by itself does not grant Herdr approval unless it uses the shared ControlPath. Host-key checking is unchanged; an unknown or changed host key remains **Attention**.
 
+Saved TUI connections check whether an existing shared SSH connection can open a new channel. CLI status and API commands check only after an initial read-only connection failure. If reuse fails while a fresh connection to the same host succeeds, Herdr retires the old connection from reuse and reconnects. Existing channels stay open. A fresh connection that needs authentication or rejects the host key does not trigger this recovery. API commands retry connection setup at most once and never repeat a request that may already have changed remote state.
+
 ## Before you connect
 
 You need normal SSH access to the remote machine. Verify it first:
