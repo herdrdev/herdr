@@ -1,0 +1,45 @@
+id = "vibe"
+version = "2026.11.07.1"
+min_engine_version = 2
+updated_at = "2026-11-07T00:00:00Z"
+aliases = ["vibe-rs", "mistral-vibe"]
+
+# Mistral Vibe renders a full-screen Textual TUI. The reliable chrome marker is
+# the bottom status bar: "<cwd> ⧉    usage ██▏ 36% · PAYG · ctx ▊ 97.2k/800k".
+# Idle is the bare ">" prompt under the model line; PTY activity is the working
+# authority, with explicit rules for interrupt/confirm chrome below.
+# Evidence captured with: herdr pane read <pane> --source detection --format text
+
+[[rules]]
+id = "vibe_idle"
+state = "idle"
+priority = 100
+region = "bottom_non_empty_lines(6)"
+visible_idle = true
+all = [
+  { line_regex = ['usage\\s+.*ctx\\s+[^\\d]*[\\d.,]+\\s*/'] },
+  { line_regex = ['^>\\s*$'] },
+]
+
+[[rules]]
+id = "vibe_interrupt_working"
+state = "working"
+priority = 950
+region = "bottom_non_empty_lines(5)"
+visible_working = true
+any = [
+  { contains = ["esc to interrupt"] },
+  { contains = ["ctrl+c to interrupt"] },
+]
+
+[[rules]]
+id = "vibe_confirm_blocked"
+state = "blocked"
+priority = 980
+region = "bottom_non_empty_lines(14)"
+visible_blocker = true
+any = [
+  { contains = ["enter to confirm"] },
+  { contains = ["allow once"] },
+  { contains = ["do you want to proceed"] },
+]
