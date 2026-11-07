@@ -1314,3 +1314,57 @@ fn client_settings_preview_restore_and_endpoint_integrations_are_owned_by_overla
         })) if integration_messages == &["installed codex"]
     ));
 }
+
+#[test]
+fn settings_integrations_overlay_preserves_long_labels_without_status_collision() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    state.set_pane_surface(surface());
+    state.open_settings_overlay();
+    state.compose(106, 30).expect("settings overlay");
+    for _ in 0..3 {
+        let next = state.handle_input_bytes(b"\t");
+        assert!(next.actions.is_empty());
+    }
+    let integrations = state.handle_input_bytes(b"\t");
+    let [ClientShellAction::Endpoint { request, .. }] = &integrations.actions[..] else {
+        panic!("integration section should request endpoint status");
+    };
+    assert!(matches!(
+        request.method,
+        crate::api::schema::Method::IntegrationList(_)
+    ));
+    let request_id = request.id.clone();
+    assert!(
+        state
+            .handle_endpoint_result(
+                "boot-1",
+                &request_id,
+                Ok(crate::api::schema::ResponseResult::IntegrationList {
+                    integrations: vec![crate::api::schema::IntegrationInfo {
+                        target: crate::api::schema::IntegrationTarget::AntigravityCli,
+                        label: "antigravity-cli".into(),
+                        command: "antigravity".into(),
+                        available: false,
+                        state: crate::api::schema::IntegrationState::NotInstalled,
+                    },],
+                }),
+            )
+            .0
+    );
+    let frame = state.compose(106, 30).expect("loaded integrations");
+    let text = frame
+        .cells
+        .chunks(frame.width as usize)
+        .map(|row| {
+            row.iter()
+                .map(|cell| cell.symbol.as_str())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(text.contains("antigravity-cli"));
+    assert!(!text.contains("antigravitynot found"));
+    assert!(!text.contains("antigravity-clinot found"));
+    assert!(text.contains("antigravity-cli   not found"));
+}

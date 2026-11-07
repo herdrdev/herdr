@@ -371,15 +371,15 @@ fn render_integrations(
             buffer,
             area.x + 3,
             y,
-            11.min(area.width.saturating_sub(3)),
-            &format!("{:<9}", integration.label),
+            18.min(area.width.saturating_sub(3)),
+            &format!("{:<16}", integration.label),
             Style::default().fg(palette.subtext0).bg(palette.panel_bg),
         );
         put_text(
             buffer,
-            area.x + 14,
+            area.x + 21,
             y,
-            area.width.saturating_sub(14),
+            area.width.saturating_sub(21),
             status,
             Style::default().fg(palette.overlay1).bg(palette.panel_bg),
         );
