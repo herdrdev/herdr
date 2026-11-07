@@ -39,6 +39,21 @@ pub fn is_git_work_tree(path: &Path) -> bool {
         .is_ok_and(|o| o.status.success() && o.stdout.starts_with(b"true"))
 }
 
+/// True when a worktree can be created from `path`: it is in a git work tree that already has a
+/// commit (a fresh `git init` has none, and `git worktree add` fails with `invalid reference: HEAD`).
+pub fn can_create_worktree(path: &Path) -> bool {
+    is_git_work_tree(path)
+        && std::process::Command::new("git")
+            .arg("-C")
+            .arg(path)
+            .args(["rev-parse", "--verify", "--quiet", "HEAD"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok_and(|s| s.success())
+}
+
 pub fn parse_git_worktree_porcelain(text: &str) -> Vec<ParsedWorktree> {
     let mut worktrees = Vec::new();
     let mut current_path: Option<PathBuf> = None;

@@ -459,7 +459,10 @@ fn req3_periodic_reconciliation_blocked_once_and_non_mcp_quiet_screen_done() {
     );
     clock.advance(Duration::from_secs(21));
     let reg = service.reconcile_once().unwrap();
-    assert_eq!(reg.result(&mcp_agent.id).unwrap().state, "exited");
+    assert!(
+        reg.result(&mcp_agent.id).is_none(),
+        "a closed tab removes the agent"
+    );
 }
 
 #[test]
@@ -2508,8 +2511,8 @@ fn an_exit_is_traced_and_a_resolvable_pane_is_never_declared_gone() {
     terminals.remove_status(&agent.pane);
     service.reconcile_once().unwrap();
     clock.advance(Duration::from_secs(25));
-    let reg = service.reconcile_once().unwrap();
-    assert_eq!(reg.result(&agent.id).unwrap().state, "exited");
+    service.reconcile_once().unwrap();
+    assert!(service.load_registry().unwrap().result(&agent.id).is_none());
     let log = std::fs::read_to_string(tmp.path().join("state").join("service.log")).unwrap();
     assert!(
         log.contains("agent_exited") && log.contains(&agent.id),
@@ -2677,4 +2680,167 @@ fn a_running_run_asks_for_fast_ticks_until_it_is_done() {
     clock.advance(Duration::from_secs(31));
     service.reconcile_once().unwrap();
     assert!(!service.wants_fast_tick());
+}
+
+#[test]
+fn a_repository_without_commits_gets_no_default_worktree() {
+    let tmp = TestDir::new("test");
+    assert!(std::process::Command::new("git")
+        .args(["init", "-q"])
+        .current_dir(tmp.path())
+        .status()
+        .unwrap()
+        .success());
+    let (service, _terminals, _clock) = test_service(tmp.path());
+    let agent = service
+        .spawn(ServiceSpawnRequest {
+            root: tmp.path().to_path_buf(),
+            role: "coder".into(), // defaults to worktree = true
+            task: "t".into(),
+            ..ServiceSpawnRequest::default()
+        })
+        .expect("a fresh git init must not fail with invalid reference: HEAD");
+    assert!(agent.worktree.is_empty());
+}
+
+#[test]
+fn asking_for_a_worktree_without_commits_explains_what_to_do() {
+    let tmp = TestDir::new("test");
+    assert!(std::process::Command::new("git")
+        .args(["init", "-q"])
+        .current_dir(tmp.path())
+        .status()
+        .unwrap()
+        .success());
+    let (service, _terminals, _clock) = test_service(tmp.path());
+    let err = service
+        .spawn(ServiceSpawnRequest {
+            root: tmp.path().to_path_buf(),
+            role: "coder".into(),
+            task: "t".into(),
+            worktree: Some(true),
+            ..ServiceSpawnRequest::default()
+        })
+        .unwrap_err();
+    assert!(
+        err.contains("worktree_unavailable") && err.contains("commit"),
+        "{err}"
+    );
+    assert!(
+        service.load_registry().unwrap().agents.is_empty(),
+        "nothing is left half-created"
+    );
+}
+
+#[test]
+fn a_run_that_finishes_closes_the_task_it_was_launched_for() {
+    use super::patterns_run::task_of_objective;
+    assert_eq!(task_of_objective("Tarea #7: algo\n\nmás"), Some(7));
+    assert_eq!(task_of_objective("Task #12: x"), Some(12));
+    assert_eq!(task_of_objective("Tarea #7 sin dos puntos"), None);
+    assert_eq!(task_of_objective("Una tarea cualquiera"), None);
+
+    let tmp = TestDir::new("test");
+    let (service, terminals, clock) = test_service(tmp.path());
+    crate::create_task(
+        tmp.path(),
+        crate::NewTask {
+            id: 1,
+            title: "Servidor".into(),
+            description: String::new(),
+            criteria: Vec::new(),
+            issue: None,
+            issue_markdown: None,
+            links: Vec::new(),
+        },
+    )
+    .unwrap();
+    let run = service
+        .start_pattern_run(
+            tmp.path(),
+            Some("orchestrator-worker"),
+            None,
+            Some("Task #1: Servidor\n\nhazlo"),
+            None,
+            true,
+        )
+        .unwrap();
+    // something was published, so the quiet end is a healthy `done`
+    service
+        .publish_topic("results", "listo", None, Some(0), "brain-1")
+        .unwrap();
+    let mut reg = service.load_registry().unwrap();
+    for a in &mut reg.agents {
+        a.state = "idle".into();
+        let st = TerminalAgentStatus {
+            state: "live".into(),
+            status: "idle".into(),
+            pane: a.pane.clone(),
+            tab: a.tab.clone(),
+            title: a.label.clone(),
+            seq: 1,
+        };
+        terminals.set_status(&a.id, st.clone());
+        terminals.set_status(&a.pane, st);
+    }
+    service.save_registry(&reg).unwrap();
+    service.reconcile_once().unwrap();
+    assert_ne!(
+        crate::find_task(tmp.path(), "1").unwrap().status.state,
+        "done"
+    );
+    clock.advance(Duration::from_secs(31));
+    service.reconcile_once().unwrap();
+    assert_eq!(
+        service.get_pattern_run(tmp.path(), &run.id).unwrap().state,
+        patterns_run::PatternRunState::Done
+    );
+    assert_eq!(
+        crate::find_task(tmp.path(), "1").unwrap().status.state,
+        "done"
+    );
+}
+
+#[test]
+fn closing_an_agents_tab_removes_it_but_keeps_a_delivered_result() {
+    let tmp = TestDir::new("test");
+    let (service, terminals, clock) = test_service(tmp.path());
+    let spawn = |role: &str| {
+        service
+            .spawn(ServiceSpawnRequest {
+                root: tmp.path().to_path_buf(),
+                role: role.into(),
+                task: "t".into(),
+                mcp_url: Some("http://127.0.0.1:9999/mcp".into()),
+                ..ServiceSpawnRequest::default()
+            })
+            .unwrap()
+    };
+    let plain = spawn("tester");
+    let delivered = spawn("docs");
+    let mut reg = service.load_registry().unwrap();
+    reg.submit_result(&delivered.id, "informe final", &clock.now_rfc3339())
+        .unwrap();
+    service.save_registry(&reg).unwrap();
+    for a in [&plain, &delivered] {
+        terminals.remove_status(&a.id);
+        terminals.remove_status(&a.pane);
+    }
+    service.reconcile_once().unwrap();
+    assert!(
+        service.wants_fast_tick(),
+        "a pending disappearance is watched closely"
+    );
+    clock.advance(Duration::from_secs(6));
+    service.reconcile_once().unwrap();
+    let reg = service.load_registry().unwrap();
+    assert!(
+        reg.result(&plain.id).is_none(),
+        "its tab is gone, so is the agent"
+    );
+    assert_eq!(
+        reg.result(&delivered.id).unwrap().state,
+        "exited",
+        "the result stays as a record"
+    );
 }

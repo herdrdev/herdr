@@ -176,6 +176,40 @@ pub(crate) fn pattern_run_context(
 }
 
 /// Determine location for pattern runs storage.
+/// The task a run was launched for: its objective starts with "Tarea #N:" (or "Task #N:").
+pub(crate) fn task_of_objective(objective: &str) -> Option<u32> {
+    let head = objective.trim_start();
+    let rest = head
+        .strip_prefix("Tarea #")
+        .or_else(|| head.strip_prefix("Task #"))
+        .or_else(|| head.strip_prefix("tarea #"))
+        .or_else(|| head.strip_prefix("task #"))?;
+    let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+    (rest[digits.len()..].starts_with(':'))
+        .then(|| digits.parse().ok())
+        .flatten()
+}
+
+/// Project root of a run: the folder that owns its `.shepherd/pattern_runs.json`, else the root of
+/// one of its agents.
+fn root_of_run(
+    runs_file: &Path,
+    run: &PatternRun,
+    registry: &crate::AgentRegistryFile,
+) -> Option<PathBuf> {
+    let owner = runs_file.parent().filter(|d| d.ends_with(".shepherd"));
+    owner
+        .and_then(Path::parent)
+        .map(Path::to_path_buf)
+        .or_else(|| {
+            registry
+                .agents
+                .iter()
+                .find(|a| a.task_id == run.id && !a.root.is_empty())
+                .map(|a| PathBuf::from(&a.root))
+        })
+}
+
 pub fn pattern_runs_path(root: &Path, state_dir: &Path) -> PathBuf {
     let proj = root.join(".shepherd");
     if proj.is_dir() {
@@ -240,6 +274,22 @@ impl OrchestrationService {
             confirm_over_limit,
             None,
         )
+    }
+
+    /// A run that finished healthily closes the task it was launched for (see `task_of_objective`),
+    /// unless that task has subtasks of its own.
+    fn close_task_of_run(
+        &self,
+        runs_file: &Path,
+        run: &PatternRun,
+        registry: &crate::AgentRegistryFile,
+    ) {
+        if let (Some(number), Some(root)) = (
+            task_of_objective(&run.task),
+            root_of_run(runs_file, run, registry),
+        ) {
+            let _ = crate::complete_direct_task(root, &number.to_string());
+        }
     }
 
     /// Forgets the runs that are over (done, failed or stopped); running, paused and stalled ones stay.
@@ -609,6 +659,7 @@ impl OrchestrationService {
 
                     if all_done {
                         run.state = PatternRunState::Done;
+                        self.close_task_of_run(&path, run, registry);
                     } else if all_failed {
                         run.state = PatternRunState::Failed;
                     } else {
@@ -649,6 +700,7 @@ impl OrchestrationService {
                                 run.state = PatternRunState::Done;
                                 run.quiesced = true;
                                 run.finished_at = Some(now.clone());
+                                self.close_task_of_run(&path, run, registry);
                             }
                             run.updated_at = now.clone();
                             dirty = true;

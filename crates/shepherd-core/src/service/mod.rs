@@ -30,7 +30,7 @@ use crate::{
 
 /// How long a terminal must stay unresolvable before its agent is declared gone. The server answers
 /// `not found` for panes it has just created while it is busy, and reconcile ticks can arrive in bursts.
-pub(crate) const MISSING_GRACE_MS: u64 = 20_000;
+pub(crate) const MISSING_GRACE_MS: u64 = 5_000;
 
 pub const BLOCKED_HUMAN_NOTICE: &str =
     "esperando al humano: diálogo de confianza o login; abre su pestaña";
@@ -453,6 +453,11 @@ impl OrchestrationService {
     /// Whether a run is waiting for its quiet period to end, so the caller should tick soon.
     pub fn wants_fast_tick(&self) -> bool {
         self.fast_tick.load(std::sync::atomic::Ordering::Relaxed)
+            || !self
+                .missing_since
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .is_empty()
     }
 
     pub fn load_registry(&self) -> Result<AgentRegistryFile, String> {

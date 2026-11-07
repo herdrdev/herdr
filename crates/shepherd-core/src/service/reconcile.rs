@@ -111,6 +111,8 @@ impl OrchestrationService {
                 .non_mcp_done_quiet_secs
                 .saturating_mul(1000);
             let bus = self.bus()?;
+            // Agents whose tab/pane was closed: they are removed, like closing the tab removes the agent.
+            let mut closed: Vec<String> = Vec::new();
 
             for agent in &mut registry.agents {
                 // `starting` is owned by first-prompt delivery, but one that has been starting for
@@ -157,6 +159,9 @@ impl OrchestrationService {
                         self.blocked_announced.lock().unwrap().remove(&agent.id);
                         self.quiet_screens.lock().unwrap().remove(&agent.id);
                         changed = true;
+                        if !agent.has_result {
+                            closed.push(agent.id.clone()); // a delivered result is kept as a record
+                        }
                         continue;
                     }
                     Err(err) => return Err(err.to_string()),
@@ -276,6 +281,10 @@ impl OrchestrationService {
 
             if changed {
                 self.save_registry(&registry)?;
+            }
+            if !closed.is_empty() {
+                let _ = self.clean(&closed, None);
+                registry.agents.retain(|a| !closed.contains(&a.id));
             }
 
             self.auto_snapshot_tick(&registry);

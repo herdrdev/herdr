@@ -130,11 +130,19 @@ impl OrchestrationService {
         } else {
             req.root.clone()
         };
-        // A role's default worktree only applies inside a git work tree: in a plain folder the agent
+        // A role's default worktree only applies inside a git work tree with a commit: in a plain folder (or a
+        // fresh `git init`) the agent
         // works in the folder itself instead of failing. Asking for a worktree explicitly still fails.
+        let can_worktree = crate::git::can_create_worktree(&root_path);
         let use_worktree = match req.worktree {
+            Some(true) if !can_worktree => {
+                return Err(format!(
+                    "worktree_unavailable: {} no es un repositorio git con al menos un commit; haz un commit inicial o lanza el agente sin worktree",
+                    root_path.display()
+                ));
+            }
             Some(explicit) => explicit,
-            None => role_cfg.worktree && crate::git::is_git_work_tree(&root_path),
+            None => role_cfg.worktree && can_worktree,
         };
         let task_id = req.task_id.clone().unwrap_or_default();
         let mcp_url = req
