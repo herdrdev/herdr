@@ -176,6 +176,15 @@ pub(super) fn restart_guidance() -> String {
     })
 }
 
+pub(super) fn remote_label() -> Option<String> {
+    TARGET.with(|target| {
+        target
+            .borrow()
+            .as_ref()
+            .map(|target| target.profile.label.clone())
+    })
+}
+
 pub(super) fn remote_identity() -> Option<(String, String)> {
     TARGET.with(|target| {
         target.borrow().as_ref().map(|target| {
@@ -310,6 +319,9 @@ fn validate_machine_command(args: &[String]) -> Result<(), String> {
             subcommand,
             "stop" | "reload-config" | "agent-manifests" | "reload-agent-manifests"
         ),
+        // Export only reads the remote session through the API; import
+        // always writes a local session and is never forwarded.
+        "session" => subcommand == "export",
         _ => false,
     };
     if supported {

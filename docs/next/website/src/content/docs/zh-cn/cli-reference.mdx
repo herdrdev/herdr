@@ -78,7 +78,7 @@ herdr --machine "Build machine" worktree create --cwd /srv/project --branch revi
 
 选择器必须是已启用的配置 ID 或唯一标签（区分大小写），不能是任意 SSH 主机名。命令使用保存的远程会话，不能与 `--session` 或 `--remote` 混用。省略前缀时，本地行为保持不变。
 
-支持 `workspace`、`worktree`、`tab`、`pane`、`notification`、`agent`（不含 `attach` 和本地 `explain --file`）、`api snapshot`、`status server`，以及基于 API 的插件操作（`link`、`unlink`、`enable`、`disable`、`list`、`action`、`log`、`pane`）。服务器操作支持 `stop`、`reload-config`、`agent-manifests`、`reload-agent-manifests`。本地安装和配置、插件安装、会话管理及交互式终端连接不会被转发。
+支持 `workspace`、`worktree`、`tab`、`pane`、`notification`、`agent`（不含 `attach` 和本地 `explain --file`）、`api snapshot`、`status server`、`session export`，以及基于 API 的插件操作（`link`、`unlink`、`enable`、`disable`、`list`、`action`、`log`、`pane`）。服务器操作支持 `stop`、`reload-config`、`agent-manifests`、`reload-agent-manifests`。本地安装和配置、插件安装、其他会话管理及交互式终端连接不会被转发。`session export` 只读取远程会话;`session import` 始终写入本地会话。
 
 请求和响应通过非交互式 SSH 传输 JSON API，API 内容不会被拼接到 SSH shell 命令中。不需要打开 TUI，也不会自动安装、启动或重启服务器。请更新本地 CLI 和远程 Herdr，并确保运行中的服务器 API 协议兼容。认证、连接或版本错误不会回退到 Local，连接失败后也不会自动重试请求。
 
@@ -144,9 +144,13 @@ herdr session list [--json]
 herdr session attach <name>
 herdr session stop <name> [--json]
 herdr session delete <name> [--json]
+herdr session export <dir> [--force] [--no-scrollback] [--no-agent-files] [--json]
+herdr session import <dir> [--name NAME] [--map OLD=NEW] [--clone-missing] [--dry-run] [--force] [--json]
 ```
 
 需要显式停止默认会话时,把会话名写成 `default`。
+
+`session export` 写入供另一台机器或另一个操作系统使用的可迁移会话包文件夹;`session import` 把它恢复为一个命名会话。详见[可迁移会话包](/docs/session-state/#portable-session-bundles)。
 
 ## 工作区
 

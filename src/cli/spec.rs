@@ -272,6 +272,35 @@ fn session_command() -> Command {
                 .arg(required("name", "NAME"))
                 .arg(json_flag()),
         )
+        .subcommand(
+            Command::new("export")
+                .about("Export a portable session bundle")
+                .arg(required("output", "DIR").value_hint(ValueHint::DirPath))
+                .arg(flag("force").help("Write into a non-empty directory"))
+                .arg(flag("no-scrollback").help("Do not capture pane scrollback"))
+                .arg(flag("no-agent-files").help("Do not copy agent session files"))
+                .arg(json_flag()),
+        )
+        .subcommand(
+            Command::new("import")
+                .about("Import a portable session bundle")
+                .arg(required("bundle", "DIR").value_hint(ValueHint::DirPath))
+                .arg(
+                    option("name", "NAME")
+                        .help("Session name to create (defaults to the bundle folder name)"),
+                )
+                .arg(
+                    Arg::new("map")
+                        .long("map")
+                        .value_name("OLD=NEW")
+                        .action(ArgAction::Append)
+                        .help("Rewrite a source-machine path prefix on this machine"),
+                )
+                .arg(flag("clone-missing").help("Clone recorded git remotes for missing folders"))
+                .arg(flag("dry-run").help("Print the import plan without writing"))
+                .arg(flag("force").help("Replace an existing saved layout (keeps a backup)"))
+                .arg(json_flag()),
+        )
 }
 
 fn integration_command() -> Command {

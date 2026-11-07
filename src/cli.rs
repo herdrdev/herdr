@@ -31,6 +31,7 @@ pub(crate) mod projection;
 mod protocol_guard;
 mod server;
 mod server_not_running;
+mod session_bundle;
 mod spec;
 mod status;
 pub(crate) mod tab;
@@ -451,6 +452,8 @@ fn run_session_command(args: &[String]) -> std::io::Result<i32> {
         "attach" => session_attach_help(&args[1..]),
         "stop" => session_stop(&args[1..]),
         "delete" => session_delete(&args[1..]),
+        "export" => session_bundle::run_session_export(&args[1..]),
+        "import" => session_bundle::run_session_import(&args[1..]),
         "help" | "--help" | "-h" => {
             print_session_help();
             Ok(0)
@@ -998,6 +1001,10 @@ fn print_session_help() {
     eprintln!("  herdr session attach <name>");
     eprintln!("  herdr session stop <name> [--json]");
     eprintln!("  herdr session delete <name> [--json]");
+    eprintln!(
+        "  herdr session export <dir> [--force] [--no-scrollback] [--no-agent-files] [--json]"
+    );
+    eprintln!("  herdr session import <dir> [--name NAME] [--map OLD=NEW] [--clone-missing] [--dry-run] [--force] [--json]");
     eprintln!("  use 'default' as <name> to target the default session for stop");
 }
 

@@ -9,7 +9,7 @@ use crate::terminal::TerminalRuntimeRegistry;
 use crate::workspace::Workspace;
 
 /// Current snapshot format version.
-pub(super) const SNAPSHOT_VERSION: u32 = 3;
+pub(crate) const SNAPSHOT_VERSION: u32 = 3;
 
 /// Serializable snapshot of the entire herdr session.
 #[derive(Serialize, Deserialize)]
@@ -481,7 +481,7 @@ pub(super) fn capture_node(node: &Node) -> LayoutSnapshot {
     }
 }
 
-pub(super) fn parse_snapshot(content: &str) -> Result<SessionSnapshot, String> {
+pub(crate) fn parse_snapshot(content: &str) -> Result<SessionSnapshot, String> {
     let raw = serde_json::from_str::<RawSessionSnapshot>(content).map_err(|e| e.to_string())?;
     if raw.version > SNAPSHOT_VERSION {
         return Err(format!(

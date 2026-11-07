@@ -134,3 +134,57 @@ herdr --remote workbox --handoff
 Plain `herdr update` installs the new client and keeps endpoint-generation-1 servers running. Plain `herdr --remote workbox` also keeps a compatible remote server running across version differences. A stop is required only for the one-time upgrade from a pre-generation-1 server; use `--handoff` when you explicitly want to replace a supported running server without losing its pane processes.
 
 `herdr update --handoff` only applies to installs managed by Herdr's own updater. Homebrew, mise, and Nix installs are updated through their package managers, so `herdr update` is disabled there and cannot perform live handoff.
+
+## Portable session bundles
+
+The state paths above keep work on one machine. A portable session bundle moves a session to another machine or operating system: dual-booting between Linux and Windows, replacing a laptop, or carrying a workspace layout to a second computer.
+
+A bundle is a folder with a reconstruction plan, not a copy of running processes. Export records the saved layout, each pane's directory, the agent session files needed to resume those conversations, optional pane scrollback for reference, and the git remote, branch, and commit for each project folder. Import installs the agent sessions on the target machine and writes a new named session; snapshot restore and native agent session restore then bring the panes back when you attach.
+
+Save a bundle before switching machines:
+
+```bash
+herdr session export ~/bundles/my-work
+```
+
+Export reads the saved session, so it also works when the server is stopped. When a server is running, export adds each pane's recent screen text as scrollback; pass `--no-scrollback` to skip it, or `--no-agent-files` to record only the layout and session references.
+
+Restore it on the target machine:
+
+```bash
+herdr session import ~/bundles/my-work
+herdr session attach my-work
+```
+
+The session name defaults to the bundle folder name; pass `--name` to choose another. Import never writes to a running session and never replaces an existing saved layout unless you pass `--force`, which keeps a backup of the previous layout first. Add `--dry-run` to print the full plan — agent files, clones, and the session write — without changing anything.
+
+When project folders live somewhere else on the target, rewrite their paths with `--map OLD=NEW`. Mapping works across path styles, so a bundle made on Windows can land on Linux and the reverse:
+
+```powershell
+# bundle made on Linux, restored on Windows
+herdr session import D:\bundles\my-work --map /home/ada/work=C:\Users\ada\work
+```
+
+```bash
+# bundle made on Windows, restored on Linux
+herdr session import ~/bundles/my-work --map 'C:\Users\ada\work=/home/ada/work'
+```
+
+Project files themselves are not packed into the bundle. Add `--clone-missing` to clone each missing folder from its recorded git remote at the recorded commit. Uncommitted changes on the source machine are listed in `manifest.json` but not copied; commit or stash them before exporting if you need them on the target.
+
+To snapshot another machine, use the saved-machine prefix. This only reads that machine's session through the API — layout, agent references, and pane text — and never stops, writes to, or reconfigures it:
+
+```bash
+herdr --machine workbox session export ~/bundles/workbox-layout
+```
+
+Agent transcript files cannot cross that read-only API connection, so the bundle says they were not transferred and those panes restore as shells unless the same agent sessions already exist locally. For a complete bundle including transcripts, run `herdr session export` on the machine itself, for example over SSH.
+
+What a bundle does and does not carry:
+
+- **Included:** workspaces, tabs, panes, split layout, and focus; pane directories; agent session references for every supported agent; copied session files for Claude Code, Codex, Muse, and agents whose session reference is a file path such as Pi and OMP; pane scrollback when captured; git remote, branch, HEAD, and dirty-file list per folder. Other agents keep their reference and resume only if that session already exists on the target.
+- **Not included:** running processes, shell variables, or a turn in flight; project files and uncommitted changes; agent credentials and logins — authenticate each agent on each device; Herdr configuration and plugins.
+
+Bundles contain full agent transcripts, including anything pasted or printed in those sessions. Export restricts the bundle folder to your account where the operating system supports it. Keep bundles in a private folder, and do not commit or share them.
+
+Import also reads bundles in the earlier schema 1 format. Their split ratios were not recorded in a form Herdr can replay, so those panes are rebuilt side by side in their original tabs.

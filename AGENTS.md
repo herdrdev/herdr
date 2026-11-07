@@ -204,6 +204,44 @@ Validate agent-specific detection behavior with live smoke tests through the man
 
 `distribution/agent-detection/` is the remotely published catalog for released clients. Keep changes for already released agents aligned with their bundled manifests unless the validator records an exact compatibility exception. A newly bundled agent that current stable clients cannot identify may remain unpublished behind an exact version-and-digest exception, but it must be added to the catalog and the exception removed before the first stable release that ships it. `just release-docs-check` enforces that no unpublished exceptions remain.
 
+## Portable Session Bundles
+
+`herdr session export` and `herdr session import` move a session between
+machines and operating systems. The implementation lives in `src/bundle/`
+(manifest, agent store adapters, export, import, git provenance) with CLI
+parsing in `src/cli/session_bundle.rs`. User-facing behavior is documented in
+the Portable session bundles section of the session state docs under
+`docs/next/website/src/content/docs/` (all locales).
+
+Keep these invariants when changing bundle code:
+
+- A bundle is a reconstruction plan: saved layout plus agent session files.
+  Import writes a new session's `session.json` and lets the existing snapshot
+  restore and native agent resume paths bring panes back. Do not type resume
+  commands into live panes or copy Herdr's internal runtime state.
+- Never copy agent credentials or whole agent stores. Copy only the one
+  referenced session, with the store-specific exclusions in
+  `src/bundle/stores.rs` (locks, databases, logs, output spools). Redact
+  credentials from recorded git remote URLs. Copied JSONL transcripts are
+  line-validated so an export during a live turn cannot tear the last record.
+- Bundle-relative paths in `manifest.json` always use `/` separators so a
+  bundle crosses Linux, macOS, and Windows. Import rewrites source-machine
+  paths only through explicit `--map OLD=NEW` rules, never guesses. Reject
+  bundle paths that escape the bundle directory.
+- Import never writes to a running session and never replaces an existing
+  saved layout without `--force`, which keeps a backup first. Installing an
+  agent session never overwrites a local copy that is already at least as
+  large.
+- Remote export (`herdr --machine <label> session export`) is read-only: it
+  uses the socket API (`session.snapshot`, `pane.read`) and must never stop,
+  write to, or reconfigure the other machine. Transcript files do not cross
+  the API; the manifest records them as not transferred instead of inventing
+  a transfer. Import always writes a local session and is never forwarded.
+- Keep import able to read every bundle schema Herdr has written, starting
+  with schema 1. A schema bump needs a migration path and tests in
+  `src/bundle/`; the persisted `session.json` inside a bundle keeps following
+  the normal snapshot version rules.
+
 ## Vendored libghostty-vt
 
 `vendor/libghostty-vt.vendor.json` records the upstream source commit currently vendored.
