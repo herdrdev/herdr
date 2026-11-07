@@ -303,6 +303,15 @@ pub(crate) fn call_tool(
                 load_agent_registry(&state.registry).map_err(|error| error.to_string())?;
             registry.submit_result(&agent.id, summary, &crate::now_rfc3339())?;
             save_agent_registry(&state.registry, &registry).map_err(|error| error.to_string())?;
+            // The task is done when everyone assigned to it has delivered; a plain task has no other
+            // flow that would close it.
+            let others_working = registry
+                .agents
+                .iter()
+                .any(|a| a.task_id == agent.task_id && a.id != agent.id && !a.terminal());
+            if !agent.task_id.is_empty() && !agent.root.is_empty() && !others_working {
+                let _ = crate::complete_direct_task(&agent.root, &agent.task_id);
+            }
             if !agent.parent_id.is_empty() {
                 if let Ok(bus) = MessageBus::open(&state.bus_path) {
                     let _ = bus.send(Message::directed(

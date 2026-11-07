@@ -229,6 +229,89 @@ mod tests {
     }
 
     #[test]
+    fn submit_result_closes_a_plain_task_once_everyone_assigned_delivered() {
+        let root = std::env::temp_dir().join(format!("shepherd-mcp-close-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join(".shepherd")).unwrap();
+        let make = |id: u32| {
+            crate::create_task(
+                &root,
+                crate::NewTask {
+                    id,
+                    title: format!("Task {id}"),
+                    description: String::new(),
+                    criteria: Vec::new(),
+                    issue: None,
+                    issue_markdown: None,
+                    links: Vec::new(),
+                },
+            )
+            .unwrap()
+        };
+        make(1);
+        let with_subtasks = make(2);
+        let mut status = with_subtasks.status.clone();
+        status.subtasks = vec![crate::Subtask::pending(1, "first", "")];
+        crate::save_task_status(with_subtasks.directory.join("status.json"), &status).unwrap();
+
+        let registry_path = root.join("agents.json");
+        let mut registry = AgentRegistryFile::default();
+        let mut agent = |role: &str, task: &str| {
+            registry.create(
+                Agent {
+                    role: role.into(),
+                    root: root.display().to_string(),
+                    task_id: task.into(),
+                    ..Agent::default()
+                },
+                format!("{role}-{task}-token"),
+                "now",
+            )
+        };
+        let a = agent("coder", "1");
+        let b = agent("reviewer", "1");
+        let on_subtasks = agent("coder", "2");
+        let in_run = agent("coder", "run-pattern-1");
+        save_agent_registry(&registry_path, &registry).unwrap();
+        let state = State {
+            registry: registry_path,
+            bus_path: root.join("messages.jsonl"),
+            mcp_url: None,
+            active_vendors: None,
+            terminals: None,
+        };
+        let submit = |who: &Agent| {
+            call_tool(
+                &state,
+                who,
+                &json!({"name": "submit_result", "arguments": {"summary": "listo"}}),
+            )
+            .unwrap()
+        };
+        let state_of = |id: &str| crate::find_task(&root, id).unwrap().status.state;
+
+        submit(&a);
+        assert_ne!(
+            state_of("1"),
+            "done",
+            "the reviewer assigned to the task has not delivered yet"
+        );
+        submit(&b);
+        assert_eq!(state_of("1"), "done");
+
+        submit(&on_subtasks);
+        assert_ne!(
+            state_of("2"),
+            "done",
+            "a task with subtasks keeps its own flow"
+        );
+
+        submit(&in_run); // its task_id is a run id: no task to close
+        assert_eq!(crate::list_tasks(&root, false).unwrap().len(), 2);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn http_endpoint_accepts_authenticated_json_rpc() {
         use std::{io::BufReader, net::TcpListener};
         let path = std::env::temp_dir().join(format!(

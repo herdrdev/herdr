@@ -34,6 +34,33 @@ pub fn touch_task(task: &CreatedTask) -> Result<(), Box<dyn std::error::Error + 
     save_task_status(task.directory.join("status.json"), &status)
 }
 
+/// Closes a plain task once the agent assigned to it has delivered its result. `task_ref` is the
+/// agent's `task_id`: only a task number counts (agents of a pattern run carry the run id), and a task
+/// with subtasks keeps its own flow, where `aggregate_task_state` decides. Returns whether it changed.
+pub fn complete_direct_task(
+    root: impl AsRef<Path>,
+    task_ref: &str,
+) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
+    let Ok(number) = task_ref.trim().parse::<u32>() else {
+        return Ok(false);
+    };
+    let task = find_task(root, &number.to_string())?;
+    let mut status = task.status.clone();
+    if !status.subtasks.is_empty()
+        || matches!(
+            status.state.to_lowercase().as_str(),
+            "done" | "completed" | "archived"
+        )
+    {
+        return Ok(false);
+    }
+    status.state = "done".into();
+    status.waiting.clear();
+    status.updated = now_rfc3339();
+    save_task_status(task.directory.join("status.json"), &status)?;
+    Ok(true)
+}
+
 pub fn list_tasks(
     root: impl AsRef<Path>,
     archived: bool,
