@@ -309,6 +309,9 @@ pub struct OrchestrationService {
     pub(crate) topic_wake_notified: Arc<Mutex<HashMap<(String, String), (u64, u64)>>>,
     /// Run id -> ms since which the run has been continuously quiescent.
     pub(crate) run_quiet_since: Arc<Mutex<HashMap<String, (u64, usize)>>>,
+    /// True while a pattern run is still `running`: its quiet period is counted in reconcile ticks, so
+    /// the loop ticks every couple of seconds instead of waiting for the next event or backup tick.
+    pub(crate) fast_tick: Arc<std::sync::atomic::AtomicBool>,
     pub(crate) auto_snapshots: Arc<snapshots::AutoSnapshots>,
 }
 
@@ -349,6 +352,7 @@ impl OrchestrationService {
             failed_requests: Arc::new(Mutex::new(Vec::new())),
             topic_wake_notified: Arc::new(Mutex::new(HashMap::new())),
             run_quiet_since: Arc::new(Mutex::new(HashMap::new())),
+            fast_tick: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             auto_snapshots: Arc::default(),
         }
     }
@@ -444,6 +448,11 @@ impl OrchestrationService {
             return true;
         }
         !agent.pane.is_empty() && self.terminals.read_screen(&agent.pane, 1).is_ok()
+    }
+
+    /// Whether a run is waiting for its quiet period to end, so the caller should tick soon.
+    pub fn wants_fast_tick(&self) -> bool {
+        self.fast_tick.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     pub fn load_registry(&self) -> Result<AgentRegistryFile, String> {

@@ -38,7 +38,9 @@ pub(super) fn test_service(dir: &Path) -> (OrchestrationService, InMemoryTermina
     let terminals = InMemoryTerminals::new();
     let clock = ManualClock::new();
     let svc_cfg = ServiceConfig::for_state_dir(&state_dir);
-    let shep_cfg = Config::default();
+    let mut shep_cfg = Config::default();
+    // the timing arithmetic of these tests assumes a 30 s quiet period, not the shorter product default
+    shep_cfg.limits.run_quiescence_secs = 30;
     let service = OrchestrationService::new(
         svc_cfg,
         shep_cfg,
@@ -2633,4 +2635,46 @@ fn a_stale_save_does_not_undo_a_newer_state_and_a_stuck_starting_agent_is_reconc
     clock.advance(Duration::from_secs(200));
     let after = service.reconcile_once().unwrap();
     assert_eq!(after.result(&agent.id).unwrap().state, "idle");
+}
+
+#[test]
+fn a_running_run_asks_for_fast_ticks_until_it_is_done() {
+    let tmp = TestDir::new("test");
+    let (service, terminals, clock) = test_service(tmp.path());
+    assert!(!service.wants_fast_tick());
+    service
+        .start_pattern_run(
+            tmp.path(),
+            Some("orchestrator-worker"),
+            None,
+            Some("x"),
+            None,
+            true,
+        )
+        .unwrap();
+    service.reconcile_once().unwrap();
+    assert!(
+        service.wants_fast_tick(),
+        "a running run is watched closely"
+    );
+    // everything idle and quiet for longer than the period: the run is done and the ticks relax
+    let mut reg = service.load_registry().unwrap();
+    for a in &mut reg.agents {
+        a.state = "idle".into();
+        let st = TerminalAgentStatus {
+            state: "live".into(),
+            status: "idle".into(),
+            pane: a.pane.clone(),
+            tab: a.tab.clone(),
+            title: a.label.clone(),
+            seq: 1,
+        };
+        terminals.set_status(&a.id, st.clone());
+        terminals.set_status(&a.pane, st);
+    }
+    service.save_registry(&reg).unwrap();
+    service.reconcile_once().unwrap();
+    clock.advance(Duration::from_secs(31));
+    service.reconcile_once().unwrap();
+    assert!(!service.wants_fast_tick());
 }

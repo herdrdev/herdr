@@ -560,7 +560,12 @@ impl ShepherdRuntimeService {
                             }
                             // Event-driven wait: returns Ok(true) immediately on agent status change,
                             // or Ok(false) on backup timeout (10s)
-                            let _ = core_for_rec.terminals().wait_agent_event(backup_interval);
+                            let wait = if core_for_rec.wants_fast_tick() {
+                                std::time::Duration::from_secs(2)
+                            } else {
+                                backup_interval
+                            };
+                            let _ = core_for_rec.terminals().wait_agent_event(wait);
 
                             if let Ok(guard) = lock.lock() {
                                 if *guard {

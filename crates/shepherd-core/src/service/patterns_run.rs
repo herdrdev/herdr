@@ -527,6 +527,7 @@ impl OrchestrationService {
         }
         paths.sort();
         paths.dedup();
+        let mut any_running = false;
 
         let now = self.clock.now_rfc3339();
 
@@ -658,10 +659,13 @@ impl OrchestrationService {
                 }
             }
 
+            any_running |= runs.iter().any(|r| r.state == PatternRunState::Running);
             if dirty {
                 save_pattern_runs(&path, &runs)?;
             }
         }
+        self.fast_tick
+            .store(any_running, std::sync::atomic::Ordering::Relaxed);
 
         Ok(())
     }

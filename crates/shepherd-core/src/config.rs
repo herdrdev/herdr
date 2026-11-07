@@ -126,7 +126,7 @@ impl Default for Limits {
             protected_branches: vec!["main".into(), "master".into(), "develop".into()],
             non_mcp_done_quiet_secs: 60,
             notice_after_secs: 3,
-            run_quiescence_secs: 30,
+            run_quiescence_secs: 10,
         }
     }
 }
