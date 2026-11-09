@@ -66,7 +66,39 @@ for _ in $(seq 1 50); do [ -S "$T/s-client.sock" ] && break; sleep 0.2; done
 
 json() { python3 -c "import sys,json; d=json.load(sys.stdin)['result']; print(eval(sys.argv[1]))" "$1"; }
 A=$("$SERVER" workspace create --cwd "$T/webgo" --label webgo --focus | json "d['root_pane']['pane_id']")
-"$SERVER" pane run "$A" "PS1='\$ '; clear; echo 'webgo: a small Go service'; git log --oneline; ls" >/dev/null
+# two panes with made-up agent transcripts (printed by plain scripts; no agent runs)
+cat >"$T/bin/fake-brain" <<'TXT'
+#!/bin/bash
+g=$'\e[32m'; c=$'\e[36m'; d=$'\e[2m'; b=$'\e[1m'; o=$'\e[0m'
+echo "${b}brain-1${o} ${d}claude opus · run api-team${o}"; echo
+echo "${g}●${o} Read task #1: Create a Go server ${d}(6 acceptance criteria)${o}"
+echo "${g}●${o} Plan 3 subtasks: ${c}scaffold${o} · ${c}handlers${o} · ${c}tests${o}"
+echo "${g}●${o} shepherd.publish ${c}#orders${o}  subtask 1/3 ${d}→ p0${o}"
+echo "${g}●${o} shepherd.publish ${c}#orders${o}  subtask 2/3 ${d}→ p1${o}"
+echo "${g}●${o} shepherd.publish ${c}#orders${o}  subtask 3/3 ${d}→ p2${o}"
+echo "${g}●${o} shepherd.poll ${c}#results${o}"
+echo "  ${d}└ coder-1: scaffold done · go.mod, cmd/server/main.go${o}"
+echo "  ${d}└ coder-2: handlers done · GET /, GET /health, 404${o}"
+echo; echo "${g}✓${o} 2 of 3 results in; waiting for the tests"
+TXT
+cat >"$T/bin/fake-coder" <<'TXT'
+#!/bin/bash
+g=$'\e[32m'; c=$'\e[36m'; d=$'\e[2m'; b=$'\e[1m'; o=$'\e[0m'
+echo "${b}coder-3${o} ${d}codex · worktree shep/3-tests${o}"; echo
+echo "${g}●${o} Consume ${c}#orders${o} p2 ${d}· subtask 3/3 tests${o}"
+echo "${g}●${o} Write ${b}cmd/server/main_test.go${o}  ${g}+61${o}"
+echo "${g}●${o} Bash ${b}go vet ./...${o}"; echo "  ${d}└ ok${o}"
+echo "${g}●${o} Bash ${b}go test ./...${o}"
+echo "  ok  	webgo/cmd/server	0.012s"
+echo "${g}●${o} Bash ${b}git commit -am 'test: cover /, /health and 404'${o}"
+echo "  ${d}└ [shep/3-tests 4e1c9a2] 1 file changed, 61 insertions(+)${o}"
+echo "${g}●${o} shepherd.publish ${c}#results${o}"
+echo; echo "${g}✓${o} delivered; idle"
+TXT
+chmod +x "$T/bin/fake-brain" "$T/bin/fake-coder"
+"$SERVER" pane run "$A" "PS1='\$ '; clear; fake-brain" >/dev/null
+A2=$("$SERVER" pane split "$A" --direction right --cwd "$T/webgo" --no-focus | json "d['pane']['pane_id']")
+"$SERVER" pane run "$A2" "PS1='\$ '; clear; fake-coder" >/dev/null
 "$SERVER" tab create --workspace w1 --cwd "$T/webgo" --label logs --no-focus >/dev/null
 B=$("$SERVER" workspace create --cwd "$T/notes" --label notes --no-focus | json "d['root_pane']['pane_id']")
 "$SERVER" pane run "$B" "PS1='\$ '; clear; echo 'notes: scratch space'; seq 1 12" >/dev/null
@@ -98,11 +130,11 @@ sleep 2
 export SHEPHERD_BIN="$SERVER" SHEPHERD_NATIVE_SIZE="${SIZE:-1920x1080}"
 
 if [ "${SHOTS:-1}" != 0 ]; then
-  shot() { # name mode tab
-    SHEPHERD_NATIVE_MODE="$2" SHEPHERD_NATIVE_TAB="$3" SHEPHERD_NATIVE_SHOT="$T/shot.ppm" "$APP" >/dev/null 2>&1
+  shot() { # name mode tab [window size]
+    SHEPHERD_NATIVE_SIZE="${4:-$SHEPHERD_NATIVE_SIZE}" SHEPHERD_NATIVE_MODE="$2" SHEPHERD_NATIVE_TAB="$3" SHEPHERD_NATIVE_SHOT="$T/shot.ppm" "$APP" >/dev/null 2>&1
     python3 -c "from PIL import Image; Image.open('$T/shot.ppm').save('$OUT/$1.png', optimize=True)" && echo "saved $1.png"
   }
-  shot terminal terminal overview
+  shot terminal terminal overview 1920x760   # shorter, so the made-up transcripts fill the panes
   shot overview shepherd overview
   shot runs shepherd runs
   shot agents shepherd agents
