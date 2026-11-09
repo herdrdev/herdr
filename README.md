@@ -1,7 +1,7 @@
 # shepherd
 
 <p align="center">
-  <a href="#install">install</a> · <a href="#quick-start">quick start</a> · <a href="docs/shepherd/README.md">docs</a> · <a href="#built-on-herdr">built on herdr</a> · <a href="#license">license</a>
+  <a href="#install">install</a> · <a href="#quick-start">quick start</a> · <a href="#built-on-herdr">built on herdr</a> · <a href="#license">license</a>
 </p>
 
 <p align="center">
@@ -23,7 +23,7 @@ shepherd is a fork of [herdr](https://github.com/herdrdev/herdr) that adds multi
 - **tasks and gated runs** — tasks with specs and acceptance criteria; plan, implement, review, check and publish with explicit human approval.
 - **local snapshots** — automatic safety copies of every agent's worktree in hidden git refs, with diff and safe restore. no network, no extra dependencies.
 - **a shepherd tab in the terminal** — `ctrl+b a` opens agents, tasks, runs, patterns, skills, git and events as an in-window section with herdr's look, keyboard and mouse. no pop-ups.
-- **cli for everything** — every action is a command with `--json` output. [cli guide →](docs/shepherd/USO-CLI.md)
+- **cli for everything** — every action is a command with `--json` output.
 - **one rust binary, no electron** — runs in whatever terminal you already use.
 
 ---
@@ -58,11 +58,11 @@ shepherd spawn coder "Add GET /health and a test. Commit." --vendor claude --mod
 shepherd agents
 ```
 
-`ctrl+b q` detaches, `shepherd` reattaches. [tui guide →](docs/shepherd/USO-TUI.md)
+`ctrl+b q` detaches, `shepherd` reattaches.
 
 ## docs
 
-everything lives in [docs/shepherd](docs/shepherd/README.md) (spanish): [tui guide](docs/shepherd/USO-TUI.md) · [cli guide](docs/shepherd/USO-CLI.md) · [configuration](docs/shepherd/CONFIGURACION.md) · [patterns](docs/shepherd/PATRONES.md) · [agents, skills, mcp and bus](docs/shepherd/AGENTES-Y-SKILLS.md). design notes and project status: [SHEPHERD.md](SHEPHERD.md).
+design notes and project status: [SHEPHERD.md](SHEPHERD.md). user guides live on the `feat/native-ui` branch.
 
 ## built on herdr
 
