@@ -1,5 +1,5 @@
 id = "copilot"
-version = "2026.11.09.2"
+version = "2026.11.09.3"
 min_engine_version = 1
 updated_at = "2026-11-09T00:00:00Z"
 aliases = ["github-copilot", "ghcs"]
@@ -31,15 +31,18 @@ region = "bottom_non_empty_lines(6)"
 visible_working = true
 line_regex = ['^\s*◎\s+Waiting for background agents(?:\s|·|$)']
 
-# Copilot 1.0.107+ live footer on the last non-empty line. Tolerates Plan/Autopilot
-# mode prefixes, tool labels (Running bash), Executing/Cancelling, and interrupt hints.
+# Copilot 1.0.107+ live footer on the last non-empty line (Hxt activity bar + shortcut
+# row). Label is Executing | Cancelling | activity.label | currentIntent | Working.
+# Match spinner + interrupt/clear/edit/stop helpers so free-form intents work.
+# Cancelling hides helper text in Copilot JS (mode!=="cancelling"), so match it bare.
+# Note: line_regex entries are AND'd; keep a single alternation pattern.
 [[rules]]
 id = "working_interrupt_footer"
 state = "working"
 priority = 100
 region = "bottom_non_empty_lines(1)"
 visible_working = true
-line_regex = ['^\s*(?:[^○◎◉●\n]*·\s*)*[○◎◉●]?\s*(?:Working|Executing|Cancelling|Running\b|Creating\b)\b.*\b(?:(?:ctrl|cmd)\+c|esc(?:\s+again)?)\s+(?:to\s+)?(?:interrupt|stop agents)\b']
+line_regex = ['^\s*(?:[^○◎◉●\n]*·\s*)*[○◎◉●]\s+(?:Cancelling(?:\s|·|$)|(?:Working\b|Executing\b|Running\b|\S+(?:\s+\S+)+).*?\b(?:(?:ctrl|cmd)\+c|esc(?:\s+again)?)\s+(?:to\s+)?(?:interrupt|stop agents|clear input|edit prompt)\b)']
 
 [[rules]]
 id = "working_cancel_hint"

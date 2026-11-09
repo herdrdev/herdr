@@ -711,7 +711,6 @@ fn copilot_working_footer_variants() {
         " ◎ Working ctrl+c interrupt                                Copilot Fusion → gpt-6-luna",
         " ◉ Working ctrl+c interrupt",
         " ● Working · 6.4 KiB ctrl+c interrupt                      Copilot Fusion → gpt-6-luna",
-        " Working ctrl+c interrupt",
         " ◎ Working ctrl+c to interrupt",
     ] {
         let screen =
@@ -767,14 +766,54 @@ fn copilot_mode_prefix_working_footer() {
 }
 
 #[test]
+fn copilot_freeform_intent_footer() {
+    // currentIntent / activity.label are free-form model text, not a fixed verb list.
+    for footer in [
+        " Plan · Manual Approval · ◉ Drafting planning guidance · 3.3 KiB ctrl+c interrupt   Copilot Fusion → gpt-6-luna",
+        " ◎ Analyzing repository structure · 1 KiB ctrl+c interrupt   Copilot Fusion → gpt-6-luna",
+        " ◉ Creating essay · 1.2 KiB ctrl+c interrupt   Copilot Fusion → gpt-6-luna",
+        " ◉ Summarizing the selected files · 900 B ctrl+c interrupt",
+    ] {
+        let result = explain_bundled_copilot(&format!("❯\n{footer}\n"));
+        assert_eq!(result.state, AgentState::Working, "{footer}");
+        assert!(result.visible_working, "{footer}");
+        assert_eq!(
+            result.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+            Some("working_interrupt_footer"),
+            "{footer}"
+        );
+    }
+}
+
+#[test]
 fn copilot_executing_cancelling_and_stop_agents_footer() {
     for footer in [
         " ◉ Executing ctrl+c interrupt   Copilot Fusion → gpt-6-luna",
-        " ○ Cancelling · 200 B ctrl+c interrupt",
+        // Copilot hides helper text while cancelling (showHelperText && mode!=="cancelling").
+        " ◎ Cancelling",
+        " ◉ Cancelling   Copilot Fusion → gpt-6-luna",
         " ◉ Working ctrl+c stop agents",
-        " ◉ Creating essay · 1.2 KiB ctrl+c interrupt   Copilot Fusion → gpt-6-luna",
         " ◉ Working · 1 KiB esc again to interrupt   Copilot Fusion → gpt-6-luna",
         " ◉ Working · 1 KiB cmd+c interrupt   Copilot Fusion → gpt-6-luna",
+    ] {
+        let result = explain_bundled_copilot(&format!("❯\n{footer}\n"));
+        assert_eq!(result.state, AgentState::Working, "{footer}");
+        assert!(result.visible_working, "{footer}");
+        assert_eq!(
+            result.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+            Some("working_interrupt_footer"),
+            "{footer}"
+        );
+    }
+}
+
+#[test]
+fn copilot_clear_input_and_edit_prompt_helpers() {
+    // Shortcut-row descriptions from Copilot JS while a turn is active.
+    for footer in [
+        " ◎ Working · 1 KiB ctrl+c clear input   Copilot Fusion → gpt-6-luna",
+        " ◎ Working · 1 KiB esc edit prompt   Copilot Fusion → gpt-6-luna",
+        " Plan · Manual Approval · ○ Working · 2 KiB ctrl+c clear input",
     ] {
         let result = explain_bundled_copilot(&format!("❯\n{footer}\n"));
         assert_eq!(result.state, AgentState::Working, "{footer}");
@@ -793,6 +832,7 @@ fn copilot_idle_footer_variants() {
         " ← open sidebar · Interactive · Manual Approval · / commands · ? help · tab next tab    Copilot Fusion → gpt-6-luna",
         " Interactive · Manual Approval · /… Copilot Fusion → gpt-6-luna",
         " ← open sidebar · Autopilot (limited) · Manual Approval · / commands · ? help",
+        " ← open sidebar · Plan · Manual Approval · / commands · ? help · tab next tab    Copilot Fusion → gpt-6-luna",
     ] {
         let result = explain_bundled_copilot(&format!("Completed output\n❯\n{footer}\n"));
         assert_eq!(result.state, AgentState::Idle, "{footer}");
@@ -829,6 +869,10 @@ fn copilot_transcript_working_text_is_idle() {
         "Working\nctrl+c interrupt",
         "The transcript says Working and describes ctrl+c interrupt",
         " ○ Working · 2.2 KiB ctrl+c interrupt\nCompleted output\n Interactive · Manual Approval · /… Copilot Fusion → gpt-6-luna",
+        // Prose on the last line without a Copilot spinner must stay idle.
+        "Le script affiche : Running bash · 3s · ctrl+c interrupt",
+        "Note · Executing the plan now, press esc to interrupt",
+        " ○ Workingdir ctrl+c interrupt",
     ] {
         let result = explain_bundled_copilot(screen);
         assert_eq!(result.state, AgentState::Idle, "{screen}");
