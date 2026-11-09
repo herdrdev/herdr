@@ -44,6 +44,8 @@ the native app (`ctrl+shift+s` switches between the terminal and the shepherd pa
   <img src="docs/shepherd/media/agents.png" alt="agents view with role, vendor, model and state" width="440" />
 </p>
 
+a 35 second walk through every view: [watch the demo (mp4)](https://github.com/Rivaldito/shepherd/releases/download/v0.1.0-beta/shepherd-demo.mp4) · [gif](https://github.com/Rivaldito/shepherd/releases/download/v0.1.0-beta/shepherd-demo.gif).
+
 more pictures of every view are in [docs/shepherd/native-app.md](docs/shepherd/native-app.md#screenshots).
 
 ## install
