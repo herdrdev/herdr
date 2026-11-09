@@ -45,6 +45,17 @@ const TERM_PAD: f32 = 8.0;
 const TERM_FRAME: f32 = 2.0 * TERM_PAD + 2.0;
 const START: Size = Size::new(1280.0, 800.0);
 
+/// The size the window opens at: `SHEPHERD_NATIVE_SIZE=1600x1000` overrides it (for bigger demo pictures).
+fn start_size() -> Size {
+    std::env::var("SHEPHERD_NATIVE_SIZE")
+        .ok()
+        .and_then(|s| {
+            let (w, h) = s.split_once('x')?;
+            Some(Size::new(w.parse().ok()?, h.parse().ok()?))
+        })
+        .unwrap_or(START)
+}
+
 fn main() -> iced::Result {
     iced::application(App::boot, App::update, App::view)
         .title("Shepherd")
@@ -55,7 +66,7 @@ fn main() -> iced::Result {
         .default_font(theme::MONO)
         .subscription(App::subscription)
         .theme(App::theme)
-        .window_size(START)
+        .window_size(start_size())
         .run()
 }
 
@@ -159,6 +170,8 @@ enum Message {
     PaletteRun,
     Shoot,
     Shot(iced::window::Screenshot),
+    /// One frame of the demo film: its number and the picture.
+    FilmShot(u32, iced::window::Screenshot),
     ArmClose(PendingClose),
     ToggleSidebar,
     ContextMenuOpened(ContextMenuTarget),
@@ -178,6 +191,41 @@ struct Palette {
 
 const PALETTE_INPUT: &str = "palette-input";
 const SESSION_INPUT: &str = "session-input";
+
+/// Demo recording, a verification and promotion aid like the other `SHEPHERD_NATIVE_*` hooks: it walks
+/// through [`FILM`] and saves one picture per animation tick as `frame-NNNNN.ppm` in the directory, then
+/// exits. `ffmpeg -framerate 12 -i frame-%05d.ppm` turns them into a video at the real animation speed.
+struct Film {
+    dir: PathBuf,
+    /// The animation step the film began at (it waits for the data to arrive).
+    start: Option<u32>,
+    saved: u32,
+}
+
+/// The scenes: what to show and for how many ticks (12 per second). The first tick of a scene only switches
+/// to it; the pictures start on the next one.
+const FILM: &[(Mode, panel::Tab, u32)] = &[
+    (Mode::Terminal, panel::Tab::Overview, 36),
+    (Mode::Shepherd, panel::Tab::Overview, 49),
+    (Mode::Shepherd, panel::Tab::Runs, 37),
+    (Mode::Shepherd, panel::Tab::Agents, 49),
+    (Mode::Shepherd, panel::Tab::Tasks, 37),
+    (Mode::Shepherd, panel::Tab::Patterns, 61),
+    (Mode::Shepherd, panel::Tab::Monitor, 37),
+    (Mode::Shepherd, panel::Tab::Skills, 37),
+    (Mode::Shepherd, panel::Tab::Events, 49),
+    (Mode::Shepherd, panel::Tab::Models, 37),
+];
+/// Pictures the film saves: every tick of every scene except its first.
+const FILM_SHOTS: u32 = {
+    let mut total = 0;
+    let mut i = 0;
+    while i < FILM.len() {
+        total += FILM[i].2 - 1;
+        i += 1;
+    }
+    total
+};
 
 /// What the central area shows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -223,6 +271,8 @@ struct App {
     sidebar_collapsed: bool,
     /// Animation step of the prism canvases.
     frame: u32,
+    /// Demo recording (`SHEPHERD_NATIVE_FILM=<dir>`), see [`Film`].
+    film: Option<Film>,
     sessions: Vec<sessions::Session>,
     /// The name being typed for a new session, while the box is open, and what is wrong with it.
     new_session: Option<(String, Option<String>)>,
@@ -267,13 +317,18 @@ impl App {
             status: "connecting…".into(),
             pending_close: None,
             sidebar_collapsed: std::env::var_os("SHEPHERD_NATIVE_SIDEBAR_COLLAPSED").is_some(),
-            window: START,
+            window: start_size(),
             sent: None,
             api_socket: api::api_socket_for(&client_socket()),
             context_menu: None,
             rename: None,
             mouse_position: iced::Point::ORIGIN,
             frame: 0,
+            film: std::env::var_os("SHEPHERD_NATIVE_FILM").map(|dir| Film {
+                dir: PathBuf::from(dir),
+                start: None,
+                saved: 0,
+            }),
             sessions: Vec::new(),
             new_session: None,
             closing: None,
@@ -512,6 +567,9 @@ impl App {
             }
             Message::Tick => {
                 self.frame = self.frame.wrapping_add(1);
+                if let Some(task) = self.film_tick() {
+                    return task;
+                }
                 // an unconfirmed `×` goes back to normal after ~5 s
                 if let Some((_, since)) = &self.closing {
                     if self.frame.wrapping_sub(*since) > 60 {
@@ -797,6 +855,17 @@ impl App {
                 return iced::window::latest()
                     .and_then(iced::window::screenshot)
                     .map(Message::Shot)
+            }
+            Message::FilmShot(index, shot) => {
+                if let Some(film) = &self.film {
+                    let mut out =
+                        format!("P6\n{} {}\n255\n", shot.size.width, shot.size.height).into_bytes();
+                    out.extend(shot.rgba.chunks(4).flat_map(|px| px[..3].iter().copied()));
+                    let _ = std::fs::write(film.dir.join(format!("frame-{index:05}.ppm")), out);
+                }
+                if index + 1 >= FILM_SHOTS {
+                    return iced::exit();
+                }
             }
             Message::Shot(shot) => {
                 if let Some(path) = std::env::var_os("SHEPHERD_NATIVE_SHOT") {
@@ -1757,6 +1826,35 @@ impl App {
         } else {
             Message::Act(Action::CloseTab(tab.tab_id.clone()))
         }
+    }
+
+    /// The next step of the demo film, if one is being recorded.
+    fn film_tick(&mut self) -> Option<Task<Message>> {
+        let film = self.film.as_mut()?;
+        if self.sender.is_none() || self.frame < 40 {
+            return None;
+        }
+        let elapsed = self.frame - *film.start.get_or_insert(self.frame);
+        let mut from = 0;
+        for (mode, tab, len) in FILM {
+            if elapsed < from + len {
+                if elapsed == from {
+                    return Some(Task::batch([
+                        Task::done(Message::SetMode(*mode)),
+                        Task::done(Message::Panel(panel::PanelMsg::Tab(*tab))),
+                    ]));
+                }
+                let index = film.saved;
+                film.saved += 1;
+                return Some(
+                    iced::window::latest()
+                        .and_then(iced::window::screenshot)
+                        .map(move |shot| Message::FilmShot(index, shot)),
+                );
+            }
+            from += len;
+        }
+        None
     }
 
     fn subscription(&self) -> Subscription<Message> {
