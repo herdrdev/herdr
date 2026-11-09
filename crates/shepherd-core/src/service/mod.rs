@@ -586,6 +586,46 @@ impl OrchestrationService {
         crate::archive_task(root, id).map_err(|e| e.to_string())
     }
 
+    pub fn update_task(
+        &self,
+        root: &Path,
+        id: &str,
+        update: crate::TaskUpdate,
+    ) -> Result<CreatedTask, String> {
+        crate::update_task(root, id, update).map_err(|e| e.to_string())
+    }
+
+    /// Deletes a task for good (archiving is the way back). It needs `confirm`, and a task that live agents
+    /// are still working on is refused.
+    pub fn delete_task(
+        &self,
+        root: &Path,
+        id: &str,
+        confirm: bool,
+    ) -> Result<crate::TaskStatus, String> {
+        if !confirm {
+            return Err(format!(
+                "confirmation_required: deleting task '{id}' removes its folder (issue, spec, acceptance, attachments) for good; pass confirm: true to proceed"
+            ));
+        }
+        let task = crate::find_task(root, id).map_err(|e| e.to_string())?;
+        let number = task.status.id.to_string();
+        let working: Vec<String> = self
+            .load_registry()?
+            .live()
+            .into_iter()
+            .filter(|a| a.task_id == number)
+            .map(|a| a.id.clone())
+            .collect();
+        if !working.is_empty() {
+            return Err(format!(
+                "task '{id}' has live agents ({}); stop them first",
+                working.join(", ")
+            ));
+        }
+        crate::delete_task(root, id).map_err(|e| e.to_string())
+    }
+
     pub fn start_run(
         &self,
         root: PathBuf,
@@ -953,6 +993,52 @@ impl OrchestrationService {
                     .unwrap_or(false);
                 let tasks = self.list_tasks(&root, archived)?;
                 serde_json::to_value(tasks).map_err(|e| e.to_string())
+            }
+            "task_update" => {
+                let root = args
+                    .get("root")
+                    .and_then(Value::as_str)
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| {
+                        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+                    });
+                let id = args
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| "missing 'id' for task_update".to_owned())?;
+                let text = |key: &str| args.get(key).and_then(Value::as_str).map(str::to_owned);
+                let update = crate::TaskUpdate {
+                    title: text("title"),
+                    description: text("description"),
+                    spec: text("spec"),
+                    criteria: args.get("criteria").and_then(Value::as_array).map(|a| {
+                        a.iter()
+                            .filter_map(Value::as_str)
+                            .map(str::to_owned)
+                            .collect()
+                    }),
+                };
+                let task = self.update_task(&root, id, update)?;
+                serde_json::to_value(task).map_err(|e| e.to_string())
+            }
+            "task_delete" => {
+                let root = args
+                    .get("root")
+                    .and_then(Value::as_str)
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| {
+                        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+                    });
+                let id = args
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| "missing 'id' for task_delete".to_owned())?;
+                let confirm = args
+                    .get("confirm")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                let status = self.delete_task(&root, id, confirm)?;
+                serde_json::to_value(status).map_err(|e| e.to_string())
             }
             "task_create" | "create_task" => {
                 let root = args

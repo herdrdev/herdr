@@ -2532,6 +2532,106 @@ fn one_run_can_be_deleted_and_a_live_one_only_when_confirmed() {
 }
 
 #[test]
+fn a_task_can_be_edited_in_place_and_deleted_only_with_a_yes() {
+    let tmp = TestDir::new("test");
+    let (service, _terminals, _clock) = test_service(tmp.path());
+    let task = service
+        .create_task(
+            tmp.path(),
+            "Login page".into(),
+            "Users sign in".into(),
+            vec!["it works".into(), "it is fast".into()],
+            vec![],
+        )
+        .unwrap();
+    let id = task.status.id.to_string();
+    // a criterion that was ticked by hand stays ticked after an edit that keeps its text
+    let acceptance = task.directory.join("acceptance.md");
+    std::fs::write(
+        &acceptance,
+        "# Acceptance criteria\n\n- [x] it works\n- [ ] it is fast\n",
+    )
+    .unwrap();
+
+    let edited = service
+        .update_task(
+            tmp.path(),
+            &id,
+            crate::TaskUpdate {
+                title: Some("Sign-in page".into()),
+                description: Some("Users sign in with a password".into()),
+                spec: Some("# Spec\n\nUse the form component.\n".into()),
+                criteria: Some(vec!["it works".into(), "it is accessible".into()]),
+            },
+        )
+        .unwrap();
+    assert_eq!(edited.status.title, "Sign-in page");
+    assert_eq!(
+        edited.directory, task.directory,
+        "the folder keeps its name"
+    );
+    let issue = std::fs::read_to_string(task.directory.join("issue.md")).unwrap();
+    assert_eq!(issue, "# Sign-in page\n\nUsers sign in with a password\n");
+    assert!(std::fs::read_to_string(task.directory.join("spec.md"))
+        .unwrap()
+        .contains("form component"));
+    let acceptance = std::fs::read_to_string(&acceptance).unwrap();
+    assert!(acceptance.contains("- [x] it works"), "{acceptance}");
+    assert!(
+        acceptance.contains("- [ ] it is accessible"),
+        "{acceptance}"
+    );
+    assert!(!acceptance.contains("it is fast"));
+
+    // only the title: the old description stays under the new heading
+    service
+        .update_task(
+            tmp.path(),
+            &id,
+            crate::TaskUpdate {
+                title: Some("Sign-in".into()),
+                ..crate::TaskUpdate::default()
+            },
+        )
+        .unwrap();
+    let issue = std::fs::read_to_string(task.directory.join("issue.md")).unwrap();
+    assert_eq!(issue, "# Sign-in\n\nUsers sign in with a password\n");
+    assert!(service
+        .update_task(
+            tmp.path(),
+            &id,
+            crate::TaskUpdate {
+                title: Some("  ".into()),
+                ..crate::TaskUpdate::default()
+            }
+        )
+        .is_err());
+
+    // deleting needs a yes, and a live agent on the task blocks it
+    let refused = service.delete_task(tmp.path(), &id, false).unwrap_err();
+    assert!(refused.starts_with("confirmation_required"), "{refused}");
+    assert!(task.directory.exists());
+    let worker = service
+        .spawn(ServiceSpawnRequest {
+            root: tmp.path().to_path_buf(),
+            role: "docs".into(),
+            task: "t".into(),
+            task_id: Some(id.clone()),
+            ..ServiceSpawnRequest::default()
+        })
+        .unwrap();
+    let busy = service.delete_task(tmp.path(), &id, true).unwrap_err();
+    assert!(busy.contains(&worker.id), "{busy}");
+    assert!(task.directory.exists());
+
+    service.kill(&worker.id).unwrap();
+    let gone = service.delete_task(tmp.path(), &id, true).unwrap();
+    assert_eq!(gone.id, task.status.id);
+    assert!(!task.directory.exists());
+    assert!(service.list_tasks(tmp.path(), false).unwrap().is_empty());
+}
+
+#[test]
 fn an_exit_is_traced_and_a_resolvable_pane_is_never_declared_gone() {
     let tmp = TestDir::new("test");
     let (service, terminals, clock) = test_service(tmp.path());

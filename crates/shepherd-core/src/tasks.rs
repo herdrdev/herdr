@@ -221,6 +221,106 @@ pub fn archive_task(
     Ok(destination)
 }
 
+/// What can be changed in a task after it was created; `None` leaves that part as it is.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct TaskUpdate {
+    pub title: Option<String>,
+    /// The body of `issue.md`, under the title.
+    pub description: Option<String>,
+    /// The whole of `spec.md`.
+    pub spec: Option<String>,
+    /// One checkable criterion per entry; a criterion that was already ticked and keeps its text stays ticked.
+    pub criteria: Option<Vec<String>>,
+}
+
+/// Changes a task in place. The folder name (`<id>-<slug>`) is kept even if the title changes, so every
+/// reference to the task stays valid.
+pub fn update_task(
+    root: impl AsRef<Path>,
+    reference: &str,
+    update: TaskUpdate,
+) -> Result<CreatedTask, Box<dyn std::error::Error + Send + Sync>> {
+    let mut task = find_task(root.as_ref(), reference)?;
+    if let Some(title) = update.title.as_deref().map(str::trim) {
+        if title.is_empty() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "a task needs a title",
+            )
+            .into());
+        }
+        task.status.title = title.to_owned();
+    }
+    if update.title.is_some() || update.description.is_some() {
+        let current = read_task_section(&task, "issue")?;
+        let body = match &update.description {
+            Some(description) => description.trim().to_owned(),
+            // keep the old body, only the heading changes
+            None => match current.strip_prefix("# ") {
+                Some(rest) => rest
+                    .split_once('\n')
+                    .map(|(_, body)| body.trim().to_owned())
+                    .unwrap_or_default(),
+                None => current.trim().to_owned(),
+            },
+        };
+        let issue = format!("# {}\n\n{}\n", task.status.title, body);
+        write_task_section(&task, "issue", &issue)?;
+    }
+    if let Some(spec) = &update.spec {
+        write_task_section(&task, "spec", spec)?;
+    }
+    if let Some(criteria) = &update.criteria {
+        let before = read_task_section(&task, "acceptance")?;
+        let ticked: Vec<&str> = before
+            .lines()
+            .filter_map(|l| {
+                let l = l.trim();
+                l.strip_prefix("- [x] ")
+                    .or_else(|| l.strip_prefix("- [X] "))
+            })
+            .collect();
+        let mut markdown = acceptance_markdown(criteria);
+        for criterion in criteria
+            .iter()
+            .map(|c| c.trim())
+            .filter(|c| ticked.contains(c))
+        {
+            markdown = markdown.replacen(
+                &format!("- [ ] {criterion}\n"),
+                &format!("- [x] {criterion}\n"),
+                1,
+            );
+        }
+        write_task_section(&task, "acceptance", &markdown)?;
+    }
+    task.status.updated = now_rfc3339();
+    save_task_status(task.directory.join("status.json"), &task.status)?;
+    Ok(task)
+}
+
+/// Removes a task and everything in its folder (issue, spec, acceptance, attachments). Unlike archiving,
+/// there is no way back. The folder must be one of the task folders of `root`.
+pub fn delete_task(
+    root: impl AsRef<Path>,
+    reference: &str,
+) -> Result<TaskStatus, Box<dyn std::error::Error + Send + Sync>> {
+    let task = find_task(root.as_ref(), reference)?;
+    let tasks_dir = root.as_ref().join(".shepherd").join("tasks");
+    if task.directory.parent() != Some(tasks_dir.as_path()) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!(
+                "{} is not a task folder of this project",
+                task.directory.display()
+            ),
+        )
+        .into());
+    }
+    std::fs::remove_dir_all(&task.directory)?;
+    Ok(task.status)
+}
+
 pub fn task_slug(title: &str) -> String {
     let mut slug = String::new();
     let mut separator = false;
