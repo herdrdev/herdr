@@ -4,6 +4,7 @@
 build teams of claude, codex and gemini agents, give them roles, and let them work in parallel, each in its own git worktree.</p>
 
 <p align="center">
+  <a href="https://shepherdr.rivaldito.com">website</a> ·
   <a href="#patterns-your-agent-teams">patterns</a> ·
   <a href="#roles-who-does-what">roles</a> ·
   <a href="#try-it-from-scratch">try it from scratch</a> ·
@@ -29,7 +30,7 @@ build teams of claude, codex and gemini agents, give them roles, and let them wo
 
 > **a fork of [herdr](https://github.com/herdrdev/herdr)** (apache-2.0), forked from herdr 0.9.5 at upstream commit `ee5bfb5`. the herdr history is preserved below the shepherd commit; shepherd is not affiliated with the herdr project.
 
-shepherd adds multi-agent orchestration on top of herdr's terminal runtime. you keep the native terminal of every agent; shepherd decides who works on what, in which worktree, and how they talk to each other. not sure it is for you? read [why shepherd](docs/shepherd/why-shepherd.md), which also says when it is not.
+shepherd adds multi-agent orchestration on top of herdr's terminal runtime. you keep the native terminal of every agent; shepherd decides who works on what, in which worktree, and how they talk to each other. not sure it is for you? read [why shepherd](docs/shepherd/why-shepherd.md), which also says when it is not. more at **[shepherdr.rivaldito.com](https://shepherdr.rivaldito.com)**.
 
 ---
 
