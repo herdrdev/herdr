@@ -1166,6 +1166,25 @@ impl OrchestrationService {
                 let removed = self.clean_pattern_runs(&root)?;
                 Ok(serde_json::json!({ "removed": removed }))
             }
+            "run_delete" => {
+                let root = args
+                    .get("root")
+                    .and_then(Value::as_str)
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| {
+                        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+                    });
+                let id = args
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| "missing 'id' for run_delete".to_owned())?;
+                let confirm = args
+                    .get("confirm")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                let run = self.delete_pattern_run(&root, id, confirm)?;
+                serde_json::to_value(run).map_err(|e| e.to_string())
+            }
             "bus_clean" => {
                 let force = args.get("force").and_then(Value::as_bool).unwrap_or(false);
                 let removed = self.clean_bus(force)?;

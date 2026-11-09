@@ -310,6 +310,44 @@ impl OrchestrationService {
         Ok(before - kept.len())
     }
 
+    /// Forgets one run, whatever its state. A run that is still live (running, paused, stalled or degraded)
+    /// is stopped first, which kills its agents, so that needs `confirm`; a finished one is just removed.
+    /// Returns the run as it was. The agents of a finished run stay in the registry until they are cleaned.
+    pub fn delete_pattern_run(
+        &self,
+        root: &Path,
+        id: &str,
+        confirm: bool,
+    ) -> Result<PatternRun, String> {
+        let runs_file = pattern_runs_path(root, &self.service_config.state_dir);
+        let runs = load_pattern_runs(&runs_file)?;
+        let run = runs
+            .iter()
+            .find(|r| r.id == id)
+            .ok_or_else(|| format!("pattern run '{id}' not found"))?;
+        let live = !matches!(
+            run.state,
+            PatternRunState::Done | PatternRunState::Failed | PatternRunState::Stopped
+        );
+        if live {
+            if !confirm {
+                return Err(format!(
+                    "confirmation_required: deleting pattern run '{id}' stops it and kills all its agents; pass confirm: true to proceed"
+                ));
+            }
+            self.stop_pattern_run(root, id, true)?;
+        }
+        // read again: stopping rewrote the file
+        let mut runs = load_pattern_runs(&runs_file)?;
+        let at = runs
+            .iter()
+            .position(|r| r.id == id)
+            .ok_or_else(|| format!("pattern run '{id}' not found"))?;
+        let removed = runs.remove(at);
+        save_pattern_runs(&runs_file, &runs)?;
+        Ok(removed)
+    }
+
     /// Like `start_pattern_run`, with every agent placed in `workspace` (the one the run was launched from).
     #[allow(clippy::too_many_arguments)] // mirrors start_pattern_run plus the workspace
     pub fn start_pattern_run_in(

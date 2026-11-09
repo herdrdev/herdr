@@ -2477,6 +2477,61 @@ fn clean_removes_finished_runs_and_the_bus_but_not_live_traffic() {
 }
 
 #[test]
+fn one_run_can_be_deleted_and_a_live_one_only_when_confirmed() {
+    let tmp = TestDir::new("test");
+    let (service, _terminals, _clock) = test_service(tmp.path());
+    let start = |task: &str| {
+        service
+            .start_pattern_run(
+                tmp.path(),
+                Some("orchestrator-worker"),
+                None,
+                Some(task),
+                None,
+                true,
+            )
+            .unwrap()
+    };
+    let (keep, gone) = (start("keep"), start("gone"));
+
+    // a live run is not forgotten without a yes, and nothing changes
+    let refused = service
+        .delete_pattern_run(tmp.path(), &gone.id, false)
+        .unwrap_err();
+    assert!(refused.starts_with("confirmation_required"), "{refused}");
+    assert_eq!(service.list_pattern_runs(tmp.path()).unwrap().len(), 2);
+
+    // with the yes it is stopped (its agents are killed) and removed; the other run stays
+    let removed = service
+        .delete_pattern_run(tmp.path(), &gone.id, true)
+        .unwrap();
+    assert_eq!(removed.id, gone.id);
+    let left = service.list_pattern_runs(tmp.path()).unwrap();
+    assert_eq!(
+        left.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(),
+        [keep.id.as_str()]
+    );
+
+    // a finished run needs no confirmation
+    service
+        .stop_pattern_run(tmp.path(), &keep.id, true)
+        .unwrap();
+    service
+        .delete_pattern_run(tmp.path(), &keep.id, false)
+        .unwrap();
+    assert!(service.list_pattern_runs(tmp.path()).unwrap().is_empty());
+
+    // and an unknown one is an error, through the same door the apps use
+    assert!(service
+        .handle_call(
+            "run_delete",
+            serde_json::json!({ "root": tmp.path(), "id": "run-nope", "confirm": true })
+        )
+        .unwrap_err()
+        .contains("not found"));
+}
+
+#[test]
 fn an_exit_is_traced_and_a_resolvable_pane_is_never_declared_gone() {
     let tmp = TestDir::new("test");
     let (service, terminals, clock) = test_service(tmp.path());
