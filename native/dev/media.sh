@@ -17,7 +17,7 @@ mkdir -p "$OUT"; OUT="$(cd "$OUT" && pwd)"
 T=/tmp/shepherd-demo-env
 rm -rf "$T"; mkdir -p "$T"
 mkdir -p "$T/bin" "$T/cfg/shepherd" "$T/cfg/shepherd-dev" "$T/state" "$T/home" "$T/webgo/.shepherd/patterns" "$T/notes"
-printf '[shepherd]\nenabled = true\n' >"$T/cfg/shepherd-dev/config.toml"
+printf '[shepherd]\nenabled = true\n\n[shepherd.limits]\nmax_concurrent = 16\n' >"$T/cfg/shepherd-dev/config.toml"
 # every role runs the stand-in `codex`: a script that shows a prompt and swallows input
 printf 'roles:\n  brain: {vendor: codex, worktree: false}\n  coder: {vendor: codex, worktree: false}\n  reviewer: {vendor: codex, worktree: false}\n  tester: {vendor: codex, worktree: false}\n' >"$T/cfg/shepherd/config.yaml"
 printf '#!/bin/bash\nprintf "\\033[2J\\033[H› "\nwhile IFS= read -r _; do :; done\n' >"$T/bin/codex"
@@ -79,10 +79,20 @@ B=$("$SERVER" workspace create --cwd "$T/notes" --label notes --no-focus | json 
     --criteria '`go test ./...` passes (httptest)' \
     --criteria 'Standard library only' >/dev/null 2>&1
   "$SERVER" pattern validate api-team 2>&1
-  "$SERVER" pattern run api-team --task "Task #1: Create a Go server" 2>&1)
+  "$SERVER" task new "Add request logging" --description "Log method, path and status of every request." \
+    --criteria 'Each request is logged on one line' --criteria 'Health checks are not logged' >/dev/null 2>&1
+  "$SERVER" task new "Document the API" --description "Write the README section for the endpoints." \
+    --criteria 'Every endpoint has an example' >/dev/null 2>&1
+  "$SERVER" pattern run api-team --task "Task #1: Create a Go server" 2>&1
+  "$SERVER" pattern run hierarchical --task "Task #2: Add request logging" 2>&1)
 sleep 2
-for i in 1 2 3 4; do "$SERVER" topic publish orders "subtask $i/4 for the Go server" --from orchestrator-1 >/dev/null 2>&1; done
-"$SERVER" topic publish results "scaffold done: go.mod and cmd/server/main.go" --from worker-1 >/dev/null 2>&1
+for i in 1 2 3 4; do "$SERVER" topic publish orders "subtask $i/4 for the Go server" --from brain-1 >/dev/null 2>&1; done
+"$SERVER" topic publish results "scaffold done: go.mod and cmd/server/main.go" --from coder-1 >/dev/null 2>&1
+"$SERVER" topic publish results "handlers done: GET / and GET /health, with httptest" --from coder-2 >/dev/null 2>&1
+"$SERVER" topic publish root-orders "milestone: request logging for every endpoint" --from brain-5 >/dev/null 2>&1
+"$SERVER" topic publish team-orders "middleware: log method, path and status" --from reviewer-1 >/dev/null 2>&1
+"$SERVER" topic publish team-orders "tests: assert health checks are not logged" --from reviewer-2 >/dev/null 2>&1
+"$SERVER" topic publish team-results "middleware merged into main.go" --from coder-7 >/dev/null 2>&1
 "$SERVER" workspace focus w1 >/dev/null 2>&1
 sleep 2
 export SHEPHERD_BIN="$SERVER" SHEPHERD_NATIVE_SIZE="${SIZE:-1920x1080}"
