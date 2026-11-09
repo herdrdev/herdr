@@ -29,7 +29,7 @@ build teams of claude, codex and gemini agents, give them roles, and let them wo
 
 > **a fork of [herdr](https://github.com/herdrdev/herdr)** (apache-2.0), forked from herdr 0.9.5 at upstream commit `ee5bfb5`. the herdr history is preserved below the shepherd commit; shepherd is not affiliated with the herdr project.
 
-shepherd adds multi-agent orchestration on top of herdr's terminal runtime. you keep the native terminal of every agent; shepherd decides who works on what, in which worktree, and how they talk to each other.
+shepherd adds multi-agent orchestration on top of herdr's terminal runtime. you keep the native terminal of every agent; shepherd decides who works on what, in which worktree, and how they talk to each other. not sure it is for you? read [why shepherd](docs/shepherd/why-shepherd.md), which also says when it is not.
 
 ---
 
@@ -264,9 +264,15 @@ to connect it to your own server instead, see [docs/shepherd/native-app.md](docs
 | [topics and events](docs/shepherd/topics-and-events.md) | the event bus: topics, partitions, consumer groups, replay |
 | [native app](docs/shepherd/native-app.md) | the desktop window, its ten views and how to connect it |
 
+## contributing
+
+contributions are welcome: bug reports, ideas, docs, patterns, roles and code. start with [CONTRIBUTING.md](CONTRIBUTING.md) and the [good first issues](https://github.com/Rivaldito/shepherd/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22); ask questions and share ideas in [discussions](https://github.com/Rivaldito/shepherd/discussions).
+
 ## keeping up with herdr
 
 this fork follows herdr with a repeatable routine, described in [docs/UPSTREAM-SYNC.md](docs/UPSTREAM-SYNC.md).
+
+some files in the repository root belong to herdr and are kept so merging upstream stays simple: `CHANGELOG.md` (herdr's release history), `README.zh-CN.md` and `SPONSORS.md`. shepherd's own changelog is the notes of each [release](https://github.com/Rivaldito/shepherd/releases).
 
 ## built on herdr
 
