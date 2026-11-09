@@ -1,7 +1,7 @@
 id = "copilot"
-version = "2026.08.29.1"
+version = "2026.11.09.2"
 min_engine_version = 1
-updated_at = "2026-08-29T00:00:00Z"
+updated_at = "2026-11-09T00:00:00Z"
 aliases = ["github-copilot", "ghcs"]
 
 [[rules]]
@@ -30,6 +30,16 @@ priority = 110
 region = "bottom_non_empty_lines(6)"
 visible_working = true
 line_regex = ['^\s*◎\s+Waiting for background agents(?:\s|·|$)']
+
+# Copilot 1.0.107+ live footer on the last non-empty line. Tolerates Plan/Autopilot
+# mode prefixes, tool labels (Running bash), Executing/Cancelling, and interrupt hints.
+[[rules]]
+id = "working_interrupt_footer"
+state = "working"
+priority = 100
+region = "bottom_non_empty_lines(1)"
+visible_working = true
+line_regex = ['^\s*(?:[^○◎◉●\n]*·\s*)*[○◎◉●]?\s*(?:Working|Executing|Cancelling|Running\b|Creating\b)\b.*\b(?:(?:ctrl|cmd)\+c|esc(?:\s+again)?)\s+(?:to\s+)?(?:interrupt|stop agents)\b']
 
 [[rules]]
 id = "working_cancel_hint"

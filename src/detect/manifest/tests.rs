@@ -688,6 +688,154 @@ fn all_bundled_manifests_parse_and_validate() {
     }
 }
 
+fn explain_bundled_copilot(screen: &str) -> DetectionExplain {
+    let agent = Agent::GithubCopilot;
+    let loaded =
+        bundled_loaded_manifest(agent, bundled_manifest(agent).unwrap(), None, None, false);
+    evaluate_loaded_manifest(
+        agent,
+        DetectionInput {
+            screen,
+            osc_title: "",
+            osc_progress: "",
+        },
+        loaded,
+        false,
+    )
+}
+
+#[test]
+fn copilot_working_footer_variants() {
+    for footer in [
+        " ○ Working · 2.2 KiB ctrl+c interrupt                      Copilot Fusion → gpt-6-luna",
+        " ◎ Working ctrl+c interrupt                                Copilot Fusion → gpt-6-luna",
+        " ◉ Working ctrl+c interrupt",
+        " ● Working · 6.4 KiB ctrl+c interrupt                      Copilot Fusion → gpt-6-luna",
+        " Working ctrl+c interrupt",
+        " ◎ Working ctrl+c to interrupt",
+    ] {
+        let screen =
+            format!("Previous output\n────────────────\n❯\n────────────────\n{footer}\n\n  \n");
+        let result = explain_bundled_copilot(&screen);
+        assert_eq!(result.state, AgentState::Working, "{footer}");
+        assert!(result.visible_working, "{footer}");
+        assert_eq!(
+            result.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+            Some("working_interrupt_footer"),
+            "{footer}"
+        );
+    }
+}
+
+#[test]
+fn copilot_running_tool_footer() {
+    for footer in [
+        " ◎ Running bash · 28s · 130 B ctrl+c interrupt          Copilot Fusion → gpt-6-luna",
+        " ● Running bash · 26s · 130 B ctrl+c interrupt",
+        " Autopilot (limited) · Manual Approval · ○ Running bash · 15s · 131 B ctrl+c interrupt",
+    ] {
+        let screen = format!("tool output\n❯\n{footer}\n");
+        let result = explain_bundled_copilot(&screen);
+        assert_eq!(result.state, AgentState::Working, "{footer}");
+        assert!(result.visible_working, "{footer}");
+        assert_eq!(
+            result.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+            Some("working_interrupt_footer"),
+            "{footer}"
+        );
+    }
+}
+
+#[test]
+fn copilot_mode_prefix_working_footer() {
+    for footer in [
+        " Autopilot (limited) · Manual Approval · ○ Working · 413 B ctrl+c interrupt   Copilot Fusion → gpt-6-luna",
+        " Autopilot (limited) · Manual Approval · ◎ Working ctrl+c interrupt",
+        " Plan · Manual Approval · ◎ Working ctrl+c interrupt   Copilot Fusion → gpt-6-luna",
+        " Plan · Manual Approval · ● Working · 1.2 KiB ctrl+c interrupt",
+        " Interactive · Manual Approval · ● Working · 6.4 KiB ctrl+c interrupt · ctrl+enter enqueue",
+    ] {
+        let result = explain_bundled_copilot(&format!("❯\n{footer}\n"));
+        assert_eq!(result.state, AgentState::Working, "{footer}");
+        assert!(result.visible_working, "{footer}");
+        assert_eq!(
+            result.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+            Some("working_interrupt_footer"),
+            "{footer}"
+        );
+    }
+}
+
+#[test]
+fn copilot_executing_cancelling_and_stop_agents_footer() {
+    for footer in [
+        " ◉ Executing ctrl+c interrupt   Copilot Fusion → gpt-6-luna",
+        " ○ Cancelling · 200 B ctrl+c interrupt",
+        " ◉ Working ctrl+c stop agents",
+        " ◉ Creating essay · 1.2 KiB ctrl+c interrupt   Copilot Fusion → gpt-6-luna",
+        " ◉ Working · 1 KiB esc again to interrupt   Copilot Fusion → gpt-6-luna",
+        " ◉ Working · 1 KiB cmd+c interrupt   Copilot Fusion → gpt-6-luna",
+    ] {
+        let result = explain_bundled_copilot(&format!("❯\n{footer}\n"));
+        assert_eq!(result.state, AgentState::Working, "{footer}");
+        assert!(result.visible_working, "{footer}");
+        assert_eq!(
+            result.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+            Some("working_interrupt_footer"),
+            "{footer}"
+        );
+    }
+}
+
+#[test]
+fn copilot_idle_footer_variants() {
+    for footer in [
+        " ← open sidebar · Interactive · Manual Approval · / commands · ? help · tab next tab    Copilot Fusion → gpt-6-luna",
+        " Interactive · Manual Approval · /… Copilot Fusion → gpt-6-luna",
+        " ← open sidebar · Autopilot (limited) · Manual Approval · / commands · ? help",
+    ] {
+        let result = explain_bundled_copilot(&format!("Completed output\n❯\n{footer}\n"));
+        assert_eq!(result.state, AgentState::Idle, "{footer}");
+        assert!(!result.visible_working, "{footer}");
+    }
+}
+
+#[test]
+fn copilot_permission_prompt_takes_precedence_over_working_footer() {
+    // Use a Running-bash footer so only working_interrupt_footer can match working,
+    // not the legacy working_cancel_hint that keys off "esc to cancel".
+    let screen = "Do you want to run this command?\n\
+        ❯ 1. Yes\n\
+        ↑/↓ to navigate · enter to select · esc to cancel\n\
+         ● Running bash · 6.4 KiB ctrl+c interrupt    Copilot Fusion → gpt-6-luna";
+    let result = explain_bundled_copilot(screen);
+    assert_eq!(result.state, AgentState::Blocked);
+    assert!(result.visible_blocker);
+    assert!(!result.visible_working);
+    assert!(result.evaluated_rules.iter().any(|rule| {
+        rule.matched && rule.id == "working_interrupt_footer" && rule.state == AgentState::Working
+    }));
+    assert_eq!(
+        result.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+        Some("selection_blocker")
+    );
+}
+
+#[test]
+fn copilot_transcript_working_text_is_idle() {
+    for screen in [
+        "Working",
+        "Working on the requested changes.\n❯",
+        "Working\nctrl+c interrupt",
+        "The transcript says Working and describes ctrl+c interrupt",
+        " ○ Working · 2.2 KiB ctrl+c interrupt\nCompleted output\n Interactive · Manual Approval · /… Copilot Fusion → gpt-6-luna",
+    ] {
+        let result = explain_bundled_copilot(screen);
+        assert_eq!(result.state, AgentState::Idle, "{screen}");
+        assert!(!result.visible_working, "{screen}");
+    }
+}
+
 #[test]
 fn manifest_validation_rejects_unknown_fields_empty_rules_invalid_regions_and_regexes() {
     assert!(parse_manifest(
