@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Capture repeated Herdr pane reads for agent screen detection fixtures."""
+"""Capture repeated Shepherd pane reads for agent screen detection fixtures."""
 
 from __future__ import annotations
 
@@ -62,12 +62,12 @@ def main() -> int:
 
     capture_index = 1
     while True:
-        pane = resolve_target(args.herdr, args.pane, args.agent)
+        pane = resolve_target(args.shepherd, args.pane, args.agent)
         if pane is None:
             if args.agent:
-                print(f"agent '{args.agent}' was not found by `herdr agent get`")
+                print(f"agent '{args.agent}' was not found by `shepherd agent get`")
             else:
-                print(f"pane '{args.pane}' was not found by `herdr pane list`")
+                print(f"pane '{args.pane}' was not found by `shepherd pane list`")
                 print("pass a pane id with --pane, or rename the target pane to harness-test")
             return 1
 
@@ -112,7 +112,7 @@ def main() -> int:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Interactively capture Herdr pane screen reads for agent detection fixture work."
+        description="Interactively capture Shepherd pane screen reads for agent detection fixture work."
     )
     parser.add_argument(
         "--pane",
@@ -121,7 +121,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--agent",
-        help="agent target to capture; resolved with `herdr agent get`",
+        help="agent target to capture; resolved with `shepherd agent get`",
     )
     parser.add_argument(
         "--out",
@@ -148,9 +148,9 @@ def parse_args() -> argparse.Namespace:
         help="recent-buffer lines to save per sample (default: 120)",
     )
     parser.add_argument(
-        "--herdr",
-        default="herdr",
-        help="Herdr CLI binary to call (default: herdr)",
+        "--shepherd",
+        default="shepherd",
+        help="Shepherd CLI binary to call (default: shepherd)",
     )
     parser.add_argument(
         "--once",
@@ -174,22 +174,22 @@ def non_negative_float(value: str) -> float:
     return parsed
 
 
-def resolve_pane(herdr: str, pane_ref: str) -> PaneMatch | None:
-    result = run_command([herdr, "pane", "list"])
+def resolve_pane(shepherd: str, pane_ref: str) -> PaneMatch | None:
+    result = run_command([shepherd, "pane", "list"])
     if result.code != 0:
         pane = fallback_pane_id(pane_ref)
-        return enrich_pane_with_agent(herdr, pane) if pane else None
+        return enrich_pane_with_agent(shepherd, pane) if pane else None
 
     try:
         response = json.loads(result.stdout.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError):
         pane = fallback_pane_id(pane_ref)
-        return enrich_pane_with_agent(herdr, pane) if pane else None
+        return enrich_pane_with_agent(shepherd, pane) if pane else None
 
     panes = response.get("result", {}).get("panes", [])
     if not isinstance(panes, list):
         pane = fallback_pane_id(pane_ref)
-        return enrich_pane_with_agent(herdr, pane) if pane else None
+        return enrich_pane_with_agent(shepherd, pane) if pane else None
 
     exact_matches = []
     loose_matches = []
@@ -207,7 +207,7 @@ def resolve_pane(herdr: str, pane_ref: str) -> PaneMatch | None:
 
     matches = exact_matches or loose_matches
     if len(matches) == 1:
-        return enrich_pane_with_agent(herdr, pane_from_dict(matches[0]))
+        return enrich_pane_with_agent(shepherd, pane_from_dict(matches[0]))
     if len(matches) > 1:
         print(f"pane ref '{pane_ref}' matched multiple panes:")
         for pane in matches:
@@ -215,21 +215,21 @@ def resolve_pane(herdr: str, pane_ref: str) -> PaneMatch | None:
         return None
 
     pane = fallback_pane_id(pane_ref)
-    return enrich_pane_with_agent(herdr, pane) if pane else None
+    return enrich_pane_with_agent(shepherd, pane) if pane else None
 
 
-def resolve_target(herdr: str, pane_ref: str, agent_ref: str | None) -> PaneMatch | None:
+def resolve_target(shepherd: str, pane_ref: str, agent_ref: str | None) -> PaneMatch | None:
     if agent_ref:
-        agent = get_agent(herdr, agent_ref)
+        agent = get_agent(shepherd, agent_ref)
         if agent is None:
             return None
         pane = pane_from_agent_dict(agent)
-        return enrich_pane_with_pane_list(herdr, pane)
-    return resolve_pane(herdr, pane_ref)
+        return enrich_pane_with_pane_list(shepherd, pane)
+    return resolve_pane(shepherd, pane_ref)
 
 
-def get_agent(herdr: str, agent_ref: str) -> dict[str, Any] | None:
-    result = run_command([herdr, "agent", "get", agent_ref])
+def get_agent(shepherd: str, agent_ref: str) -> dict[str, Any] | None:
+    result = run_command([shepherd, "agent", "get", agent_ref])
     if result.code != 0:
         return None
     try:
@@ -240,8 +240,8 @@ def get_agent(herdr: str, agent_ref: str) -> dict[str, Any] | None:
     return agent if isinstance(agent, dict) else None
 
 
-def enrich_pane_with_agent(herdr: str, pane: PaneMatch) -> PaneMatch:
-    result = run_command([herdr, "agent", "list"])
+def enrich_pane_with_agent(shepherd: str, pane: PaneMatch) -> PaneMatch:
+    result = run_command([shepherd, "agent", "list"])
     if result.code != 0:
         return pane
     try:
@@ -257,8 +257,8 @@ def enrich_pane_with_agent(herdr: str, pane: PaneMatch) -> PaneMatch:
     return pane
 
 
-def enrich_pane_with_pane_list(herdr: str, pane: PaneMatch) -> PaneMatch:
-    result = run_command([herdr, "pane", "list"])
+def enrich_pane_with_pane_list(shepherd: str, pane: PaneMatch) -> PaneMatch:
+    result = run_command([shepherd, "pane", "list"])
     if result.code != 0:
         return pane
     try:
@@ -412,16 +412,16 @@ def capture_case(
         commands = [
             (
                 f"{prefix}.detection.txt",
-                [args.herdr, "pane", "read", pane.pane_id, "--source", "detection", "--format", "text"],
+                [args.shepherd, "pane", "read", pane.pane_id, "--source", "detection", "--format", "text"],
             ),
             (
                 f"{prefix}.detection.ansi",
-                [args.herdr, "pane", "read", pane.pane_id, "--source", "detection", "--format", "ansi"],
+                [args.shepherd, "pane", "read", pane.pane_id, "--source", "detection", "--format", "ansi"],
             ),
             (
                 f"{prefix}.recent.txt",
                 [
-                    args.herdr,
+                    args.shepherd,
                     "pane",
                     "read",
                     pane.pane_id,
@@ -436,7 +436,7 @@ def capture_case(
             (
                 f"{prefix}.recent.ansi",
                 [
-                    args.herdr,
+                    args.shepherd,
                     "pane",
                     "read",
                     pane.pane_id,
@@ -450,7 +450,7 @@ def capture_case(
             ),
             (
                 f"{prefix}.explain.json",
-                [args.herdr, "agent", "explain", pane.pane_id, "--json"],
+                [args.shepherd, "agent", "explain", pane.pane_id, "--json"],
             ),
         ]
 
@@ -514,7 +514,7 @@ def write_metadata(
         f"samples = {args.samples}",
         f"interval_seconds = {args.interval}",
         f"recent_lines = {args.lines}",
-        f"herdr = {toml_string(args.herdr)}",
+        f"shepherd = {toml_string(args.shepherd)}",
         f"pane_label = {toml_optional_string(pane.label)}",
         f"agent_name = {toml_optional_string(pane.name)}",
         f"pane_agent = {toml_optional_string(pane.agent)}",
@@ -522,11 +522,11 @@ def write_metadata(
         f"pane_title = {toml_optional_string(pane.title)}",
         "",
         "[commands]",
-        'detection_text = "herdr pane read <pane> --source detection --format text"',
-        'detection_ansi = "herdr pane read <pane> --source detection --format ansi"',
-        'recent_text = "herdr pane read <pane> --source recent --lines <n> --format text"',
-        'recent_ansi = "herdr pane read <pane> --source recent --lines <n> --format ansi"',
-        'explain = "herdr agent explain <pane> --json"',
+        'detection_text = "shepherd pane read <pane> --source detection --format text"',
+        'detection_ansi = "shepherd pane read <pane> --source detection --format ansi"',
+        'recent_text = "shepherd pane read <pane> --source recent --lines <n> --format text"',
+        'recent_ansi = "shepherd pane read <pane> --source recent --lines <n> --format ansi"',
+        'explain = "shepherd agent explain <pane> --json"',
     ]
     if failures:
         lines.append("")

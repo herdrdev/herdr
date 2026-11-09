@@ -1,0 +1,17 @@
+[
+  {
+    "command": "claude",
+    "name": "claude",
+    "state": "<STATE_DIR_PATH>"
+  },
+  {
+    "command": "codex",
+    "name": "codex",
+    "state": "<STATE_DIR_PATH>"
+  },
+  {
+    "command": "agy",
+    "name": "gemini",
+    "state": "<STATE_DIR_PATH>"
+  }
+]

@@ -1,0 +1,16 @@
+{
+  "id": 11,
+  "jsonrpc": "2.0",
+  "result": {
+    "content": [
+      {
+        "text": "{\"checks\":[],\"disabled\":[],\"global_skills\":[],\"instructions\":\"\",\"languages\":[],\"problems\":[],\"repo_docs\":[],\"skills\":[{\"description\":\"Use when you are an agent running under shepherd and need to spawn sub-agents, message other agents, wait for results, or deliver your own result. Explains the shepherd MCP tools and the fallback for agents without MCP.\",\"dir\":\"embedded:shepherd-comms\",\"level\":\"role\",\"name\":\"shepherd-comms\",\"scope\":\"default\"},{\"description\":\"Use when implementing a coding task in your worktree - small focused changes, stay in scope, verify before delivering.\",\"dir\":\"embedded:implement-task\",\"level\":\"role\",\"name\":\"implement-task\",\"scope\":\"default\"},{\"description\":\"Use when writing or fixing tests - table-driven cases, edge cases, and avoiding mocks that do not earn their keep.\",\"dir\":\"embedded:write-tests\",\"level\":\"role\",\"name\":\"write-tests\",\"scope\":\"default\"},{\"description\":\"Use when writing commit messages - Conventional Commits format with a short imperative subject and a body that explains why.\",\"dir\":\"embedded:conventional-commits\",\"level\":\"role\",\"name\":\"conventional-commits\",\"scope\":\"default\"}]}",
+        "type": "text"
+      }
+    ],
+    "isError": false,
+    "structuredContent": {
+      "text": "{\"checks\":[],\"disabled\":[],\"global_skills\":[],\"instructions\":\"\",\"languages\":[],\"problems\":[],\"repo_docs\":[],\"skills\":[{\"description\":\"Use when you are an agent running under shepherd and need to spawn sub-agents, message other agents, wait for results, or deliver your own result. Explains the shepherd MCP tools and the fallback for agents without MCP.\",\"dir\":\"embedded:shepherd-comms\",\"level\":\"role\",\"name\":\"shepherd-comms\",\"scope\":\"default\"},{\"description\":\"Use when implementing a coding task in your worktree - small focused changes, stay in scope, verify before delivering.\",\"dir\":\"embedded:implement-task\",\"level\":\"role\",\"name\":\"implement-task\",\"scope\":\"default\"},{\"description\":\"Use when writing or fixing tests - table-driven cases, edge cases, and avoiding mocks that do not earn their keep.\",\"dir\":\"embedded:write-tests\",\"level\":\"role\",\"name\":\"write-tests\",\"scope\":\"default\"},{\"description\":\"Use when writing commit messages - Conventional Commits format with a short imperative subject and a body that explains why.\",\"dir\":\"embedded:conventional-commits\",\"level\":\"role\",\"name\":\"conventional-commits\",\"scope\":\"default\"}]}"
+    }
+  }
+}

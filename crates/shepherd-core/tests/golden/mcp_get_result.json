@@ -1,0 +1,16 @@
+{
+  "id": 5,
+  "jsonrpc": "2.0",
+  "result": {
+    "content": [
+      {
+        "text": "{\"branch\":\"\",\"error\":\"\",\"has_result\":true,\"id\":\"coder-1\",\"result\":\"Done with unit tests.\",\"state\":\"<STATE_DIR_PATH>\",\"worktree\":\"\"}",
+        "type": "text"
+      }
+    ],
+    "isError": false,
+    "structuredContent": {
+      "text": "{\"branch\":\"\",\"error\":\"\",\"has_result\":true,\"id\":\"coder-1\",\"result\":\"Done with unit tests.\",\"state\":\"<STATE_DIR_PATH>\",\"worktree\":\"\"}"
+    }
+  }
+}

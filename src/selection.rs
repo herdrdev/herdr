@@ -356,7 +356,7 @@ fn should_prefer_osc52() -> bool {
 ///
 /// OSC 52 format: `ESC ] 52 ; c ; <base64> BEL`
 ///
-/// Some terminals still only honor BEL-terminated OSC 52 writes, so herdr
+/// Some terminals still only honor BEL-terminated OSC 52 writes, so shepherd
 /// emits BEL here even though ST works in newer emulators.
 ///
 /// Returns true when the text already matches or a clipboard write is dispatched.

@@ -344,7 +344,7 @@ pub(super) fn render_worktree_remove_overlay(
         inner.x,
         inner.y + 3,
         inner.width,
-        " The branch is not deleted. The Herdr workspace will close.",
+        " The branch is not deleted. The Shepherd workspace will close.",
         Style::default().fg(p.text).bg(p.panel_bg),
     );
     if remove.force_confirmation {

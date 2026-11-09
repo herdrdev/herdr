@@ -244,7 +244,7 @@ impl Registration {
     fn new(prefix: &str, watcher: Arc<Watcher>) -> io::Result<Self> {
         // SAFETY: a NULL attribute creates a serial queue; the label is NUL-terminated.
         let queue =
-            unsafe { dispatch_queue_create(c"herdr.host-shutdown".as_ptr(), std::ptr::null()) };
+            unsafe { dispatch_queue_create(c"shepherd.host-shutdown".as_ptr(), std::ptr::null()) };
         if queue.is_null() {
             return Err(io::Error::other("dispatch_queue_create failed"));
         }
@@ -388,7 +388,7 @@ mod tests {
 
     impl Harness {
         fn new(case: &str, intent: HostShutdownIntentCell) -> Self {
-            let prefix = format!("dev.herdr.test.{}.{case}.", std::process::id());
+            let prefix = format!("dev.shepherd.test.{}.{case}.", std::process::id());
             let watcher = Arc::new(Watcher {
                 intent,
                 requested: Arc::new(AtomicBool::new(false)),

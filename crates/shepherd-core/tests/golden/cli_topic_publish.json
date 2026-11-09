@@ -1,0 +1,11 @@
+{
+  "content": "message from cli",
+  "from": "user",
+  "id": 1,
+  "key": "user-1",
+  "kind": "msg",
+  "offset": 0,
+  "partition": 0,
+  "topic": "clitopicpub",
+  "ts": "<TIMESTAMP>"
+}

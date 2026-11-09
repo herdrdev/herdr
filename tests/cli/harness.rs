@@ -7,8 +7,8 @@ pub(super) use std::thread;
 pub(super) use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 pub(super) use crate::support::{
-    cleanup_test_base, isolate_herdr_test_process, register_runtime_dir,
-    register_spawned_herdr_pid, unregister_spawned_herdr_pid, CURRENT_PROTOCOL,
+    cleanup_test_base, isolate_shepherd_test_process, register_runtime_dir,
+    register_spawned_shepherd_pid, unregister_spawned_shepherd_pid, CURRENT_PROTOCOL,
 };
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 
@@ -22,7 +22,7 @@ pub(super) fn unique_test_dir() -> PathBuf {
 
 pub(super) fn managed_github_plugin_dir(config_home: &Path) -> PathBuf {
     config_home
-        .join("herdr-dev")
+        .join("shepherd-dev")
         .join("plugins")
         .join("github-installations")
 }
@@ -53,14 +53,14 @@ pub(super) fn run_git(repo: &Path, args: &[&str]) {
 pub(super) fn create_committed_repo(path: &Path) {
     fs::create_dir_all(path).unwrap();
     run_git(path, &["init", "--quiet"]);
-    run_git(path, &["config", "user.email", "herdr@example.invalid"]);
-    run_git(path, &["config", "user.name", "Herdr Test"]);
+    run_git(path, &["config", "user.email", "shepherd@example.invalid"]);
+    run_git(path, &["config", "user.name", "Shepherd Test"]);
     fs::write(path.join("README.md"), "test\n").unwrap();
     run_git(path, &["add", "README.md"]);
     run_git(path, &["commit", "--quiet", "-m", "initial"]);
 }
 
-pub(super) struct SpawnedHerdr {
+pub(super) struct SpawnedShepherd {
     _master: Box<dyn MasterPty + Send>,
     pub(super) child: Box<dyn Child + Send + Sync>,
 }
@@ -74,14 +74,14 @@ impl Drop for SpawnedServerProcess {
         let pid = self.child.id();
         let _ = self.child.kill();
         let _ = self.child.wait();
-        unregister_spawned_herdr_pid(Some(pid));
+        unregister_spawned_shepherd_pid(Some(pid));
     }
 }
 
-impl Drop for SpawnedHerdr {
+impl Drop for SpawnedShepherd {
     fn drop(&mut self) {
         let pid = self.child.process_id();
-        crate::support::stop_spawned_herdr(&mut *self.child);
+        crate::support::stop_spawned_shepherd(&mut *self.child);
 
         if let Some(pid) = pid {
             let deadline = Instant::now() + Duration::from_secs(2);
@@ -95,12 +95,12 @@ impl Drop for SpawnedHerdr {
                 thread::sleep(Duration::from_millis(20));
             }
 
-            unregister_spawned_herdr_pid(Some(pid));
+            unregister_spawned_shepherd_pid(Some(pid));
         }
     }
 }
 
-pub(super) fn cleanup_spawned_herdr(spawned: SpawnedHerdr, base: PathBuf) {
+pub(super) fn cleanup_spawned_shepherd(spawned: SpawnedShepherd, base: PathBuf) {
     drop(spawned);
     cleanup_test_base(&base);
 }
@@ -116,12 +116,12 @@ pub(super) fn wait_for_socket(path: &Path, timeout: Duration) {
     panic!("socket did not appear at {}", path.display());
 }
 
-pub(super) fn spawn_herdr(
+pub(super) fn spawn_shepherd(
     config_home: &Path,
     runtime_dir: &Path,
     socket_path: &Path,
-) -> SpawnedHerdr {
-    spawn_herdr_with_config(
+) -> SpawnedShepherd {
+    spawn_shepherd_with_config(
         config_home,
         runtime_dir,
         socket_path,
@@ -130,12 +130,12 @@ pub(super) fn spawn_herdr(
     )
 }
 
-pub(super) fn spawn_herdr_with_pane_history(
+pub(super) fn spawn_shepherd_with_pane_history(
     config_home: &Path,
     runtime_dir: &Path,
     socket_path: &Path,
-) -> SpawnedHerdr {
-    spawn_herdr_with_config(
+) -> SpawnedShepherd {
+    spawn_shepherd_with_config(
         config_home,
         runtime_dir,
         socket_path,
@@ -146,9 +146,9 @@ pub(super) fn spawn_herdr_with_pane_history(
 
 pub(super) fn app_dir_name() -> &'static str {
     if cfg!(debug_assertions) {
-        "herdr-dev"
+        "shepherd-dev"
     } else {
-        "herdr"
+        "shepherd"
     }
 }
 
@@ -157,7 +157,7 @@ pub(super) fn named_session_socket(config_home: &Path, session: &str) -> PathBuf
         .join(app_dir_name())
         .join("sessions")
         .join(session)
-        .join("herdr.sock")
+        .join("shepherd.sock")
 }
 
 pub(super) fn spawn_named_server(
@@ -174,22 +174,22 @@ pub(super) fn spawn_named_server(
     )
     .unwrap();
 
-    let mut command = Command::new(env!("CARGO_BIN_EXE_herdr"));
+    let mut command = Command::new(env!("CARGO_BIN_EXE_shepherd"));
     command
         .args(["--session", session, "server"])
         .env("XDG_CONFIG_HOME", config_home)
         .env("XDG_RUNTIME_DIR", runtime_dir)
-        .env_remove("HERDR_SOCKET_PATH")
-        .env_remove("HERDR_CLIENT_SOCKET_PATH")
-        .env_remove("HERDR_ENV")
-        .env_remove("HERDR_STARTUP_CWD")
-        .env_remove("HERDR_SESSION")
+        .env_remove("SHEPHERD_SOCKET_PATH")
+        .env_remove("SHEPHERD_CLIENT_SOCKET_PATH")
+        .env_remove("SHEPHERD_ENV")
+        .env_remove("SHEPHERD_STARTUP_CWD")
+        .env_remove("SHEPHERD_SESSION")
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
 
     let child = command.spawn().unwrap();
-    register_spawned_herdr_pid(Some(child.id()));
+    register_spawned_shepherd_pid(Some(child.id()));
     SpawnedServerProcess { child }
 }
 
@@ -226,20 +226,20 @@ pub(super) fn run_named_cli_with_env_and_socket_override(
     envs: &[(&str, &Path)],
     socket_override: Option<&Path>,
 ) -> std::process::Output {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_herdr"));
+    let mut command = Command::new(env!("CARGO_BIN_EXE_shepherd"));
     command
         .args(args)
         .env("XDG_CONFIG_HOME", config_home)
         .env("XDG_RUNTIME_DIR", runtime_dir)
-        .env_remove("HERDR_CLIENT_SOCKET_PATH")
-        .env_remove("HERDR_ENV");
+        .env_remove("SHEPHERD_CLIENT_SOCKET_PATH")
+        .env_remove("SHEPHERD_ENV");
     for (key, value) in envs {
         command.env(key, value);
     }
     if let Some(socket_override) = socket_override {
-        command.env("HERDR_SOCKET_PATH", socket_override);
+        command.env("SHEPHERD_SOCKET_PATH", socket_override);
     } else {
-        command.env_remove("HERDR_SOCKET_PATH");
+        command.env_remove("SHEPHERD_SOCKET_PATH");
     }
     command.output().unwrap()
 }
@@ -252,7 +252,7 @@ pub(super) fn run_named_cli_json(
     let output = run_named_cli(config_home, runtime_dir, args);
     assert!(
         output.status.success(),
-        "command failed: herdr {}\nstatus: {:?}\nstderr: {}\nstdout: {}",
+        "command failed: shepherd {}\nstatus: {:?}\nstderr: {}\nstdout: {}",
         args.join(" "),
         output.status.code(),
         String::from_utf8_lossy(&output.stderr),
@@ -261,13 +261,13 @@ pub(super) fn run_named_cli_json(
     serde_json::from_slice(&output.stdout).unwrap()
 }
 
-pub(super) fn spawn_herdr_with_path(
+pub(super) fn spawn_shepherd_with_path(
     config_home: &Path,
     runtime_dir: &Path,
     socket_path: &Path,
     path_override: Option<&Path>,
-) -> SpawnedHerdr {
-    spawn_herdr_with_config(
+) -> SpawnedShepherd {
+    spawn_shepherd_with_config(
         config_home,
         runtime_dir,
         socket_path,
@@ -276,13 +276,13 @@ pub(super) fn spawn_herdr_with_path(
     )
 }
 
-pub(super) fn spawn_herdr_with_config(
+pub(super) fn spawn_shepherd_with_config(
     config_home: &Path,
     runtime_dir: &Path,
     socket_path: &Path,
     path_override: Option<&Path>,
     config_toml: &str,
-) -> SpawnedHerdr {
+) -> SpawnedShepherd {
     fs::create_dir_all(config_home.join(app_dir_name())).unwrap();
     fs::create_dir_all(runtime_dir).unwrap();
     register_runtime_dir(runtime_dir);
@@ -301,31 +301,31 @@ pub(super) fn spawn_herdr_with_config(
         })
         .unwrap();
 
-    let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_herdr"));
-    isolate_herdr_test_process(&mut cmd);
+    let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_shepherd"));
+    isolate_shepherd_test_process(&mut cmd);
     cmd.arg("server");
     cmd.env("XDG_CONFIG_HOME", config_home);
     cmd.env("XDG_RUNTIME_DIR", runtime_dir);
-    cmd.env("HERDR_SOCKET_PATH", socket_path);
-    cmd.env_remove("HERDR_CLIENT_SOCKET_PATH");
+    cmd.env("SHEPHERD_SOCKET_PATH", socket_path);
+    cmd.env_remove("SHEPHERD_CLIENT_SOCKET_PATH");
     cmd.env("SHELL", "/bin/sh");
-    cmd.env_remove("HERDR_ENV");
+    cmd.env_remove("SHEPHERD_ENV");
     if let Some(path) = path_override {
         cmd.env("PATH", path);
     }
 
     let child = pair.slave.spawn_command(cmd).unwrap();
-    register_spawned_herdr_pid(child.process_id());
-    SpawnedHerdr {
+    register_spawned_shepherd_pid(child.process_id());
+    SpawnedShepherd {
         _master: pair.master,
         child,
     }
 }
 
 pub(super) fn run_cli(socket_path: &Path, args: &[&str]) -> std::process::Output {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_herdr"));
+    let mut command = Command::new(env!("CARGO_BIN_EXE_shepherd"));
     command.args(args);
-    command.env("HERDR_SOCKET_PATH", socket_path);
+    command.env("SHEPHERD_SOCKET_PATH", socket_path);
     command.output().unwrap()
 }
 
@@ -334,10 +334,10 @@ pub(super) fn run_cli_in_dir(
     args: &[&str],
     current_dir: &Path,
 ) -> std::process::Output {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_herdr"));
+    let mut command = Command::new(env!("CARGO_BIN_EXE_shepherd"));
     command.args(args);
     command.current_dir(current_dir);
-    command.env("HERDR_SOCKET_PATH", socket_path);
+    command.env("SHEPHERD_SOCKET_PATH", socket_path);
     command.output().unwrap()
 }
 
@@ -378,7 +378,7 @@ pub(super) fn parse_cli_json_output(
 ) -> serde_json::Value {
     assert!(
         output.status.success(),
-        "command failed: herdr {}\nstatus: {:?}\nstderr: {}\nstdout: {}",
+        "command failed: shepherd {}\nstatus: {:?}\nstderr: {}\nstdout: {}",
         args.join(" "),
         output.status.code(),
         String::from_utf8_lossy(&output.stderr),
@@ -387,7 +387,7 @@ pub(super) fn parse_cli_json_output(
 
     serde_json::from_slice(&output.stdout).unwrap_or_else(|err| {
         panic!(
-            "failed to parse JSON response for `herdr {}`: {}\nstdout: {}\nstderr: {}",
+            "failed to parse JSON response for `shepherd {}`: {}\nstdout: {}\nstderr: {}",
             args.join(" "),
             err,
             String::from_utf8_lossy(&output.stdout),

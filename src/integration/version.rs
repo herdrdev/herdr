@@ -77,7 +77,7 @@ pub(crate) fn enforce_agent_version(
 
     if found < required {
         return Err(io::Error::other(format!(
-            "{label} {}.{}.{} is too old: herdr hooks require {label} {min} or newer. upgrade {label}, then re-run install",
+            "{label} {}.{}.{} is too old: shepherd hooks require {label} {min} or newer. upgrade {label}, then re-run install",
             found.0,
             found.1,
             found.2,

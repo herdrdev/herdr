@@ -28,7 +28,7 @@ pub(crate) struct ClientShellConfig {
     pub(super) sound_enabled: bool,
     pub(super) toast_delivery: crate::config::ToastDelivery,
     pub(super) toast_delay_seconds: u64,
-    pub(super) toast_position: crate::config::ToastHerdrPosition,
+    pub(super) toast_position: crate::config::ToastShepherdPosition,
     pub(super) copy_on_select: bool,
     pub(super) clipboard_toast_enabled: bool,
     pub(super) clipboard_toast_position: crate::config::ToastClipboardPosition,
@@ -51,6 +51,7 @@ pub(crate) struct ClientShellConfig {
     pub(super) preferences: preferences::ClientChromePreferences,
     pub(super) startup_config_diagnostic: Option<String>,
     pub(super) startup_onboarding: bool,
+    pub(super) shepherd_enabled: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -138,6 +139,7 @@ pub(super) struct ShellHitMap {
     pub(super) release_notes_scrollbar: Rect,
     pub(super) release_notes_scroll_metrics: Option<crate::pane::ScrollMetrics>,
     pub(super) release_notes_max_scroll: usize,
+    pub(super) shepherd_section_hits: Option<crate::shepherd::ui::ShepherdSectionHits>,
 }
 
 #[derive(Clone)]
@@ -525,6 +527,9 @@ pub(super) enum ClientContextMenuAction {
     Zoom,
     ToggleRightClickPassthrough,
     ClosePane,
+    ShepherdSpawnAgent,
+    ShepherdKillAgent,
+    ShepherdCleanAgents,
 }
 
 #[derive(Debug)]
@@ -547,6 +552,7 @@ pub(super) enum ClientContextMenuTarget {
         source_pane_id: Option<String>,
         has_manual_label: bool,
         right_click_passthrough: bool,
+        shepherd_enabled: bool,
     },
 }
 
@@ -626,6 +632,9 @@ pub(super) enum PendingEndpointKind {
     ReleaseNotesDismiss,
     PopupCommand,
     ReloadConfig,
+    ShepherdCall {
+        op: String,
+    },
     IntegrationList,
     IntegrationInstall,
     PrepareWorktreeCreate {
@@ -904,6 +913,10 @@ pub(crate) struct ClientShellState {
     pub(super) pending_workspace_highlight: Option<PendingWorkspaceHighlight>,
     pub(super) reveal_navigation_workspace: bool,
     pub(super) overlay: Option<ClientShellOverlay>,
+    pub(super) shepherd_section: Option<crate::shepherd::ui::ShepherdSectionState>,
+    pub(super) shepherd_tab_active: HashMap<String, bool>,
+    pub(super) pending_shepherd_refresh: bool,
+    pub(super) last_shepherd_refresh: Option<std::time::Instant>,
     pub(super) previous_pane_id: Option<String>,
     pub(super) pane_mouse_gesture: Option<ClientPaneMouseGesture>,
     pub(super) link_hover: Option<super::link_hover::LinkHover>,
@@ -914,7 +927,7 @@ pub(crate) struct ClientShellState {
     /// The host tty's erase character is `^H`: a raw 0x08 is Backspace, not
     /// Ctrl+H (MobaXterm, PuTTY-style terminals; tmux reads VERASE the same way).
     pub(super) host_erase_is_ctrl_h: bool,
-    /// The focused pane asks for every key as an escape code, so Herdr pushed
+    /// The focused pane asks for every key as an escape code, so Shepherd pushed
     /// report-all to the host; plain text input then reaches it as text.
     pub(super) host_reports_all_keys: bool,
     pub(super) replaying_url_click: bool,
@@ -1029,6 +1042,10 @@ impl ClientShellState {
                 .or_default()
                 .extend(saved.collapsed_groups);
         }
+        let mut shepherd_tab_active = HashMap::new();
+        for ws in &preferences.shepherd_tab_inactive_workspaces {
+            shepherd_tab_active.insert(ws.clone(), false);
+        }
         Self {
             machine_diagnostics: Default::default(),
             config,
@@ -1078,6 +1095,10 @@ impl ClientShellState {
             pending_workspace_highlight: None,
             reveal_navigation_workspace: false,
             overlay,
+            shepherd_section: Some(crate::shepherd::ui::state::ShepherdSectionState::default()),
+            shepherd_tab_active,
+            pending_shepherd_refresh: false,
+            last_shepherd_refresh: None,
             previous_pane_id: None,
             pane_mouse_gesture: None,
             link_hover: None,
@@ -1604,6 +1625,9 @@ impl ClientShellState {
         }
         self.resume_mobile_switcher_if_ready();
         self.reconcile_input_source();
+        if self.config.shepherd_enabled && self.is_shepherd_tab_active() {
+            self.pending_shepherd_refresh = true;
+        }
     }
 
     pub(crate) fn has_presented_surface(&self) -> bool {
@@ -1807,6 +1831,9 @@ impl ClientShellState {
         self.invalidate_link_hover();
         self.resume_mobile_switcher_if_ready();
         self.reconcile_input_source();
+        if self.config.shepherd_enabled && self.is_shepherd_tab_active() {
+            self.pending_shepherd_refresh = true;
+        }
     }
 
     pub(crate) fn tick_popup_pending(&mut self, now: std::time::Instant) {

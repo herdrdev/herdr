@@ -1,0 +1,11 @@
+[package]
+name = "shepherd-native"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Native Shepherd app (iced); the view layer over shepherd-app-core"
+
+[dependencies]
+shepherd-app-core = { path = "../app-core" }
+iced = { version = "0.14", features = ["canvas"] }
+serde_json = "1"

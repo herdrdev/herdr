@@ -20,7 +20,7 @@ impl Drop for RestoredServer {
         let pid = self.child.id();
         let _ = self.child.kill();
         let _ = self.child.wait();
-        support::unregister_spawned_herdr_pid(Some(pid));
+        support::unregister_spawned_shepherd_pid(Some(pid));
         support::cleanup_test_base(&self.base);
     }
 }
@@ -62,16 +62,19 @@ fn server_restores_while_git_metadata_is_blocked() {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let base = PathBuf::from(format!("/tmp/herdr-restore-{}-{nonce}", std::process::id()));
+        let base = PathBuf::from(format!(
+            "/tmp/shepherd-restore-{}-{nonce}",
+            std::process::id()
+        ));
         fs::create_dir_all(&base).unwrap();
         let base = fs::canonicalize(base).unwrap();
         let config_home = base.join("config");
         let runtime_dir = base.join("runtime");
-        let socket_path = runtime_dir.join("herdr.sock");
+        let socket_path = runtime_dir.join("shepherd.sock");
         let data_dir = config_home.join(if cfg!(debug_assertions) {
-            "herdr-dev"
+            "shepherd-dev"
         } else {
-            "herdr"
+            "shepherd"
         });
         let repo = base.join("repo");
         fs::create_dir_all(repo.join(".git/objects")).unwrap();
@@ -127,23 +130,23 @@ fn server_restores_while_git_metadata_is_blocked() {
         fs::write(data_dir.join("config.toml"),
             "onboarding = false\n[terminal]\ndefault_shell = \"/bin/sh\"\n[ui.sidebar.spaces]\nrows = [[\"workspace\"]]\n").unwrap();
         support::register_runtime_dir(&runtime_dir);
-        let child = Command::new(env!("CARGO_BIN_EXE_herdr"))
+        let child = Command::new(env!("CARGO_BIN_EXE_shepherd"))
             .arg("server")
             .env("XDG_CONFIG_HOME", &config_home)
             .env("XDG_RUNTIME_DIR", &runtime_dir)
-            .env("HERDR_SOCKET_PATH", &socket_path)
+            .env("SHEPHERD_SOCKET_PATH", &socket_path)
             .env("SHELL", "/bin/sh")
-            .env_remove("HERDR_CLIENT_SOCKET_PATH")
-            .env_remove("HERDR_STARTUP_CWD")
-            .env_remove("HERDR_SESSION")
-            .env_remove("HERDR_ENV")
+            .env_remove("SHEPHERD_CLIENT_SOCKET_PATH")
+            .env_remove("SHEPHERD_STARTUP_CWD")
+            .env_remove("SHEPHERD_SESSION")
+            .env_remove("SHEPHERD_ENV")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
             .unwrap();
-        support::register_spawned_herdr_pid(Some(child.id()));
-        let mut herdr = RestoredServer { child, base };
+        support::register_spawned_shepherd_pid(Some(child.id()));
+        let mut shepherd = RestoredServer { child, base };
         support::wait_for_socket(&socket_path, Duration::from_secs(5));
 
         let workspaces = restore_request(&socket_path, "workspace.list");
@@ -201,7 +204,7 @@ fn server_restores_while_git_metadata_is_blocked() {
         restore_request(&socket_path, "server.stop");
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
         loop {
-            if let Some(status) = herdr.child.try_wait().unwrap() {
+            if let Some(status) = shepherd.child.try_wait().unwrap() {
                 assert!(status.success());
                 break;
             }
@@ -221,6 +224,6 @@ fn server_restores_while_git_metadata_is_blocked() {
             saved["workspaces"][0]["worktree_space"],
             snapshot["workspaces"][0]["worktree_space"]
         );
-        drop(herdr);
+        drop(shepherd);
     }
 }

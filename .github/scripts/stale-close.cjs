@@ -8,7 +8,7 @@
 // Locally the token comes from GITHUB_TOKEN or `gh auth token`. The local
 // runner never writes to GitHub.
 
-const MARKER = '<!-- herdr:stale-close -->';
+const MARKER = '<!-- shepherd:stale-close -->';
 const EXTRA_TEAM = ['akbash-bot', 'kangal-bot'];
 const PAGE_SIZE = 25;
 const CLOSE_COMMENT = [

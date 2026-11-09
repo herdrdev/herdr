@@ -42,40 +42,43 @@ impl App {
                 crate::api::SOCKET_PATH_ENV_VAR.to_string(),
                 crate::api::socket_path().display().to_string(),
             ),
-            ("HERDR_ENV".to_string(), "1".to_string()),
-            ("HERDR_PLUGIN_ID".to_string(), plugin.plugin_id.clone()),
-            ("HERDR_PLUGIN_CONTEXT_JSON".to_string(), context_json),
+            ("SHEPHERD_ENV".to_string(), "1".to_string()),
+            ("SHEPHERD_PLUGIN_ID".to_string(), plugin.plugin_id.clone()),
+            ("SHEPHERD_PLUGIN_CONTEXT_JSON".to_string(), context_json),
         ]);
         if let Ok(current_exe) = crate::platform::launch_executable() {
             env.push((
-                "HERDR_BIN_PATH".to_string(),
+                "SHEPHERD_BIN_PATH".to_string(),
                 current_exe.display().to_string(),
             ));
         }
         if let Some(action_id) = action_id.as_ref() {
-            env.push(("HERDR_PLUGIN_ACTION_ID".to_string(), action_id.clone()));
+            env.push(("SHEPHERD_PLUGIN_ACTION_ID".to_string(), action_id.clone()));
         }
         if let Some(event) = event.as_ref() {
-            env.push(("HERDR_PLUGIN_EVENT".to_string(), event.clone()));
+            env.push(("SHEPHERD_PLUGIN_EVENT".to_string(), event.clone()));
         }
         if let Some(event_json) = event_json {
-            env.push(("HERDR_PLUGIN_EVENT_JSON".to_string(), event_json));
+            env.push(("SHEPHERD_PLUGIN_EVENT_JSON".to_string(), event_json));
         }
         if let Some(workspace_id) = context.workspace_id.as_ref() {
-            env.push(("HERDR_WORKSPACE_ID".to_string(), workspace_id.clone()));
+            env.push(("SHEPHERD_WORKSPACE_ID".to_string(), workspace_id.clone()));
         }
         if let Some(tab_id) = context.tab_id.as_ref() {
-            env.push(("HERDR_TAB_ID".to_string(), tab_id.clone()));
+            env.push(("SHEPHERD_TAB_ID".to_string(), tab_id.clone()));
         }
         if let Some(pane_id) = context.focused_pane_id.as_ref() {
-            env.push(("HERDR_PANE_ID".to_string(), pane_id.clone()));
+            env.push(("SHEPHERD_PANE_ID".to_string(), pane_id.clone()));
         }
         if let Some(clicked_url) = context.clicked_url.as_ref() {
-            env.push(("HERDR_PLUGIN_CLICKED_URL".to_string(), clicked_url.clone()));
+            env.push((
+                "SHEPHERD_PLUGIN_CLICKED_URL".to_string(),
+                clicked_url.clone(),
+            ));
         }
         if let Some(link_handler_id) = context.link_handler_id.as_ref() {
             env.push((
-                "HERDR_PLUGIN_LINK_HANDLER_ID".to_string(),
+                "SHEPHERD_PLUGIN_LINK_HANDLER_ID".to_string(),
                 link_handler_id.clone(),
             ));
         }
@@ -118,7 +121,7 @@ impl App {
         let event_tx = self.event_tx.clone();
         let installation_lease =
             crate::plugin_installations::command_lease(&self.plugin_installation_leases, plugin);
-        let spawned = crate::thread_spawn::spawn_named("herdr-plugin-command", move || {
+        let spawned = crate::thread_spawn::spawn_named("shepherd-plugin-command", move || {
             // The worker may outlive App during normal server teardown.
             let _installation_lease = installation_lease;
             let child =
@@ -312,14 +315,14 @@ fn spawn_plugin_output_readers(
 ) -> std::io::Result<(Option<PluginOutputReader>, Option<PluginOutputReader>)> {
     let stdout = stdout
         .map(|stdout| {
-            crate::thread_spawn::spawn_named("herdr-plugin-stdout", move || {
+            crate::thread_spawn::spawn_named("shepherd-plugin-stdout", move || {
                 read_capped_plugin_output(stdout, PLUGIN_COMMAND_OUTPUT_MAX_BYTES)
             })
         })
         .transpose()?;
     let stderr = stderr
         .map(|stderr| {
-            crate::thread_spawn::spawn_named("herdr-plugin-stderr", move || {
+            crate::thread_spawn::spawn_named("shepherd-plugin-stderr", move || {
                 read_capped_plugin_output(stderr, PLUGIN_COMMAND_OUTPUT_MAX_BYTES)
             })
         })
@@ -357,7 +360,7 @@ pub(super) fn read_capped_plugin_output(mut reader: impl Read, cap: usize) -> St
     let mut output = String::from_utf8_lossy(&kept).into_owned();
     if truncated {
         output.push_str(&format!(
-            "\n[herdr truncated plugin output after {cap} bytes]"
+            "\n[shepherd truncated plugin output after {cap} bytes]"
         ));
     }
     output

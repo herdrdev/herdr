@@ -876,7 +876,7 @@ mod tests {
                             label: Some("tests".into()),
                             command: Some(vec![exiting_test_command().into()]),
                             env: std::collections::HashMap::from([(
-                                "HERDR_ROLE".into(),
+                                "SHEPHERD_ROLE".into(),
                                 "tests".into(),
                             )]),
                             ..Default::default()

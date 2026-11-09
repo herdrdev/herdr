@@ -101,7 +101,7 @@ jobs:
         id: zig-compiler
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: ${{ runner.temp }}/herdr-zig-0.16.0
+          path: ${{ runner.temp }}/shepherd-zig-0.16.0
           key: zig-compiler-v1-${{ runner.os }}-${{ runner.arch }}-0.16.0
 
       - name: Install Zig
@@ -116,7 +116,7 @@ jobs:
         env:
           ZIG_RESTORED: ${{ steps.zig-compiler.outputs.cache-hit }}
         run: |
-          stable_zig="$RUNNER_TEMP/herdr-zig-0.16.0"
+          stable_zig="$RUNNER_TEMP/shepherd-zig-0.16.0"
           if [ "$ZIG_RESTORED" != "true" ]; then
             mv "$(dirname "$(command -v zig)")" "$stable_zig"
           fi
@@ -129,7 +129,7 @@ jobs:
         env:
           ZIG_RESTORED: ${{ steps.zig-compiler.outputs.cache-hit }}
         run: |
-          $stable = Join-Path $env:RUNNER_TEMP "herdr-zig-0.16.0"
+          $stable = Join-Path $env:RUNNER_TEMP "shepherd-zig-0.16.0"
           if ($env:ZIG_RESTORED -ne "true") {
             $source = Split-Path (Get-Command zig).Source
             Move-Item -LiteralPath $source -Destination $stable
@@ -141,7 +141,7 @@ jobs:
         if: steps.zig-compiler.outputs.cache-hit != 'true' && env.SAVE_CACHES == 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: ${{ runner.temp }}/herdr-zig-0.16.0
+          path: ${{ runner.temp }}/shepherd-zig-0.16.0
           key: zig-compiler-v1-${{ runner.os }}-${{ runner.arch }}-0.16.0
 
       - name: Restore Zig build cache
@@ -199,7 +199,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $exe = Join-Path $PWD "target\debug\herdr.exe"
+          $exe = Join-Path $PWD "target\debug\shepherd.exe"
           .\scripts\windows_smoke_conpty_path.ps1 -ExePath $exe -Session "ci-windows-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
 
       # Save before rust-cache's post-step removes incremental state.
@@ -237,7 +237,7 @@ jobs:
         id: zig-compiler
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: ${{ runner.temp }}/herdr-zig-0.16.0
+          path: ${{ runner.temp }}/shepherd-zig-0.16.0
           key: zig-compiler-v1-${{ runner.os }}-${{ runner.arch }}-0.16.0
 
       - name: Install Zig
@@ -251,7 +251,7 @@ jobs:
         env:
           ZIG_RESTORED: ${{ steps.zig-compiler.outputs.cache-hit }}
         run: |
-          $stable = Join-Path $env:RUNNER_TEMP "herdr-zig-0.16.0"
+          $stable = Join-Path $env:RUNNER_TEMP "shepherd-zig-0.16.0"
           if ($env:ZIG_RESTORED -ne "true") {
             $source = Split-Path (Get-Command zig).Source
             Move-Item -LiteralPath $source -Destination $stable
@@ -274,7 +274,7 @@ jobs:
           key: conpty-package-windows-2022
           save-if: ${{ env.SAVE_CACHES }}
 
-      - name: Build Herdr
+      - name: Build Shepherd
         run: cargo build --locked --target x86_64-pc-windows-msvc
 
       - name: Save Zig build cache
@@ -288,11 +288,11 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          Remove-Item Env:HERDR_SOCKET_PATH, Env:HERDR_CLIENT_SOCKET_PATH -ErrorAction SilentlyContinue
-          $exe = Join-Path $PWD "target\x86_64-pc-windows-msvc\debug\herdr.exe"
+          Remove-Item Env:SHEPHERD_SOCKET_PATH, Env:SHEPHERD_CLIENT_SOCKET_PATH -ErrorAction SilentlyContinue
+          $exe = Join-Path $PWD "target\x86_64-pc-windows-msvc\debug\shepherd.exe"
           $bundle = Join-Path (Split-Path -Parent $exe) "conpty"
           New-Item -ItemType Directory -Force -Path (Join-Path $bundle "x64"), (Join-Path $bundle "arm64") | Out-Null
-          Set-Content -LiteralPath (Join-Path $bundle "herdr-conpty.json") -Value "{}" -Encoding ascii
+          Set-Content -LiteralPath (Join-Path $bundle "shepherd-conpty.json") -Value "{}" -Encoding ascii
           [System.IO.File]::WriteAllBytes((Join-Path $bundle "conpty.dll"), [byte[]](0x48, 0x45, 0x52, 0x44, 0x52))
           [System.IO.File]::WriteAllBytes((Join-Path $bundle "x64\OpenConsole.exe"), [byte[]](0x48, 0x45, 0x52, 0x44, 0x52))
           [System.IO.File]::WriteAllBytes((Join-Path $bundle "arm64\OpenConsole.exe"), [byte[]](0x48, 0x45, 0x52, 0x44, 0x52))
@@ -309,15 +309,15 @@ jobs:
               $rejected = $true
             }
             if (-not $rejected) {
-              throw "Herdr accepted a tampered app-local ConPTY bundle"
+              throw "Shepherd accepted a tampered app-local ConPTY bundle"
             }
 
-            $env:HERDR_WINDOWS_CONPTY = "system"
+            $env:SHEPHERD_WINDOWS_CONPTY = "system"
             .\scripts\windows_smoke_conpty_path.ps1 `
               -ExePath $exe `
               -Session "ci-conpty-system-windows-2022-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
           } finally {
-            Remove-Item Env:HERDR_WINDOWS_CONPTY -ErrorAction SilentlyContinue
+            Remove-Item Env:SHEPHERD_WINDOWS_CONPTY -ErrorAction SilentlyContinue
             Remove-Item -LiteralPath $bundle -Recurse -Force -ErrorAction SilentlyContinue
           }
 
@@ -326,21 +326,21 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           $package = Join-Path $env:RUNNER_TEMP "Microsoft.Windows.Console.ConPTY.nupkg"
-          $stage = Join-Path $env:RUNNER_TEMP "herdr-windows-x86_64"
+          $stage = Join-Path $env:RUNNER_TEMP "shepherd-windows-x86_64"
           New-Item -ItemType Directory -Force -Path artifacts | Out-Null
           .\scripts\package_windows_conpty.ps1 `
-            -HerdrExe target\x86_64-pc-windows-msvc\debug\herdr.exe `
+            -ShepherdExe target\x86_64-pc-windows-msvc\debug\shepherd.exe `
             -PackagePath $package `
             -StageDir $stage `
-            -OutputPath artifacts\herdr-windows-x86_64.zip
-          "HERDR_CONPTY_PACKAGE_DIR=$stage" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+            -OutputPath artifacts\shepherd-windows-x86_64.zip
+          "SHEPHERD_CONPTY_PACKAGE_DIR=$stage" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Probe enhanced pane input with bundled ConPTY
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $exe = Join-Path $env:HERDR_CONPTY_PACKAGE_DIR "herdr.exe"
-          $consoleHost = Join-Path $env:HERDR_CONPTY_PACKAGE_DIR "conpty\x64\OpenConsole.exe"
+          $exe = Join-Path $env:SHEPHERD_CONPTY_PACKAGE_DIR "shepherd.exe"
+          $consoleHost = Join-Path $env:SHEPHERD_CONPTY_PACKAGE_DIR "conpty\x64\OpenConsole.exe"
           .\scripts\windows_conpty_enhanced_input_probe.ps1 `
             -ExePath $exe `
             -Session "ci-conpty-bundled-windows-2022-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT" `
@@ -351,7 +351,7 @@ jobs:
         run: |
           & powershell.exe -NoProfile -ExecutionPolicy Bypass -File `
             .\scripts\windows_install_conpty_package_test.ps1 `
-            -ArchivePath artifacts\herdr-windows-x86_64.zip
+            -ArchivePath artifacts\shepherd-windows-x86_64.zip
           if ($LASTEXITCODE -ne 0) {
             throw "Windows PowerShell installer test failed with exit code $LASTEXITCODE"
           }

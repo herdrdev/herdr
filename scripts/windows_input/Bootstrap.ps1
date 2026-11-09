@@ -4,17 +4,17 @@ param([Parameter(Mandatory)][string] $PlanPath)
 $plan = Read-GauntletJson $PlanPath
 # Terminal activation can inherit another process's environment. Normalize here too.
 foreach ($item in @(Get-ChildItem Env:)) {
-    if ($item.Name -like 'HERDR_*' -or $item.Name -in @('SSH_CONNECTION', 'SSH_TTY')) { Remove-Item "Env:$($item.Name)" }
+    if ($item.Name -like 'SHEPHERD_*' -or $item.Name -in @('SSH_CONNECTION', 'SSH_TTY')) { Remove-Item "Env:$($item.Name)" }
 }
-$env:HERDR_CONFIG_PATH = $plan.config
+$env:SHEPHERD_CONFIG_PATH = $plan.config
 $env:XDG_CONFIG_HOME = $plan.config_home
-$env:HERDR_SESSION = $plan.session
-if ($plan.profile -ne 'default') { $env:HERDR_WINDOWS_INPUT_PROBE = $plan.profile }
+$env:SHEPHERD_SESSION = $plan.session
+if ($plan.profile -ne 'default') { $env:SHEPHERD_WINDOWS_INPUT_PROBE = $plan.profile }
 Add-Type -Path "$PSScriptRoot/Native.cs"
-$before = [HerdrInputGauntlet.ConsoleProbe]::Geometry()
+$before = [ShepherdInputGauntlet.ConsoleProbe]::Geometry()
 $child = $null
 try {
-    if ($plan.path -in @('herdr', 'herdr-remote')) {
+    if ($plan.path -in @('shepherd', 'shepherd-remote')) {
         $child = New-GauntletProcess $plan.exe @('--session', $plan.session) $plan
     } else {
         $child = New-GauntletProcess $plan.pwsh @('-NoProfile', '-File', "$PSScriptRoot/Probe.ps1", '-PlanPath', $PlanPath) $plan
@@ -24,7 +24,7 @@ try {
         $sequence++
         Write-GauntletJson (Join-Path $plan.work 'outer.json') @{
             nonce = $plan.nonce; pid = $PID; child_pid = $child.Id; sequence = $sequence
-            geometry = [HerdrInputGauntlet.ConsoleProbe]::Geometry(); before = $before
+            geometry = [ShepherdInputGauntlet.ConsoleProbe]::Geometry(); before = $before
         }
         Start-Sleep -Milliseconds 100
     }
@@ -40,6 +40,6 @@ try {
         $child.Dispose()
     }
     Write-GauntletJson (Join-Path $plan.work 'bootstrap-exit.json') @{
-        nonce = $plan.nonce; before = $before; after = [HerdrInputGauntlet.ConsoleProbe]::Geometry(); cleanup_errors = $cleanup
+        nonce = $plan.nonce; before = $before; after = [ShepherdInputGauntlet.ConsoleProbe]::Geometry(); cleanup_errors = $cleanup
     }
 }

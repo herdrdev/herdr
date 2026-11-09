@@ -253,7 +253,7 @@ pub(in crate::remote) mod tests {
         pub(in crate::remote) fn new(mode: &'static str) -> Self {
             static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
             let root = std::env::temp_dir().join(format!(
-                "herdr-pipes-{}-{}",
+                "shepherd-pipes-{}-{}",
                 std::process::id(),
                 NEXT.fetch_add(1, Ordering::Relaxed)
             ));
@@ -263,7 +263,7 @@ pub(in crate::remote) mod tests {
 
         pub(in crate::remote) fn command(&self) -> Command {
             let mut command = fixture_command(self.mode);
-            command.env("HERDR_PIPE_FIXTURE_ROOT", &self.root);
+            command.env("SHEPHERD_PIPE_FIXTURE_ROOT", &self.root);
             command
         }
 
@@ -306,7 +306,7 @@ pub(in crate::remote) mod tests {
                 "remote::process::tests::pipe_fixture",
                 "--nocapture",
             ])
-            .env("HERDR_PIPE_FIXTURE", mode);
+            .env("SHEPHERD_PIPE_FIXTURE", mode);
         crate::platform::configure_background_command(&mut command);
         command
     }
@@ -315,10 +315,11 @@ pub(in crate::remote) mod tests {
     // This bounded fixture deliberately leaves inherited pipes open after its parent exits.
     #[allow(clippy::zombie_processes)]
     fn pipe_fixture() {
-        let Ok(mode) = std::env::var("HERDR_PIPE_FIXTURE") else {
+        let Ok(mode) = std::env::var("SHEPHERD_PIPE_FIXTURE") else {
             return;
         };
-        let root = std::path::PathBuf::from(std::env::var_os("HERDR_PIPE_FIXTURE_ROOT").unwrap());
+        let root =
+            std::path::PathBuf::from(std::env::var_os("SHEPHERD_PIPE_FIXTURE_ROOT").unwrap());
         let release = root.join("release");
         thread::spawn(move || {
             let deadline = Instant::now() + Duration::from_secs(30);
@@ -338,7 +339,7 @@ pub(in crate::remote) mod tests {
                 thread::sleep(POLL_INTERVAL);
             }
             if mode.starts_with("bridge-") && mode != "bridge-preamble" {
-                println!("herdr-remote-output-ready:1");
+                println!("shepherd-remote-output-ready:1");
             }
             if mode == "bridge-output" {
                 io::stdout()

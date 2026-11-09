@@ -245,7 +245,7 @@ mod tests {
     fn with_config(test: impl FnOnce()) {
         let _guard = crate::config::test_config_env_lock().lock().unwrap();
         let root = std::env::temp_dir().join(format!(
-            "herdr-plugin-cleanup-{}-{}",
+            "shepherd-plugin-cleanup-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -268,9 +268,9 @@ mod tests {
         let checkout = root.join("checkout");
         std::fs::create_dir(&checkout).unwrap();
         std::fs::write(
-            checkout.join("herdr-plugin.toml"),
+            checkout.join("shepherd-plugin.toml"),
             format!(
-                "id = {id:?}\nname = 'Cleanup'\nversion = '0.1.0'\nmin_herdr_version = '0.6.10'\n"
+                "id = {id:?}\nname = 'Cleanup'\nversion = '0.1.0'\nmin_shepherd_version = '0.6.10'\n"
             ),
         )
         .unwrap();

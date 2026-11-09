@@ -314,6 +314,7 @@ impl HeadlessServer {
         };
         info!(%reason, "server shutdown initiated");
         self.shutting_down = true;
+        self.app.stop_shepherd_service();
 
         // Clear client-local host graphics, then send ServerShutdown to all connected clients.
         let shutdown_msg = ServerMessage::ServerShutdown {
@@ -335,6 +336,7 @@ impl HeadlessServer {
     /// close client connections, remove socket files, and clean up.
     pub(super) async fn complete_shutdown(&mut self) -> io::Result<()> {
         info!("completing server shutdown");
+        self.app.stop_shepherd_service();
         self.reject_late_client_connections().await;
 
         // Send ServerShutdown to all remaining clients.

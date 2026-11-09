@@ -26,7 +26,7 @@ fn integration_status(args: &[String]) -> std::io::Result<i32> {
         [] => false,
         [flag] if flag == "--outdated-only" => true,
         _ => {
-            eprintln!("usage: herdr integration status [--outdated-only]");
+            eprintln!("usage: shepherd integration status [--outdated-only]");
             return Ok(2);
         }
     };
@@ -147,13 +147,13 @@ fn parse_integration_target(
 ) -> std::io::Result<Option<IntegrationCommandTarget>> {
     let Some(target) = args.first().map(|arg| arg.as_str()) else {
         eprintln!(
-            "usage: herdr integration {action} <pi|omp|claude|codex|copilot|devin|droid|kimi|opencode|kilo|hermes|qodercli|qwen|letta|cursor|mastracode|grok>"
+            "usage: shepherd integration {action} <pi|omp|claude|codex|copilot|devin|droid|kimi|opencode|kilo|hermes|qodercli|qwen|letta|cursor|mastracode|grok>"
         );
         return Ok(None);
     };
     if args.len() != 1 {
         eprintln!(
-            "usage: herdr integration {action} <pi|omp|claude|codex|copilot|devin|droid|kimi|opencode|kilo|hermes|qodercli|qwen|letta|cursor|mastracode|grok>"
+            "usage: shepherd integration {action} <pi|omp|claude|codex|copilot|devin|droid|kimi|opencode|kilo|hermes|qodercli|qwen|letta|cursor|mastracode|grok>"
         );
         return Ok(None);
     }
@@ -192,42 +192,42 @@ fn parse_integration_target(
 }
 
 fn print_integration_help() {
-    eprintln!("herdr integration commands:");
-    eprintln!("  herdr integration install pi");
-    eprintln!("  herdr integration install omp");
-    eprintln!("  herdr integration install claude");
-    eprintln!("  herdr integration install codex");
-    eprintln!("  herdr integration install copilot");
-    eprintln!("  herdr integration install devin");
-    eprintln!("  herdr integration install droid");
-    eprintln!("  herdr integration install kimi");
-    eprintln!("  herdr integration install opencode");
-    eprintln!("  herdr integration install kilo");
-    eprintln!("  herdr integration install hermes");
-    eprintln!("  herdr integration install qodercli");
-    eprintln!("  herdr integration install qwen");
-    eprintln!("  herdr integration install letta");
-    eprintln!("  herdr integration install cursor");
-    eprintln!("  herdr integration install mastracode");
-    eprintln!("  herdr integration install antigravity-cli");
-    eprintln!("  herdr integration install grok");
-    eprintln!("  herdr integration uninstall pi");
-    eprintln!("  herdr integration uninstall omp");
-    eprintln!("  herdr integration uninstall claude");
-    eprintln!("  herdr integration uninstall codex");
-    eprintln!("  herdr integration uninstall copilot");
-    eprintln!("  herdr integration uninstall devin");
-    eprintln!("  herdr integration uninstall droid");
-    eprintln!("  herdr integration uninstall kimi");
-    eprintln!("  herdr integration uninstall opencode");
-    eprintln!("  herdr integration uninstall kilo");
-    eprintln!("  herdr integration uninstall hermes");
-    eprintln!("  herdr integration uninstall qodercli");
-    eprintln!("  herdr integration uninstall qwen");
-    eprintln!("  herdr integration uninstall letta");
-    eprintln!("  herdr integration uninstall cursor");
-    eprintln!("  herdr integration uninstall mastracode");
-    eprintln!("  herdr integration uninstall antigravity-cli");
-    eprintln!("  herdr integration uninstall grok");
-    eprintln!("  herdr integration status [--outdated-only]");
+    eprintln!("shepherd integration commands:");
+    eprintln!("  shepherd integration install pi");
+    eprintln!("  shepherd integration install omp");
+    eprintln!("  shepherd integration install claude");
+    eprintln!("  shepherd integration install codex");
+    eprintln!("  shepherd integration install copilot");
+    eprintln!("  shepherd integration install devin");
+    eprintln!("  shepherd integration install droid");
+    eprintln!("  shepherd integration install kimi");
+    eprintln!("  shepherd integration install opencode");
+    eprintln!("  shepherd integration install kilo");
+    eprintln!("  shepherd integration install hermes");
+    eprintln!("  shepherd integration install qodercli");
+    eprintln!("  shepherd integration install qwen");
+    eprintln!("  shepherd integration install letta");
+    eprintln!("  shepherd integration install cursor");
+    eprintln!("  shepherd integration install mastracode");
+    eprintln!("  shepherd integration install antigravity-cli");
+    eprintln!("  shepherd integration install grok");
+    eprintln!("  shepherd integration uninstall pi");
+    eprintln!("  shepherd integration uninstall omp");
+    eprintln!("  shepherd integration uninstall claude");
+    eprintln!("  shepherd integration uninstall codex");
+    eprintln!("  shepherd integration uninstall copilot");
+    eprintln!("  shepherd integration uninstall devin");
+    eprintln!("  shepherd integration uninstall droid");
+    eprintln!("  shepherd integration uninstall kimi");
+    eprintln!("  shepherd integration uninstall opencode");
+    eprintln!("  shepherd integration uninstall kilo");
+    eprintln!("  shepherd integration uninstall hermes");
+    eprintln!("  shepherd integration uninstall qodercli");
+    eprintln!("  shepherd integration uninstall qwen");
+    eprintln!("  shepherd integration uninstall letta");
+    eprintln!("  shepherd integration uninstall cursor");
+    eprintln!("  shepherd integration uninstall mastracode");
+    eprintln!("  shepherd integration uninstall antigravity-cli");
+    eprintln!("  shepherd integration uninstall grok");
+    eprintln!("  shepherd integration status [--outdated-only]");
 }

@@ -17,7 +17,7 @@ from scripts import package_windows_conpty as package
 
 class WindowsConptyPackageTests(unittest.TestCase):
     def test_local_build_installs_beside_cargos_reported_executable(self) -> None:
-        executable = Path("other-target/x86_64-pc-windows-msvc/release/herdr.exe")
+        executable = Path("other-target/x86_64-pc-windows-msvc/release/shepherd.exe")
         cargo = mock.MagicMock()
         cargo.__enter__.return_value = cargo
         cargo.stdout = io.StringIO(
@@ -25,7 +25,7 @@ class WindowsConptyPackageTests(unittest.TestCase):
                 {
                     "reason": "compiler-artifact",
                     "manifest_path": str(package.PROJECT_ROOT / "Cargo.toml"),
-                    "target": {"name": "herdr", "kind": ["bin"]},
+                    "target": {"name": "shepherd", "kind": ["bin"]},
                     "executable": str(executable),
                 }
             )
@@ -163,22 +163,22 @@ class WindowsConptyPackageTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            herdr = root / "input-herdr.exe"
-            herdr.write_bytes(self._pe_with_imports(0x8664, ["KERNEL32.dll"]))
+            shepherd = root / "input-shepherd.exe"
+            shepherd.write_bytes(self._pe_with_imports(0x8664, ["KERNEL32.dll"]))
             stage = root / "stage"
-            package.stage_bundle(metadata_path, "x86_64", nupkg, herdr, stage)
+            package.stage_bundle(metadata_path, "x86_64", nupkg, shepherd, stage)
             package.validate_stage(metadata_path, "x86_64", stage)
 
-            (stage / "herdr.exe").write_bytes(
+            (stage / "shepherd.exe").write_bytes(
                 self._pe_with_imports(0x8664, ["MSVCP140D.dll"])
             )
             with self.assertRaisesRegex(ValueError, "dynamic Microsoft"):
                 package.validate_stage(metadata_path, "x86_64", stage)
-            (stage / "herdr.exe").write_bytes(
+            (stage / "shepherd.exe").write_bytes(
                 self._pe_with_imports(0x8664, ["KERNEL32.dll"])
             )
 
-            output = root / "herdr.zip"
+            output = root / "shepherd.zip"
             package.archive_bundle(metadata_path, "x86_64", stage, output)
             with zipfile.ZipFile(output) as archive:
                 self.assertEqual(
@@ -190,12 +190,12 @@ class WindowsConptyPackageTests(unittest.TestCase):
 
             local = root / "local" / "release"
             local.mkdir(parents=True)
-            local_exe = local / "herdr.exe"
-            local_exe.write_bytes(herdr.read_bytes())
+            local_exe = local / "shepherd.exe"
+            local_exe.write_bytes(shepherd.read_bytes())
             package.install_local_bundle(metadata_path, "x86_64", nupkg, local_exe)
             self.assertEqual((local / "conpty" / "conpty.dll").read_bytes(), dll)
             self.assertEqual(
-                (local / "conpty" / "herdr-conpty.json").read_bytes(),
+                (local / "conpty" / "shepherd-conpty.json").read_bytes(),
                 package.marker_data(package.load_metadata(metadata_path), "x86_64"),
             )
             for notice in notice_paths:
@@ -225,8 +225,8 @@ class WindowsConptyPackageTests(unittest.TestCase):
 
             dangling_root = root / "dangling-root"
             dangling_root.mkdir()
-            dangling_exe = dangling_root / "herdr.exe"
-            dangling_exe.write_bytes(herdr.read_bytes())
+            dangling_exe = dangling_root / "shepherd.exe"
+            dangling_exe.write_bytes(shepherd.read_bytes())
             try:
                 (dangling_root / "conpty").symlink_to("missing", target_is_directory=True)
             except OSError:
@@ -269,7 +269,7 @@ class WindowsConptyPackageTests(unittest.TestCase):
             {"KERNEL32.dll", "MSVCP140.dll"},
         )
         with self.assertRaisesRegex(ValueError, "dynamic Microsoft"):
-            package.validate_static_msvc_runtime(data, "herdr.exe")
+            package.validate_static_msvc_runtime(data, "shepherd.exe")
 
     def test_pe_imported_dlls_respects_declared_directory_size(self) -> None:
         # The second descriptor is outside the declared import-directory size,
@@ -281,11 +281,11 @@ class WindowsConptyPackageTests(unittest.TestCase):
             import_directory_size=20,
         )
         self.assertEqual(package.pe_imported_dlls(outside), ["KERNEL32.dll"])
-        package.validate_static_msvc_runtime(outside, "herdr.exe")
+        package.validate_static_msvc_runtime(outside, "shepherd.exe")
 
         inside = self._pe_with_imports(0x8664, ["KERNEL32.dll", "VCRUNTIME140.dll"])
         with self.assertRaisesRegex(ValueError, "dynamic Microsoft"):
-            package.validate_static_msvc_runtime(inside, "herdr.exe")
+            package.validate_static_msvc_runtime(inside, "shepherd.exe")
 
     def test_dynamic_msvc_runtime_imports_are_rejected(self) -> None:
         for dll in (
@@ -304,7 +304,7 @@ class WindowsConptyPackageTests(unittest.TestCase):
             with self.subTest(dll=dll):
                 with self.assertRaisesRegex(ValueError, "dynamic Microsoft"):
                     package.validate_static_msvc_runtime(
-                        self._pe_with_imports(0x8664, [dll]), "herdr.exe"
+                        self._pe_with_imports(0x8664, [dll]), "shepherd.exe"
                     )
 
     def test_static_crt_imports_are_accepted(self) -> None:
@@ -318,7 +318,7 @@ class WindowsConptyPackageTests(unittest.TestCase):
             ],
             ["USER32.dll"],
         )
-        package.validate_static_msvc_runtime(data, "herdr.exe")
+        package.validate_static_msvc_runtime(data, "shepherd.exe")
         self.assertFalse(package.is_dynamic_msvc_runtime("msvcrt.dll"))
 
     def test_stage_rejects_dynamic_crt_executable(self) -> None:
@@ -331,14 +331,14 @@ class WindowsConptyPackageTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            herdr = root / "herdr.exe"
-            herdr.write_bytes(self._pe_with_imports(0x8664, ["VCRUNTIME140.dll"]))
+            shepherd = root / "shepherd.exe"
+            shepherd.write_bytes(self._pe_with_imports(0x8664, ["VCRUNTIME140.dll"]))
             with self.assertRaisesRegex(ValueError, "dynamic Microsoft"):
                 package.stage_bundle(
                     metadata_path,
                     "x86_64",
                     root / "missing.nupkg",
-                    herdr,
+                    shepherd,
                     root / "stage",
                 )
 

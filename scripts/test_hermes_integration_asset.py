@@ -8,7 +8,7 @@ ASSET = Path(__file__).parents[1] / "src/integration/assets/hermes/__init__.py"
 
 
 def load_asset():
-    spec = importlib.util.spec_from_file_location("herdr_hermes_integration", ASSET)
+    spec = importlib.util.spec_from_file_location("shepherd_hermes_integration", ASSET)
     if spec is None or spec.loader is None:
         raise RuntimeError("could not load Hermes integration asset")
     module = importlib.util.module_from_spec(spec)
@@ -52,9 +52,9 @@ class HermesIntegrationAssetTests(unittest.TestCase):
     def test_send_session_uses_cli_with_the_active_pane(self):
         module = load_asset()
         environment = {
-            "HERDR_ENV": "1",
-            "HERDR_PANE_ID": "w1:p2",
-            "HERDR_BIN_PATH": "C:/bin/herdr.exe",
+            "SHEPHERD_ENV": "1",
+            "SHEPHERD_PANE_ID": "w1:p2",
+            "SHEPHERD_BIN_PATH": "C:/bin/shepherd.exe",
         }
         with mock.patch.dict(module.os.environ, environment, clear=True):
             with mock.patch.object(module.subprocess, "run") as run:
@@ -63,7 +63,7 @@ class HermesIntegrationAssetTests(unittest.TestCase):
         command = run.call_args.args[0]
         self.assertEqual(
             command[:4],
-            ["C:/bin/herdr.exe", "pane", "report-agent-session", "w1:p2"],
+            ["C:/bin/shepherd.exe", "pane", "report-agent-session", "w1:p2"],
         )
         self.assertIn("session-1", command)
         self.assertIn("resume", command)

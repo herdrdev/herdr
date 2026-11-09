@@ -1,18 +1,18 @@
 [package]
-name = "herdr"
+name = "shepherd"
 version = "0.9.5"
 edition = "2021"
 build = "build.rs"
 description = "terminal workspace manager for AI coding agents"
 license = "Apache-2.0"
-repository = "https://github.com/herdrdev/herdr"
-homepage = "https://herdr.dev"
+repository = "https://github.com/Rivaldito/shepherd"
+homepage = "https://github.com/Rivaldito/shepherd"
 keywords = ["terminal", "tui", "ai", "agents", "multiplexer"]
 categories = ["command-line-utilities"]
 include = [
     "src/**/*",
     "assets/sounds/*",
-    "docs/next/api/herdr-api.schema.json",
+    "docs/next/api/shepherd-api.schema.json",
     "skills/herdr/SKILL.md",
     "distribution/install.ps1",
     "README.md",
@@ -21,11 +21,12 @@ include = [
 ]
 
 [workspace]
-members = ["crates/ghostty-vt"]
+members = ["crates/ghostty-vt", "crates/shepherd-core"]
 default-members = [".", "crates/ghostty-vt"]
 
 [dependencies]
 ghostty-vt = { path = "crates/ghostty-vt" }
+shepherd-core = { path = "crates/shepherd-core" }
 base64 = "0.22.1"
 bincode = { version = "2", features = ["serde"] }
 bytes = "1"

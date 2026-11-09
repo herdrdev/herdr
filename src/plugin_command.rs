@@ -159,7 +159,7 @@ mod tests {
     #[test]
     fn windows_batch_command_captures_output() {
         let root = std::env::temp_dir().join(format!(
-            "herdr plugin command output {}",
+            "shepherd plugin command output {}",
             std::process::id()
         ));
         std::fs::create_dir_all(&root).expect("create batch fixture directory");
@@ -187,7 +187,7 @@ mod tests {
     #[test]
     fn windows_explicit_relative_executable_runs_from_working_directory() {
         let root = std::env::temp_dir().join(format!(
-            "herdr-plugin-relative-command-{}",
+            "shepherd-plugin-relative-command-{}",
             std::process::id()
         ));
         std::fs::create_dir_all(&root).expect("create relative command fixture");

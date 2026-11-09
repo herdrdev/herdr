@@ -112,8 +112,8 @@ mod machine_tests {
     fn remote_worktree_paths_are_not_expanded_on_the_caller_machine() {
         crate::cli::target::with_test_client(crate::api::client::ApiClient::local(), || {
             for path in [
-                "~/Projects/herdr",
-                "/Users/can/Projects/herdr",
+                "~/Projects/shepherd",
+                "/Users/can/Projects/shepherd",
                 r"C:\work\repo",
                 "C:/work/repo",
                 r"\\host\share\repo",

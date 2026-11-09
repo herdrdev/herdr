@@ -1,6 +1,6 @@
-pub(crate) const REMOTE_PREFERENCES_ENV_VAR: &str = "HERDR_REMOTE_PREFERENCES_IDENTITY";
-pub(crate) const REATTACH_COMMAND_ENV_VAR: &str = "HERDR_REATTACH_COMMAND";
-pub(crate) const REMOTE_KEYBINDINGS_ENV_VAR: &str = "HERDR_REMOTE_KEYBINDINGS";
+pub(crate) const REMOTE_PREFERENCES_ENV_VAR: &str = "SHEPHERD_REMOTE_PREFERENCES_IDENTITY";
+pub(crate) const REATTACH_COMMAND_ENV_VAR: &str = "SHEPHERD_REATTACH_COMMAND";
+pub(crate) const REMOTE_KEYBINDINGS_ENV_VAR: &str = "SHEPHERD_REMOTE_KEYBINDINGS";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RemoteKeybindings {

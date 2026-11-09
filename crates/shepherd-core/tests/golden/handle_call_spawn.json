@@ -1,0 +1,29 @@
+{
+  "active_skills": [
+    "shepherd-comms",
+    "implement-task",
+    "write-tests",
+    "conventional-commits",
+    "shepherd-control"
+  ],
+  "branch": "shep/1-build-feature-x",
+  "delivery_cursor": 0,
+  "depth": 0,
+  "has_result": false,
+  "id": "coder-1",
+  "label": "coder·codex·build-feature-x",
+  "mcp": false,
+  "pane": "pane-1",
+  "role": "coder",
+  "root": "<ROOT>",
+  "seq": 1,
+  "skills": {},
+  "started": "<TIMESTAMP>",
+  "state": "<STATE_DIR_PATH>",
+  "tab": "tab-1",
+  "task_text": "Build feature X",
+  "updated": "<TIMESTAMP>",
+  "vendor": "codex",
+  "workspace": "ws-1",
+  "worktree": "<ROOT>/.worktrees/shep-1-build-feature-x"
+}

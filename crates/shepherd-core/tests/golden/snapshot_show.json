@@ -1,0 +1,38 @@
+{
+  "diff": {
+    "added": 3,
+    "files": [
+      {
+        "added": 2,
+        "binary": false,
+        "path": "a.txt",
+        "removed": 1,
+        "status": "modified"
+      },
+      {
+        "added": 1,
+        "binary": false,
+        "path": "new.txt",
+        "removed": 0,
+        "status": "added"
+      }
+    ],
+    "from": "coder-1/1",
+    "patch": "diff --git a/a.txt b/a.txt\nindex 814f4a4..ddc897f 100644\n--- a/a.txt\n+++ b/a.txt\n@@ -1,2 +1,3 @@\n one\n-two\n+TWO\n+three\ndiff --git a/new.txt b/new.txt\nnew file mode 100644\nindex 0000000..3e75765\n--- /dev/null\n+++ b/new.txt\n@@ -0,0 +1 @@\n+new\n",
+    "removed": 1,
+    "to": "coder-1/2"
+  },
+  "snapshot": {
+    "added": 3,
+    "agent": "coder-1",
+    "commit": "<COMMIT>",
+    "created": 0,
+    "files": 2,
+    "id": "coder-1/2",
+    "n": 2,
+    "prev": "coder-1/1",
+    "reason": "done",
+    "removed": 1,
+    "worktree": "<ROOT>"
+  }
+}

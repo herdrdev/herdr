@@ -1,0 +1,16 @@
+{
+  "id": 10,
+  "jsonrpc": "2.0",
+  "result": {
+    "content": [
+      {
+        "text": "{\"messages\":[{\"content\":\"Instructions from user\",\"from\":\"user\",\"id\":1,\"kind\":\"msg\",\"to\":\"coder-1\",\"ts\":\"<TIMESTAMP>\"}]}",
+        "type": "text"
+      }
+    ],
+    "isError": false,
+    "structuredContent": {
+      "text": "{\"messages\":[{\"content\":\"Instructions from user\",\"from\":\"user\",\"id\":1,\"kind\":\"msg\",\"to\":\"coder-1\",\"ts\":\"<TIMESTAMP>\"}]}"
+    }
+  }
+}

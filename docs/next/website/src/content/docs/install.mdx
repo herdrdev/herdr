@@ -1,9 +1,9 @@
 ---
-title: Install Herdr
-description: Install, update, and verify Herdr on Linux, macOS, and Windows.
+title: Install Shepherd
+description: Install, update, and verify Shepherd on Linux, macOS, and Windows.
 ---
 
-Herdr publishes stable-channel binaries for Linux, macOS, and Windows. Windows is generally available, with documented platform-specific limitations and ongoing fixes.
+Shepherd publishes stable-channel binaries for Linux, macOS, and Windows. Windows is generally available, with documented platform-specific limitations and ongoing fixes.
 
 ## Install
 
@@ -25,14 +25,14 @@ If endpoint security blocks that fileless PowerShell command, open Command Promp
 curl.exe -fsSLo install.cmd https://herdr.dev/install.cmd && install.cmd && del install.cmd
 ```
 
-The installer downloads the release binary for your platform and places it on your PATH. New direct installs use the stable update channel. Existing Windows preview installs stay on preview until you switch them with `herdr channel set stable`. On Windows, PATH points to the active versioned release directory; the installer also updates the `current` and stable `bin` compatibility aliases, so updates do not need to overwrite a running `herdr.exe`.
+The installer downloads the release binary for your platform and places it on your PATH. New direct installs use the stable update channel. Existing Windows preview installs stay on preview until you switch them with `shepherd channel set stable`. On Windows, PATH points to the active versioned release directory; the installer also updates the `current` and stable `bin` compatibility aliases, so updates do not need to overwrite a running `shepherd.exe`.
 
 ## Install with Homebrew
 
 If you already use Homebrew:
 
 ```bash
-brew install herdr
+brew install shepherd
 ```
 
 ## Install with mise
@@ -40,14 +40,14 @@ brew install herdr
 If you already use mise:
 
 ```bash
-mise use -g herdr
+mise use -g shepherd
 ```
 
 If mise reports `herdr not found in mise tool registry`, update mise and retry. Older mise versions predate the Herdr registry entry; `mise use -g github:herdrdev/herdr` works as a temporary fallback.
 
 ## Install with Nix
 
-If you already use Nix, Herdr provides a flake that builds Herdr from source:
+If you already use Nix, Shepherd provides a flake that builds Shepherd from source:
 
 ```bash
 nix run github:herdrdev/herdr/v0.x.y
@@ -63,17 +63,17 @@ The flake also exposes a development shell:
 nix develop github:herdrdev/herdr
 ```
 
-Use the same Nix workflow to update Herdr. For a profile install, list your profile entries and upgrade the Herdr entry:
+Use the same Nix workflow to update Shepherd. For a profile install, list your profile entries and upgrade the Shepherd entry:
 
 ```bash
 nix profile list
 nix profile upgrade <index-or-name>
 ```
 
-If Herdr is an input in your own flake, update that input and rebuild your system, Home Manager, or development environment:
+If Shepherd is an input in your own flake, update that input and rebuild your system, Home Manager, or development environment:
 
 ```bash
-nix flake update herdr
+nix flake update shepherd
 ```
 
 ## Download manually
@@ -84,76 +84,76 @@ Choose the asset that matches your system:
 
 | System | Asset |
 | --- | --- |
-| Linux x86_64 | `herdr-linux-x86_64` |
-| Linux aarch64 | `herdr-linux-aarch64` |
-| macOS Intel | `herdr-macos-x86_64` |
-| macOS Apple silicon | `herdr-macos-aarch64` |
-| Windows x86_64 | `herdr-windows-x86_64.zip` |
+| Linux x86_64 | `shepherd-linux-x86_64` |
+| Linux aarch64 | `shepherd-linux-aarch64` |
+| macOS Intel | `shepherd-macos-x86_64` |
+| macOS Apple silicon | `shepherd-macos-aarch64` |
+| Windows x86_64 | `shepherd-windows-x86_64.zip` |
 
 On Linux or macOS, make it executable and move it somewhere on your PATH.
 
 ```bash
-chmod +x herdr-linux-x86_64
-mv herdr-linux-x86_64 ~/.local/bin/herdr
+chmod +x shepherd-linux-x86_64
+mv shepherd-linux-x86_64 ~/.local/bin/shepherd
 ```
 
 ### Windows archive
 
-Stable releases and preview prereleases both include `herdr-windows-x86_64.zip`. The archive contains `herdr.exe` and its app-local ConPTY runtime. Keep the extracted directory together; do not copy only `herdr.exe`.
+Stable releases and preview prereleases both include `shepherd-windows-x86_64.zip`. The archive contains `shepherd.exe` and its app-local ConPTY runtime. Keep the extracted directory together; do not copy only `shepherd.exe`.
 
 ## Verify
 
-Start Herdr:
+Start Shepherd:
 
 ```bash
-herdr
+shepherd
 ```
 
-If your shell cannot find `herdr`, restart the terminal or check that the install directory is on your PATH.
+If your shell cannot find `shepherd`, restart the terminal or check that the install directory is on your PATH.
 
 ## Update
 
-Herdr checks for new releases and notifies you in the app. You can update manually:
+Shepherd checks for new releases and notifies you in the app. You can update manually:
 
 ```bash
-herdr update
+shepherd update
 ```
 
-Use `herdr update` only for installs managed by Herdr's own installer. Update Homebrew, mise, and Nix installs through those package managers instead.
+Use `shepherd update` only for installs managed by Shepherd's own installer. Update Homebrew, mise, and Nix installs through those package managers instead.
 
 Direct installs on Linux, macOS, and Windows use the stable update channel by default. To opt into preview builds from `master`, set the channel:
 
 ```bash
-herdr channel set preview
+shepherd channel set preview
 ```
 
 Switch a direct install back to stable the same way:
 
 ```bash
-herdr channel set stable
+shepherd channel set stable
 ```
 
-For direct installs, changing channels checks the selected channel and installs its latest binary. If that update fails, run `herdr update` to retry from the configured channel.
+For direct installs, changing channels checks the selected channel and installs its latest binary. If that update fails, run `shepherd update` to retry from the configured channel.
 
 Preview builds are regularly published GitHub prereleases from the current development branch. They are useful when you want fixes before the next stable release, but they can regress. Homebrew, mise, and Nix installs do not use the preview channel.
 
 The preview channel also installs stable releases when their version is higher than the latest preview's base version. It stays configured for preview, so a later preview based on that stable release becomes available automatically. Update checks do not offer releases based on an older version than the installed binary.
 
-Stable is the recommended channel for normal Windows use. Preview receives fixes sooner but can regress, so opt in only when you want that tradeoff. Existing Windows preview installs remain on preview until you switch them explicitly. If an older preview build rejects `herdr channel set stable`, run `herdr update` once on preview, then retry the channel switch.
+Stable is the recommended channel for normal Windows use. Preview receives fixes sooner but can regress, so opt in only when you want that tradeoff. Existing Windows preview installs remain on preview until you switch them explicitly. If an older preview build rejects `shepherd channel set stable`, run `shepherd update` once on preview, then retry the channel switch.
 
-By default, `herdr update` installs the new binary and leaves endpoint-generation-1 servers and their pane processes running. Start Herdr again to reconnect with the updated client. Client-only changes work immediately. A new server-side action stays unavailable until that server is updated and restarted; the client shows a notice instead of disconnecting. Servers from before endpoint generation 1 need one final stop during update.
+By default, `shepherd update` installs the new binary and leaves endpoint-generation-1 servers and their pane processes running. Start Shepherd again to reconnect with the updated client. Client-only changes work immediately. A new server-side action stays unavailable until that server is updated and restarted; the client shows a notice instead of disconnecting. Servers from before endpoint generation 1 need one final stop during update.
 
-When it finishes, `herdr update` lists any running server still on the old version with the command that restarts it, and your saved SSH machines, which run their own Herdr. Run `herdr update` on each machine to update it too.
+When it finishes, `shepherd update` lists any running server still on the old version with the command that restarts it, and your saved SSH machines, which run their own Shepherd. Run `shepherd update` on each machine to update it too.
 
 To opt into experimental live server handoff for supported running sessions, run:
 
 ```bash
-herdr update --handoff
+shepherd update --handoff
 ```
 
 When both servers support agent-status transfer, live handoff preserves hook-reported agent status until the next report arrives. Handoff from an older server can temporarily show a running agent as idle.
 
-Live handoff does not apply to Homebrew, mise, or Nix package-manager updates. For those installs, update with the package manager, then run Herdr again to reconnect with the updated client. The compatible old server keeps running. Restart it later with `herdr server stop` or `herdr session stop <name>` only when you want server-side changes from the new release.
+Live handoff does not apply to Homebrew, mise, or Nix package-manager updates. For those installs, update with the package manager, then run Shepherd again to reconnect with the updated client. The compatible old server keeps running. Restart it later with `shepherd server stop` or `shepherd session stop <name>` only when you want server-side changes from the new release.
 
 ## Requirements
 

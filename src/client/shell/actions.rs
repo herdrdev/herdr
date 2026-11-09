@@ -62,6 +62,13 @@ impl ClientShellState {
                     outcome.repaint = true;
                     return;
                 }
+                if action == crate::input::KeybindAction::Shepherd {
+                    if self.config.shepherd_enabled {
+                        self.toggle_shepherd_section(outcome);
+                        outcome.repaint = true;
+                    }
+                    return;
+                }
                 if action == crate::input::KeybindAction::OpenNotificationTarget {
                     self.focus_visible_notification(outcome);
                     return;
@@ -123,6 +130,9 @@ impl ClientShellState {
                     return;
                 }
                 if action == crate::input::KeybindAction::CloseTab {
+                    if self.is_shepherd_tab_active() {
+                        return;
+                    }
                     if let Some(tab_id) = self
                         .snapshot
                         .as_deref()
@@ -139,6 +149,9 @@ impl ClientShellState {
                     return;
                 }
                 if action == crate::input::KeybindAction::RenameTab {
+                    if self.is_shepherd_tab_active() {
+                        return;
+                    }
                     self.open_rename_tab_overlay();
                     outcome.repaint = true;
                     return;
@@ -167,6 +180,9 @@ impl ClientShellState {
                     if self.enter_copy_mode(outcome) {
                         outcome.repaint = true;
                     }
+                    return;
+                }
+                if self.handle_tab_navigation(action, outcome) {
                     return;
                 }
                 if self.handle_endpoint_navigation(action, outcome) {
@@ -829,6 +845,11 @@ impl ClientShellState {
                     Err(_) => true,
                 };
                 return (repaint, Vec::new());
+            }
+            PendingEndpointKind::ShepherdCall { op } => {
+                let mut outcome = ClientShellInput::default();
+                self.handle_shepherd_endpoint_result(&op, result, &mut outcome);
+                return (true, outcome.actions);
             }
             kind @ (PendingEndpointKind::IntegrationList
             | PendingEndpointKind::IntegrationInstall) => {

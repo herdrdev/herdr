@@ -87,7 +87,7 @@ def vendor_libghostty_vt(source_repo: Path, destination: Path) -> VendorMetadata
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Vendor the pinned libghostty-vt source dist into herdr")
+    parser = argparse.ArgumentParser(description="Vendor the pinned libghostty-vt source dist into shepherd")
     parser.add_argument(
         "--source-repo",
         default="/home/can/Projects/ghostty",

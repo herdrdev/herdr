@@ -25,7 +25,7 @@ pub use self::{
         validated_sidebar_bounds, AgentPanelSortConfig, Config, ConfigReloadReport,
         ConfigReloadStatus, HostCursorModeConfig, NewTerminalCwdConfig, PaneBordersConfig,
         ShellModeConfig, SidebarCollapsedModeConfig, StatusIndicatorStyle, TabBarPositionConfig,
-        ToastClipboardPosition, ToastConfig, ToastDelivery, ToastHerdrPosition,
+        ToastClipboardPosition, ToastConfig, ToastDelivery, ToastShepherdPosition,
         UpdateChannelConfig, MAX_TOAST_DELAY_SECONDS,
     },
     sidebar::{
@@ -53,7 +53,7 @@ pub(crate) use self::{
 
 pub(crate) use self::{keybinds::CommandKeybindType, model::KeysConfig};
 
-pub const CONFIG_PATH_ENV_VAR: &str = "HERDR_CONFIG_PATH";
+pub const CONFIG_PATH_ENV_VAR: &str = "SHEPHERD_CONFIG_PATH";
 
 pub(crate) fn is_keybinding_config_diagnostic(diagnostic: &str) -> bool {
     if diagnostic.starts_with("config parse error:") || diagnostic.starts_with("config read error:")
@@ -78,6 +78,44 @@ pub const DEFAULT_MOUSE_SCROLL_LINES: usize = 3;
 pub const DEFAULT_MOBILE_WIDTH_THRESHOLD: u16 = 64;
 pub const DEFAULT_HEADLESS_COLS: u16 = 120;
 pub const DEFAULT_HEADLESS_ROWS: u16 = 40;
+
+/// Turns the Shepherd layer on in the server `config.toml`. The server reads it only at startup, so
+/// the caller must tell the user to restart. Returns the file and whether it had to change.
+pub fn enable_shepherd_layer() -> Result<(std::path::PathBuf, bool), String> {
+    enable_shepherd_layer_at(&config_path())
+}
+
+fn enable_shepherd_layer_at(path: &std::path::Path) -> Result<(std::path::PathBuf, bool), String> {
+    let before = std::fs::read_to_string(path).unwrap_or_default();
+    if toml::from_str::<Config>(&before).is_ok_and(|c| c.shepherd.enabled) {
+        return Ok((path.to_path_buf(), false));
+    }
+    update_file_at(path, "shepherd.enabled", |content| {
+        Ok(upsert_section_bool(content, "shepherd", "enabled", true))
+    })?;
+    Ok((path.to_path_buf(), true))
+}
+
+#[cfg(test)]
+mod enable_shepherd_tests {
+    use super::*;
+
+    #[test]
+    fn enable_is_idempotent_and_keeps_other_settings() {
+        let dir = std::env::temp_dir().join(format!("shep-enable-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.toml");
+        std::fs::write(&path, "[ui]\nstatus_indicators = \"dots\"\n").unwrap();
+        assert!(enable_shepherd_layer_at(&path).unwrap().1);
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            text.contains("[ui]") && text.contains("[shepherd]") && text.contains("enabled = true")
+        );
+        assert!(toml::from_str::<Config>(&text).unwrap().shepherd.enabled);
+        assert!(!enable_shepherd_layer_at(&path).unwrap().1);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+}
 
 #[cfg(test)]
 pub(crate) fn app_dir_name() -> &'static str {
@@ -106,7 +144,7 @@ impl Config {
         self.validated_keybinds().1
     }
 
-    /// Parsed keybinds for Herdr actions.
+    /// Parsed keybinds for Shepherd actions.
     pub fn keybinds(&self) -> Keybinds {
         self.validated_keybinds().3
     }

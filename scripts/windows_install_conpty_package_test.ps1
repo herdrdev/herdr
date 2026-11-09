@@ -55,43 +55,43 @@ foreach ($functionName in @("Prepend-PathEntry", "Update-PathRegistryEntry")) {
     Invoke-Expression $definition.Extent.Text
 }
 
-$pathTestVariable = "HERDR_INSTALLER_PATH_TEST"
+$pathTestVariable = "SHEPHERD_INSTALLER_PATH_TEST"
 $oldPathTestVariable = [Environment]::GetEnvironmentVariable($pathTestVariable, "Process")
-$ownedPathTestVariable = "HERDR_INSTALLER_OWNED_PATH_TEST"
+$ownedPathTestVariable = "SHEPHERD_INSTALLER_OWNED_PATH_TEST"
 $oldOwnedPathTestVariable = [Environment]::GetEnvironmentVariable($ownedPathTestVariable, "Process")
-$testRegistryPath = "Software\HerdrInstallerTests-$([Guid]::NewGuid().ToString('N'))"
+$testRegistryPath = "Software\ShepherdInstallerTests-$([Guid]::NewGuid().ToString('N'))"
 $testEnvironmentKey = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey($testRegistryPath)
 if ($null -eq $testEnvironmentKey) {
     throw "unable to create temporary installer test registry key"
 }
 try {
     [Environment]::SetEnvironmentVariable($pathTestVariable, "C:\expanded", "Process")
-    [Environment]::SetEnvironmentVariable($ownedPathTestVariable, "C:\Herdr", "Process")
+    [Environment]::SetEnvironmentVariable($ownedPathTestVariable, "C:\Shepherd", "Process")
     $testEnvironmentKey.SetValue(
         "Path",
-        "C:\Herdr\releases\deleted;%$ownedPathTestVariable%\bin;C:\Herdr\bin;%$pathTestVariable%\bin;`"C:\Program Files\Tool`";C:\existing;C:\Herdr\releases\old\nested;C:\Herdr\releases-old\old;C:\Herdr\releases\deleted",
+        "C:\Shepherd\releases\deleted;%$ownedPathTestVariable%\bin;C:\Shepherd\bin;%$pathTestVariable%\bin;`"C:\Program Files\Tool`";C:\existing;C:\Shepherd\releases\old\nested;C:\Shepherd\releases-old\old;C:\Shepherd\releases\deleted",
         [Microsoft.Win32.RegistryValueKind]::ExpandString
     )
-    $ownedEntries = @("C:\Herdr\bin", "C:\Herdr\current")
+    $ownedEntries = @("C:\Shepherd\bin", "C:\Shepherd\current")
     $pathChanged = Update-PathRegistryEntry `
         -EnvironmentKey $testEnvironmentKey `
-        -Entry "C:\Herdr\releases\new" `
+        -Entry "C:\Shepherd\releases\new" `
         -OwnedEntriesToRemove $ownedEntries `
-        -OwnedEntryParentToRemove "C:\Herdr\releases"
+        -OwnedEntryParentToRemove "C:\Shepherd\releases"
     if (-not $pathChanged) {
         throw "installer PATH update reported no change"
     }
     if (Update-PathRegistryEntry `
         -EnvironmentKey $testEnvironmentKey `
-        -Entry "C:\Herdr\releases\new" `
+        -Entry "C:\Shepherd\releases\new" `
         -OwnedEntriesToRemove $ownedEntries `
-        -OwnedEntryParentToRemove "C:\Herdr\releases") {
+        -OwnedEntryParentToRemove "C:\Shepherd\releases") {
         throw "installer PATH update was not idempotent"
     }
 
     $options = [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames
     $rawPath = $testEnvironmentKey.GetValue("Path", $null, $options)
-    $expectedPath = "C:\Herdr\releases\new;%$pathTestVariable%\bin;`"C:\Program Files\Tool`";C:\existing;C:\Herdr\releases\old\nested;C:\Herdr\releases-old\old"
+    $expectedPath = "C:\Shepherd\releases\new;%$pathTestVariable%\bin;`"C:\Program Files\Tool`";C:\existing;C:\Shepherd\releases\old\nested;C:\Shepherd\releases-old\old"
     if ($rawPath -cne $expectedPath) {
         throw "installer changed raw PATH: expected '$expectedPath', got '$rawPath'"
     }
@@ -106,12 +106,12 @@ try {
 }
 
 $archive = (Resolve-Path -LiteralPath $ArchivePath).Path
-$root = Join-Path $env:RUNNER_TEMP ("herdr-installer-test-" + [Guid]::NewGuid().ToString("N"))
+$root = Join-Path $env:RUNNER_TEMP ("shepherd-installer-test-" + [Guid]::NewGuid().ToString("N"))
 $webRoot = Join-Path $root "web"
-$herdrHome = Join-Path $root "home"
+$shepherdHome = Join-Path $root "home"
 $installDir = Join-Path $root "bin"
 New-Item -ItemType Directory -Force -Path $webRoot | Out-Null
-Copy-Item -LiteralPath $archive -Destination (Join-Path $webRoot "herdr-windows-x86_64.zip")
+Copy-Item -LiteralPath $archive -Destination (Join-Path $webRoot "shepherd-windows-x86_64.zip")
 Copy-Item -LiteralPath $installerPath -Destination (Join-Path $webRoot "install.ps1")
 $hash = (Get-FileHash -Algorithm SHA256 $archive).Hash.ToLowerInvariant()
 
@@ -125,7 +125,7 @@ $previewManifest = @{
     build_id = "installer-test"
     assets = @{
         "windows-x86_64" = @{
-            url = "http://127.0.0.1:$port/herdr-windows-x86_64.zip"
+            url = "http://127.0.0.1:$port/shepherd-windows-x86_64.zip"
             sha256 = $hash
             format = "zip"
         }
@@ -138,7 +138,7 @@ $legacyStableManifest = @{
 $stableManifest = @{
     version = "0.0.1"
     assets = @{
-        "windows-x86_64" = "http://127.0.0.1:$port/herdr-windows-x86_64.zip"
+        "windows-x86_64" = "http://127.0.0.1:$port/shepherd-windows-x86_64.zip"
     }
     sha256 = @{
         "windows-x86_64" = $hash
@@ -154,8 +154,8 @@ $legacyStableManifest | Out-File -LiteralPath $stableManifestPath -Encoding utf8
 $customPreviewManifest | ConvertTo-Json -Depth 5 | Out-File -LiteralPath $customPreviewManifestPath -Encoding utf8
 
 $server = $null
-$oldHerdrHome = $env:HERDR_HOME
-$oldInstallerUrl = $env:HERDR_INSTALLER_URL
+$oldShepherdHome = $env:SHEPHERD_HOME
+$oldInstallerUrl = $env:SHEPHERD_INSTALLER_URL
 $oldProcessPath = $env:Path
 $registryOptions = [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames
 $realUserEnvironmentKey = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey("Environment")
@@ -176,7 +176,7 @@ $realUserPathKind = if ($realUserPathExisted) {
 $realUserEnvironmentKey.Dispose()
 try {
     $server = Start-Process python -ArgumentList @("-m", "http.server", "$port", "--bind", "127.0.0.1", "--directory", $webRoot) -PassThru -WindowStyle Hidden
-    $env:HERDR_HOME = Join-Path $root "unused\..\home"
+    $env:SHEPHERD_HOME = Join-Path $root "unused\..\home"
     $previewManifestUrl = "http://127.0.0.1:$port/preview.json"
     $stableManifestUrl = "http://127.0.0.1:$port/latest.json"
     for ($attempt = 0; $attempt -lt 20; $attempt++) {
@@ -192,8 +192,8 @@ try {
     $freshStableHome = Join-Path $root "fresh-stable-home"
     $freshStableBin = Join-Path $root "fresh-stable-bin"
     $stableManifest | Out-File -LiteralPath $stableManifestPath -Encoding utf8
-    $env:HERDR_HOME = $freshStableHome
-    $env:HERDR_INSTALLER_URL = "http://127.0.0.1:$port/install.ps1"
+    $env:SHEPHERD_HOME = $freshStableHome
+    $env:SHEPHERD_INSTALLER_URL = "http://127.0.0.1:$port/install.ps1"
     $env:Path = $oldProcessPath
     & $bootstrapPath `
         -ManifestUrl $stableManifestUrl `
@@ -201,7 +201,7 @@ try {
     if ($LASTEXITCODE -ne 0) {
         throw "CMD bootstrap failed with exit code $LASTEXITCODE"
     }
-    $env:HERDR_INSTALLER_URL = $oldInstallerUrl
+    $env:SHEPHERD_INSTALLER_URL = $oldInstallerUrl
     $freshStableRelease = Get-ChildItem -LiteralPath (Join-Path $freshStableHome "packages\standalone\releases") -Directory |
         Where-Object { $_.Name.StartsWith("0.0.1-") } |
         Select-Object -First 1
@@ -210,7 +210,7 @@ try {
     }
 
     $legacyStableManifest | Out-File -LiteralPath $stableManifestPath -Encoding utf8
-    $env:HERDR_HOME = Join-Path $root "unused\..\home"
+    $env:SHEPHERD_HOME = Join-Path $root "unused\..\home"
     $env:Path = $oldProcessPath
     & $installerPath `
         -ManifestUrl $stableManifestUrl `
@@ -221,7 +221,7 @@ try {
     & $installerPath "preview" $previewManifestUrl $installDir "installer-test" 3
 
     $localInstallDir = Join-Path $root "local-bin"
-    $env:HERDR_HOME = Join-Path $root "local-home"
+    $env:SHEPHERD_HOME = Join-Path $root "local-home"
     $partialLocalModeRejected = $false
     try {
         & $installerPath `
@@ -247,7 +247,7 @@ try {
             -LocalPackageIdentity "0.0.0-preview.local-package" `
             -LocalPackageSha256 ("0" * 64)
     } catch {
-        if ($_.Exception.Message -notlike "Downloaded Herdr checksum did not match.*") {
+        if ($_.Exception.Message -notlike "Downloaded Shepherd checksum did not match.*") {
             throw
         }
         $badLocalChecksumRejected = $true
@@ -263,14 +263,14 @@ try {
         -LocalPackageFormat "zip" `
         -LocalPackageIdentity "0.0.0-preview.local-package" `
         -LocalPackageSha256 $hash
-    if (-not (Test-Path -LiteralPath (Join-Path $localInstallDir "herdr.exe") -PathType Leaf)) {
+    if (-not (Test-Path -LiteralPath (Join-Path $localInstallDir "shepherd.exe") -PathType Leaf)) {
         throw "installer did not activate the verified local package"
     }
-    $env:HERDR_HOME = $herdrHome
+    $env:SHEPHERD_HOME = $shepherdHome
 
     $required = @(
-        "herdr.exe",
-        "conpty\herdr-conpty.json",
+        "shepherd.exe",
+        "conpty\shepherd-conpty.json",
         "conpty\conpty.dll",
         "conpty\x64\OpenConsole.exe",
         "conpty\arm64\OpenConsole.exe",
@@ -283,7 +283,7 @@ try {
         }
     }
 
-    $releasesDir = Join-Path $herdrHome "packages\standalone\releases"
+    $releasesDir = Join-Path $shepherdHome "packages\standalone\releases"
     $releaseDir = Get-ChildItem -LiteralPath $releasesDir -Directory |
         Where-Object { -not $_.Name.StartsWith(".staging.") } |
         Select-Object -First 1
@@ -291,30 +291,30 @@ try {
         throw "installer did not create a versioned release"
     }
 
-    $pathWithoutHerdr = @(
+    $pathWithoutShepherd = @(
         $env:Path.Split(";", [System.StringSplitOptions]::RemoveEmptyEntries) |
             Where-Object {
-                -not (Test-Path -LiteralPath (Join-Path $_ "herdr.exe") -PathType Leaf) -and
-                -not (Test-Path -LiteralPath (Join-Path $_ "herdr.cmd") -PathType Leaf)
+                -not (Test-Path -LiteralPath (Join-Path $_ "shepherd.exe") -PathType Leaf) -and
+                -not (Test-Path -LiteralPath (Join-Path $_ "shepherd.cmd") -PathType Leaf)
             }
     ) -join ";"
-    $env:Path = $pathWithoutHerdr
-    if ($null -ne (Get-Command herdr -ErrorAction SilentlyContinue)) {
-        throw "test PATH still resolves Herdr before current-junction migration discovery"
+    $env:Path = $pathWithoutShepherd
+    if ($null -ne (Get-Command shepherd -ErrorAction SilentlyContinue)) {
+        throw "test PATH still resolves Shepherd before current-junction migration discovery"
     }
-    $oldConfigPath = $env:HERDR_CONFIG_PATH
+    $oldConfigPath = $env:SHEPHERD_CONFIG_PATH
     try {
-        $env:HERDR_CONFIG_PATH = Join-Path $root "preview-config.toml"
-        "[update]`nchannel = `"preview`"" | Out-File -LiteralPath $env:HERDR_CONFIG_PATH -Encoding ascii
+        $env:SHEPHERD_CONFIG_PATH = Join-Path $root "preview-config.toml"
+        "[update]`nchannel = `"preview`"" | Out-File -LiteralPath $env:SHEPHERD_CONFIG_PATH -Encoding ascii
         & $installerPath `
             -ManifestUrl "http://127.0.0.1:$port/candidate.json" `
             -InstallDir $installDir `
             -ExpectedBuildId "installer-test"
     } finally {
         if ($null -eq $oldConfigPath) {
-            Remove-Item Env:HERDR_CONFIG_PATH -ErrorAction SilentlyContinue
+            Remove-Item Env:SHEPHERD_CONFIG_PATH -ErrorAction SilentlyContinue
         } else {
-            $env:HERDR_CONFIG_PATH = $oldConfigPath
+            $env:SHEPHERD_CONFIG_PATH = $oldConfigPath
         }
     }
     if ($null -eq (Get-ChildItem -LiteralPath $releasesDir -Directory |
@@ -344,7 +344,7 @@ try {
     if (-not $downloadFailed) {
         throw "installer repair unexpectedly accepted a missing archive"
     }
-    if (-not (Test-Path -LiteralPath (Join-Path $releaseDir.FullName "herdr.exe") -PathType Leaf)) {
+    if (-not (Test-Path -LiteralPath (Join-Path $releaseDir.FullName "shepherd.exe") -PathType Leaf)) {
         throw "failed repair removed the existing release"
     }
 
@@ -355,7 +355,7 @@ try {
     $transientLockTimer = New-Object System.Timers.Timer
     $transientLockTimer.Interval = 300
     $transientLockTimer.AutoReset = $false
-    $transientLockSource = "HerdrTransientInstallerLock-$PID"
+    $transientLockSource = "ShepherdTransientInstallerLock-$PID"
     $transientLockRelease = Register-ObjectEvent `
         -InputObject $transientLockTimer `
         -EventName Elapsed `
@@ -438,14 +438,14 @@ try {
         if (-not $swapFailed) {
             throw "installer unexpectedly activated a release with a locked staged file"
         }
-        if (-not (Test-Path -LiteralPath (Join-Path $releaseDir.FullName "herdr.exe") -PathType Leaf)) {
+        if (-not (Test-Path -LiteralPath (Join-Path $releaseDir.FullName "shepherd.exe") -PathType Leaf)) {
             throw "failed activation did not restore the prior release"
         }
         if (@(Get-ChildItem -LiteralPath $releasesDir -Force -Directory -Filter ".backup.$($releaseDir.Name).*").Count -ne 0) {
             throw "failed activation stranded a release backup"
         }
-        foreach ($junction in @($installDir, (Join-Path $herdrHome "packages\standalone\current"))) {
-            if (-not (Test-Path -LiteralPath (Join-Path $junction "herdr.exe") -PathType Leaf)) {
+        foreach ($junction in @($installDir, (Join-Path $shepherdHome "packages\standalone\current"))) {
+            if (-not (Test-Path -LiteralPath (Join-Path $junction "shepherd.exe") -PathType Leaf)) {
                 throw "failed activation left an invalid installer junction at $junction"
             }
         }
@@ -496,7 +496,7 @@ try {
         throw "installer accepted a manifest that did not match the updater-selected build"
     }
 
-    $currentDir = Join-Path $herdrHome "packages\standalone\current"
+    $currentDir = Join-Path $shepherdHome "packages\standalone\current"
     $unrelatedPathOne = Join-Path $env:SystemRoot "System32"
     $unrelatedPathTwo = Join-Path $root "unrelated-two"
     New-Item -ItemType Directory -Force -Path $unrelatedPathTwo | Out-Null
@@ -518,7 +518,7 @@ try {
         -ManifestUrl $stableManifestUrl `
         -InstallDir $installDir `
         -Retain 1
-    $stableReleaseDir = Get-ChildItem -LiteralPath (Join-Path $herdrHome "packages\standalone\releases") -Directory |
+    $stableReleaseDir = Get-ChildItem -LiteralPath (Join-Path $shepherdHome "packages\standalone\releases") -Directory |
         Where-Object { $_.Name.StartsWith("0.0.1-") } |
         Select-Object -First 1
     if ($null -eq $stableReleaseDir) {
@@ -545,14 +545,14 @@ try {
         -not $pathDirectory.FullName.Equals($stableReleaseDir.FullName, [System.StringComparison]::OrdinalIgnoreCase)) {
         throw "installer PATH does not start with the active concrete release directory"
     }
-    $resolvedHerdr = Get-Command herdr -CommandType Application -ErrorAction Stop
-    if (-not $resolvedHerdr.Source.Equals(
-        (Join-Path $stableReleaseDir.FullName "herdr.exe"),
+    $resolvedShepherd = Get-Command shepherd -CommandType Application -ErrorAction Stop
+    if (-not $resolvedShepherd.Source.Equals(
+        (Join-Path $stableReleaseDir.FullName "shepherd.exe"),
         [System.StringComparison]::OrdinalIgnoreCase
     )) {
         throw "installed command does not resolve through the active concrete release"
     }
-    & herdr --version *> $null
+    & shepherd --version *> $null
     if ($LASTEXITCODE -ne 0) {
         throw "installed command failed from the concrete release PATH entry"
     }
@@ -580,11 +580,11 @@ if "%1"=="channel" if "%2"=="show" (
   exit /b 0
 )
 exit /b 1
-"@ | Out-File -LiteralPath (Join-Path $fakeBin "herdr.cmd") -Encoding ascii
+"@ | Out-File -LiteralPath (Join-Path $fakeBin "shepherd.cmd") -Encoding ascii
 
     $preserveHome = Join-Path $root "preserve-home"
     $preserveBin = Join-Path $root "preserve-bin"
-    $env:HERDR_HOME = $preserveHome
+    $env:SHEPHERD_HOME = $preserveHome
     $env:Path = "$fakeBin;$oldProcessPath"
     $unrecognizedCommandRejected = $false
     try {
@@ -593,7 +593,7 @@ exit /b 1
             -InstallDir $preserveBin `
             -ExpectedBuildId "installer-test"
     } catch {
-        if ($_.Exception.Message -notlike "Refusing to run unrecognized Herdr command*") {
+        if ($_.Exception.Message -notlike "Refusing to run unrecognized Shepherd command*") {
             throw
         }
         $unrecognizedCommandRejected = $true
@@ -619,8 +619,8 @@ exit /b 1
         throw "installer invoked an unrecognized command despite an explicit channel"
     }
 } finally {
-    $env:HERDR_HOME = $oldHerdrHome
-    $env:HERDR_INSTALLER_URL = $oldInstallerUrl
+    $env:SHEPHERD_HOME = $oldShepherdHome
+    $env:SHEPHERD_INSTALLER_URL = $oldInstallerUrl
     $env:Path = $oldProcessPath
     if ($null -ne $server -and -not $server.HasExited) {
         Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue

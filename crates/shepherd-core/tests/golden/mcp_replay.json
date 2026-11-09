@@ -1,0 +1,16 @@
+{
+  "id": 18,
+  "jsonrpc": "2.0",
+  "result": {
+    "content": [
+      {
+        "text": "{\"from_offset\":0,\"messages\":[{\"content\":\"hist 1\",\"from\":\"coder-1\",\"id\":1,\"kind\":\"msg\",\"offset\":0,\"partition\":0,\"topic\":\"replay-mcp\",\"ts\":\"<TIMESTAMP>\"}],\"topic\":\"replay-mcp\"}",
+        "type": "text"
+      }
+    ],
+    "isError": false,
+    "structuredContent": {
+      "text": "{\"from_offset\":0,\"messages\":[{\"content\":\"hist 1\",\"from\":\"coder-1\",\"id\":1,\"kind\":\"msg\",\"offset\":0,\"partition\":0,\"topic\":\"replay-mcp\",\"ts\":\"<TIMESTAMP>\"}],\"topic\":\"replay-mcp\"}"
+    }
+  }
+}

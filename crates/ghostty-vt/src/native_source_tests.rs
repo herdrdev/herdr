@@ -71,7 +71,7 @@ fn file_upload_automatically_retains_snapshot_when_platform_supports_clone() {
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| "/var/tmp".into());
     let path = base.join(format!(
-        "herdr-native-source-test-{}-{}",
+        "shepherd-native-source-test-{}-{}",
         std::process::id(),
         NEXT.fetch_add(1, Ordering::Relaxed)
     ));

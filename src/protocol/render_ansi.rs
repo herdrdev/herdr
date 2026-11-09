@@ -1013,7 +1013,7 @@ fn write_changed_cells(writer: &mut impl Write, frame: &FrameData, prev: &FrameD
     for row in 0..frame.height {
         let mut invalidated = 0usize;
         let mut to_skip = 0usize;
-        // Herdr clients disable host autowrap, so safe cells can advance inline
+        // Shepherd clients disable host autowrap, so safe cells can advance inline
         // without spilling into adjacent rows during a resize race.
         let mut next_inline_col = None;
 

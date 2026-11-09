@@ -16,8 +16,10 @@ use windows_sys::Win32::{
 struct Directory(PathBuf);
 impl Directory {
     fn new(case: &str) -> Self {
-        let path =
-            std::env::temp_dir().join(format!("herdr-config-backup-{case}-{}", std::process::id()));
+        let path = std::env::temp_dir().join(format!(
+            "shepherd-config-backup-{case}-{}",
+            std::process::id()
+        ));
         fs::create_dir(&path).unwrap();
         Self(path)
     }
@@ -30,7 +32,7 @@ impl Drop for Directory {
 fn powershell(script: &str, path: &Path) {
     let output = Command::new("powershell.exe")
         .args(["-NoProfile", "-NonInteractive", "-Command", script])
-        .env("HERDR_TEST_CONFIG_SOURCE", path)
+        .env("SHEPHERD_TEST_CONFIG_SOURCE", path)
         .output()
         .unwrap();
     assert!(
@@ -129,12 +131,12 @@ fn successful_update(case: &str) {
             &format!(
                 r#"
 $ErrorActionPreference = 'Stop'
-$acl = [System.IO.File]::GetAccessControl($env:HERDR_TEST_CONFIG_SOURCE)
+$acl = [System.IO.File]::GetAccessControl($env:SHEPHERD_TEST_CONFIG_SOURCE)
 $acl.SetAccessRuleProtection(${}, $false)
 $sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
 $rule = [System.Security.AccessControl.FileSystemAccessRule]::new($sid, [System.Security.AccessControl.FileSystemRights]::FullControl, [System.Security.AccessControl.AccessControlType]::Allow)
 $acl.AddAccessRule($rule)
-[System.IO.File]::SetAccessControl($env:HERDR_TEST_CONFIG_SOURCE, $acl)
+[System.IO.File]::SetAccessControl($env:SHEPHERD_TEST_CONFIG_SOURCE, $acl)
 "#,
                 case == "protected"
             ),
@@ -145,11 +147,11 @@ $acl.AddAccessRule($rule)
         powershell(
             r#"
 $ErrorActionPreference = 'Stop'
-$acl = [System.IO.File]::GetAccessControl($env:HERDR_TEST_CONFIG_SOURCE)
+$acl = [System.IO.File]::GetAccessControl($env:SHEPHERD_TEST_CONFIG_SOURCE)
 $acl.SetOwner([System.Security.Principal.WindowsIdentity]::GetCurrent().User)
 $acl.SetGroup([System.Security.Principal.SecurityIdentifier]::new('S-1-5-32-545'))
-[System.IO.File]::SetAccessControl($env:HERDR_TEST_CONFIG_SOURCE, $acl)
-$null = & icacls.exe $env:HERDR_TEST_CONFIG_SOURCE /setintegritylevel L
+[System.IO.File]::SetAccessControl($env:SHEPHERD_TEST_CONFIG_SOURCE, $acl)
+$null = & icacls.exe $env:SHEPHERD_TEST_CONFIG_SOURCE /setintegritylevel L
 if ($LASTEXITCODE -ne 0) { throw 'could not install low integrity label' }
 "#,
             &source,
@@ -162,11 +164,11 @@ if ($LASTEXITCODE -ne 0) { throw 'could not install low integrity label' }
         powershell(
             r#"
 $ErrorActionPreference = 'Stop'
-$acl = [System.IO.Directory]::GetAccessControl($env:HERDR_TEST_CONFIG_SOURCE)
+$acl = [System.IO.Directory]::GetAccessControl($env:SHEPHERD_TEST_CONFIG_SOURCE)
 $sid = [System.Security.Principal.SecurityIdentifier]::new('S-1-5-32-546')
 $rule = [System.Security.AccessControl.FileSystemAccessRule]::new($sid, [System.Security.AccessControl.FileSystemRights]::Read, [System.Security.AccessControl.InheritanceFlags]::ObjectInherit, [System.Security.AccessControl.PropagationFlags]::None, [System.Security.AccessControl.AccessControlType]::Allow)
 $acl.AddAccessRule($rule)
-[System.IO.Directory]::SetAccessControl($env:HERDR_TEST_CONFIG_SOURCE, $acl)
+[System.IO.Directory]::SetAccessControl($env:SHEPHERD_TEST_CONFIG_SOURCE, $acl)
 "#,
             &parent,
         );
@@ -302,7 +304,7 @@ fn native_io_failures_preserve_recovery_ordering() {
 
 #[test]
 fn interrupted_backups_and_writes_are_distinguishable() {
-    const CHILD: &str = "HERDR_BACKUP_CRASH_TEST";
+    const CHILD: &str = "SHEPHERD_BACKUP_CRASH_TEST";
     if let Some(path) = std::env::var_os(CHILD) {
         let path = PathBuf::from(path);
         let crash_phase = if path.file_name().unwrap() == "copy" {

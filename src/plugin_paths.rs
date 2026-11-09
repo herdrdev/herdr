@@ -146,7 +146,7 @@ mod tests {
     fn installations_never_reuse_or_move_existing_files() {
         let _guard = crate::config::test_config_env_lock().lock().unwrap();
         let base = std::env::temp_dir().join(format!(
-            "herdr-installations-{}-{}",
+            "shepherd-installations-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)

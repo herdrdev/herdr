@@ -111,7 +111,7 @@ fn main() {
     assert!(
         status.success(),
         "zig build for vendored libghostty-vt failed: {status}. \
-         Building Herdr requires Zig 0.16.0; check `zig version` \
+         Building Shepherd requires Zig 0.16.0; check `zig version` \
          or set ZIG to the path of a Zig 0.16.0 binary, then retry"
     );
 

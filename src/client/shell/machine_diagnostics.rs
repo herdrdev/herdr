@@ -179,9 +179,9 @@ impl ClientShellState {
         };
         let code = machine_diagnostic_code(profile_id);
         let command = if crate::remote::ssh_error_requires_authentication(error) {
-            format!("herdr machine reconnect {profile_id}")
+            format!("shepherd machine reconnect {profile_id}")
         } else {
-            format!("herdr machine status {profile_id}")
+            format!("shepherd machine status {profile_id}")
         };
         // A requested retry can report its diagnostic, but must not replace another notice.
         if self

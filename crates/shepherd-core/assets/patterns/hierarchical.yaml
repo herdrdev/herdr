@@ -1,0 +1,47 @@
+name: hierarchical
+kind: hierarchical
+description: 'Multi-tier command hierarchy where managers supervise specialized worker teams. Starts: director (level 0; publishes directives to `root-orders`). Managers wait for `root-orders`, publish assignments to `team-orders` and report to `root-results`; specialists wait for `team-orders` and publish to `team-results`.'
+topics:
+  - name: root-orders
+    partitions: 2
+    key: epic_id
+  - name: root-results
+    partitions: 1
+  - name: team-orders
+    partitions: 4
+    key: subtask_id
+  - name: team-results
+    partitions: 2
+agents:
+  - id: director
+    role: brain
+    level: 0
+    count: 1
+    start: true
+    prompt: You are the director. Turn the run objective into one clear directive and publish it to root-orders, then end your turn; when managers report on root-results, review the outcome.
+    publishes:
+      - root-orders
+    consumes:
+      - root-results
+  - id: manager
+    role: reviewer
+    level: 1
+    count: 2
+    group: managers
+    prompt: You are an engineering manager. When a directive arrives on root-orders, split it into assignments and publish them to team-orders; when specialists answer on team-results, summarize and publish the milestone to root-results.
+    consumes:
+      - root-orders
+      - team-results
+    publishes:
+      - root-results
+      - team-orders
+  - id: specialist
+    role: coder
+    level: 2
+    count: 4
+    group: specialists
+    prompt: You are a specialist engineer. When an assignment arrives on team-orders, carry it out and publish the result to team-results.
+    consumes:
+      - team-orders
+    publishes:
+      - team-results

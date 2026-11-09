@@ -28,8 +28,8 @@ CORE_ASSET_TARGETS = (
 )
 ASSET_TARGETS = (*CORE_ASSET_TARGETS, "windows-x86_64")
 EXPECTED_ASSET_NAMES = {
-    **{target: f"herdr-{target}" for target in CORE_ASSET_TARGETS},
-    "windows-x86_64": "herdr-windows-x86_64.zip",
+    **{target: f"shepherd-{target}" for target in CORE_ASSET_TARGETS},
+    "windows-x86_64": "shepherd-windows-x86_64.zip",
 }
 
 

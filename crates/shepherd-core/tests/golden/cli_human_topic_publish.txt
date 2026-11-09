@@ -1,0 +1,1 @@
+published message <MSG_ID> to events[0]#0

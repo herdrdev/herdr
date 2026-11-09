@@ -168,7 +168,7 @@ fn ctrl_click_routes_link_activation_through_endpoint_then_client_host() {
     assert!(state.visible_endpoint_notice.is_some());
     state.handle_raw_events(vec![RawInputEvent::Mouse(up)]);
 
-    // Pane apps can still request mouse reporting when Herdr capture is off.
+    // Pane apps can still request mouse reporting when Shepherd capture is off.
     state.config.mouse_capture = false;
     let mut pane_surface = surface();
     pane_surface.panes[0].mouse_reporting = true;

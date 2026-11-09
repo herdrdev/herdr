@@ -1,0 +1,33 @@
+name: blackboard
+kind: blackboard
+description: 'Shared knowledge base where specialist agents read hypotheses and post discoveries. Starts: researcher (posts the first hypothesis to `blackboard`). Analyst and synthesizer wait for entries on `blackboard`, then post validations and the final synthesis there.'
+topics:
+  - name: blackboard
+    partitions: 1
+    filter: hypothesis
+agents:
+  - id: researcher
+    role: brain
+    count: 1
+    start: true
+    prompt: You are the researcher. Turn the run objective into a hypothesis and post it to the blackboard (start the message with 'hypothesis:'); read the validations and syntheses others post there.
+    publishes:
+      - blackboard
+    consumes:
+      - blackboard
+  - id: analyst
+    role: tester
+    count: 1
+    prompt: You are the analyst. When a hypothesis appears on the blackboard, check it for logical flaws and edge cases and post a validation report (start with 'validation:').
+    publishes:
+      - blackboard
+    consumes:
+      - blackboard
+  - id: synthesizer
+    role: docs
+    count: 1
+    prompt: You are the synthesizer. Once a hypothesis has a validation on the blackboard, post a short synthesis of the verified facts (start with 'synthesis:').
+    publishes:
+      - blackboard
+    consumes:
+      - blackboard

@@ -1,0 +1,13 @@
+{
+  "id": 21,
+  "jsonrpc": "2.0",
+  "result": {
+    "content": [
+      {
+        "text": "unknown tool \"unknown_tool_name\"",
+        "type": "text"
+      }
+    ],
+    "isError": true
+  }
+}

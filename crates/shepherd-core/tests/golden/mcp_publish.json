@@ -1,0 +1,16 @@
+{
+  "id": 12,
+  "jsonrpc": "2.0",
+  "result": {
+    "content": [
+      {
+        "text": "{\"content\":\"Event payload via MCP\",\"from\":\"coder-1\",\"id\":1,\"kind\":\"msg\",\"offset\":0,\"partition\":0,\"topic\":\"mcp-events\",\"ts\":\"<TIMESTAMP>\"}",
+        "type": "text"
+      }
+    ],
+    "isError": false,
+    "structuredContent": {
+      "text": "{\"content\":\"Event payload via MCP\",\"from\":\"coder-1\",\"id\":1,\"kind\":\"msg\",\"offset\":0,\"partition\":0,\"topic\":\"mcp-events\",\"ts\":\"<TIMESTAMP>\"}"
+    }
+  }
+}

@@ -14,11 +14,11 @@ pub(super) fn snapshot() -> ClientShellSnapshot {
         config_diagnostic: None,
         product_announcement: None,
         update_available: None,
-        update_install_command: "herdr update".into(),
+        update_install_command: "shepherd update".into(),
         server_keybindings_toml: None,
         latest_release_notes_available: false,
         integration_updates_available: false,
-        worktree_directory: "/tmp/herdr-worktrees".into(),
+        worktree_directory: "/tmp/shepherd-worktrees".into(),
         release_notes: None,
         focused_workspace_id: Some("ws_1".into()),
         focused_tab_id: Some("tab_1".into()),
@@ -261,4 +261,5 @@ mod link_hover;
 mod mobile;
 mod mouse_selection;
 mod popup_focus_projection;
+mod shepherd_virtual_tab;
 mod startup_overlays;

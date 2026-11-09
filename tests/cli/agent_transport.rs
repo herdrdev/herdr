@@ -4,7 +4,7 @@ use super::harness::*;
 fn agent_start_waits_through_unknown_then_rejects_blocked() {
     let base = unique_test_dir();
     fs::create_dir_all(&base).unwrap();
-    let socket_path = base.join("herdr.sock");
+    let socket_path = base.join("shepherd.sock");
     let listener = UnixListener::bind(&socket_path).unwrap();
 
     let server = thread::spawn(move || {
@@ -120,7 +120,7 @@ fn agent_start_waits_through_unknown_then_rejects_blocked() {
 fn agent_start_does_not_retry_after_the_target_terminal_changes() {
     let base = unique_test_dir();
     fs::create_dir_all(&base).unwrap();
-    let socket_path = base.join("herdr.sock");
+    let socket_path = base.join("shepherd.sock");
     let listener = UnixListener::bind(&socket_path).unwrap();
 
     let server = thread::spawn(move || {
@@ -220,7 +220,7 @@ fn agent_start_does_not_retry_after_the_target_terminal_changes() {
 fn prompt_wait_is_sent_as_one_agent_request() {
     let base = unique_test_dir();
     fs::create_dir_all(&base).unwrap();
-    let socket_path = base.join("herdr.sock");
+    let socket_path = base.join("shepherd.sock");
     let listener = UnixListener::bind(&socket_path).unwrap();
 
     let server = thread::spawn(move || {

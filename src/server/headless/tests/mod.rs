@@ -300,7 +300,7 @@ fn headless_api_request_drains_all_pending_internal_events_before_reading_state(
             .event_tx
             .try_send(AppEvent::UpdateReady {
                 version: format!("4.0.{i}"),
-                install_command: "herdr install".into(),
+                install_command: "shepherd install".into(),
             })
             .unwrap();
     }
@@ -556,17 +556,17 @@ fn api_window_title_wins_until_it_is_cleared() {
     let (mut server, control_rx) = window_title_test_server();
     server.app.configure_window_title("{workspace}");
 
-    server.handle_client_window_title_api("set".into(), Some("herdr api".into()));
+    server.handle_client_window_title_api("set".into(), Some("shepherd api".into()));
     assert_eq!(
         next_window_title(&control_rx),
-        Some(Some("herdr api".to_string()))
+        Some(Some("shepherd api".to_string()))
     );
 
     server.app.state.workspaces[0].custom_name = Some("ops".into());
     server.sync_window_title();
     assert!(no_window_title(&control_rx));
 
-    // Clearing hands the title back to ui.window_title, not to "herdr".
+    // Clearing hands the title back to ui.window_title, not to "shepherd".
     server.handle_client_window_title_api("clear".into(), None);
     assert_eq!(
         next_window_title(&control_rx),
@@ -577,14 +577,14 @@ fn api_window_title_wins_until_it_is_cleared() {
 }
 
 #[test]
-fn clearing_the_api_title_falls_back_to_herdr_when_window_titles_are_disabled() {
+fn clearing_the_api_title_falls_back_to_shepherd_when_window_titles_are_disabled() {
     let (mut server, control_rx) = window_title_test_server();
     server.app.configure_window_title("");
 
-    server.handle_client_window_title_api("set".into(), Some("herdr api".into()));
+    server.handle_client_window_title_api("set".into(), Some("shepherd api".into()));
     assert_eq!(
         next_window_title(&control_rx),
-        Some(Some("herdr api".to_string()))
+        Some(Some("shepherd api".to_string()))
     );
 
     server.handle_client_window_title_api("clear".into(), None);
@@ -3339,7 +3339,7 @@ async fn worktree_discovery_does_not_block_client_typing() {
     let (runtime, mut input_rx) =
         crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(80, 24, 0, b"", 4);
     workspace.insert_test_runtime(pane_id, runtime);
-    let repo = std::env::temp_dir().join(format!("herdr-blocked-git-{}", workspace.id));
+    let repo = std::env::temp_dir().join(format!("shepherd-blocked-git-{}", workspace.id));
     workspace.identity_cwd = repo.clone();
     workspace.cached_git_space = Some(crate::workspace::GitSpaceMetadata {
         key: repo.display().to_string(),
@@ -3439,7 +3439,7 @@ async fn worktree_discovery_does_not_block_client_typing() {
 async fn deferred_worktree_open_disconnect_keeps_other_clients_focus() {
     let mut server = test_headless_server();
     let mut source = crate::workspace::Workspace::test_new("pending-open-source");
-    let repo = std::env::temp_dir().join(format!("herdr-disconnected-open-{}", source.id));
+    let repo = std::env::temp_dir().join(format!("shepherd-disconnected-open-{}", source.id));
     let checkout = repo.with_extension("checkout");
     let git = |args: &[&str]| {
         let output = std::process::Command::new("git")
@@ -3457,9 +3457,9 @@ async fn deferred_worktree_open_disconnect_keeps_other_clients_focus() {
         "-C",
         repo.to_str().unwrap(),
         "-c",
-        "user.name=Herdr Test",
+        "user.name=Shepherd Test",
         "-c",
-        "user.email=herdr@example.invalid",
+        "user.email=shepherd@example.invalid",
         "commit",
         "--quiet",
         "--allow-empty",
@@ -5022,7 +5022,7 @@ fn windows_shutdown_probe_preserves_panes_and_agent_sessions() {
             .map(|key| (key, std::env::var_os(key))),
     );
     let config_home = std::env::temp_dir().join(format!(
-        "herdr-shutdown-{}-{}",
+        "shepherd-shutdown-{}-{}",
         std::process::id(),
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -5051,7 +5051,7 @@ fn windows_shutdown_probe_preserves_panes_and_agent_sessions() {
         terminal.respawn_shell_on_exit = true;
         terminal.set_agent_name("codex".into());
         terminal.set_persisted_agent_session(crate::agent_resume::PersistedAgentSession {
-            source: "herdr:codex".into(),
+            source: "shepherd:codex".into(),
             agent: "codex".into(),
             session_ref: crate::agent_resume::AgentSessionRef::id("previous-session").unwrap(),
         });
@@ -5068,7 +5068,7 @@ fn windows_shutdown_probe_preserves_panes_and_agent_sessions() {
             .get_mut(&terminal_id)
             .unwrap()
             .set_persisted_agent_session(crate::agent_resume::PersistedAgentSession {
-                source: "herdr:codex".into(),
+                source: "shepherd:codex".into(),
                 agent: "codex".into(),
                 session_ref: crate::agent_resume::AgentSessionRef::id("shutdown-session").unwrap(),
             });
@@ -5385,13 +5385,13 @@ fn terminal_attach_client_exits_when_worktree_runtime_restore_fails() {
 #[test]
 fn terminal_attach_client_exits_when_worktree_remove_succeeds() {
     let mut server = test_headless_server();
-    let checkout = PathBuf::from("/repo/herdr-issue");
+    let checkout = PathBuf::from("/repo/shepherd-issue");
     let parent = crate::workspace::Workspace::test_new("parent");
     let mut workspace = crate::workspace::Workspace::test_new("worktree");
     workspace.worktree_space = Some(crate::workspace::WorktreeSpaceMembership {
         key: "repo-key".into(),
-        label: "herdr".into(),
-        repo_root: "/repo/herdr".into(),
+        label: "shepherd".into(),
+        repo_root: "/repo/shepherd".into(),
         checkout_path: checkout.clone(),
         is_linked_worktree: true,
     });
@@ -6288,7 +6288,7 @@ async fn headless_scheduled_tasks_start_pending_agent_resume_without_foreground_
         .pending_agent_resume_plan = Some(crate::agent_resume::AgentResumePlan {
         agent: "codex".into(),
         argv: vec!["/bin/sh".into(), "-c".into(), "sleep 5".into()],
-        dedupe_key: "herdr:codex\0codex\0Id\0codex-session".into(),
+        dedupe_key: "shepherd:codex\0codex\0Id\0codex-session".into(),
     });
 
     server.render_and_stream();
@@ -7348,7 +7348,7 @@ fn notification_show_uses_client_shell_policy_independent_of_server_delivery() {
         api::schema::NotificationShowParams {
             title: "plugin title".into(),
             body: Some("plugin body".into()),
-            position: Some(crate::config::ToastHerdrPosition::TopLeft),
+            position: Some(crate::config::ToastShepherdPosition::TopLeft),
             sound: api::schema::NotificationShowSound::Done,
         },
     );
@@ -7372,7 +7372,7 @@ fn notification_show_uses_client_shell_policy_independent_of_server_delivery() {
             workspace_id: None,
             tab_id: None,
             pane_id: None,
-            position: Some(crate::config::ToastHerdrPosition::TopLeft),
+            position: Some(crate::config::ToastShepherdPosition::TopLeft),
         })
     );
 }
@@ -7480,7 +7480,7 @@ fn oversized_paste_rejection_notifies_only_the_sending_client() {
     ) {
         ServerMessage::ClientShellError { message } => assert_eq!(
             message,
-            "Paste rejected: Input message is 5000012 bytes; Herdr's limit is 1048576 bytes"
+            "Paste rejected: Input message is 5000012 bytes; Shepherd's limit is 1048576 bytes"
         ),
         other => panic!("expected client shell paste error, got {other:?}"),
     }
@@ -7510,7 +7510,7 @@ fn oversized_paste_rejection_notifies_only_the_sending_client() {
     ) {
         ServerMessage::ClientShellError { message } => assert_eq!(
             message,
-            "Paste rejected: Input message is 7000000 bytes; Herdr's limit is 1048576 bytes"
+            "Paste rejected: Input message is 7000000 bytes; Shepherd's limit is 1048576 bytes"
         ),
         other => panic!("expected client shell paste error, got {other:?}"),
     }
@@ -7541,11 +7541,11 @@ fn update_notification_reaches_client_shell_independent_of_delivery() {
         ),
     );
     server.foreground_client_id = Some(1);
-    server.app.state.toast_config.delivery = crate::config::ToastDelivery::Herdr;
+    server.app.state.toast_config.delivery = crate::config::ToastDelivery::Shepherd;
 
     let changed = server.handle_internal_event_with_forwarding(AppEvent::UpdateReady {
         version: "9.9.9".to_string(),
-        install_command: "herdr update".into(),
+        install_command: "shepherd update".into(),
     });
 
     assert!(changed);
@@ -7582,7 +7582,7 @@ fn update_notification_is_semantic_for_system_delivery() {
 
     let changed = server.handle_internal_event_with_forwarding(AppEvent::UpdateReady {
         version: "9.9.9".to_string(),
-        install_command: "herdr update".into(),
+        install_command: "shepherd update".into(),
     });
 
     assert!(changed);
@@ -7596,10 +7596,10 @@ fn update_notification_is_semantic_for_system_delivery() {
                 notification.kind,
                 protocol::SemanticNotificationKind::UpdateInstalled
             );
-            assert_eq!(notification.title, "Herdr v9.9.9 available");
+            assert_eq!(notification.title, "Shepherd v9.9.9 available");
             assert_eq!(
                 notification.body.as_deref(),
-                Some("detach, run `herdr update`, then run Herdr again to reconnect")
+                Some("detach, run `shepherd update`, then run Shepherd again to reconnect")
             );
         }
         other => panic!("expected semantic update notification, got {other:?}"),
@@ -7631,7 +7631,7 @@ fn notification_show_api_forwards_one_semantic_client_notification() {
             method: api::schema::Method::NotificationShow(api::schema::NotificationShowParams {
                 title: "build failed".into(),
                 body: Some("api workspace".into()),
-                position: Some(crate::config::ToastHerdrPosition::TopLeft),
+                position: Some(crate::config::ToastShepherdPosition::TopLeft),
                 sound: api::schema::NotificationShowSound::Request,
             }),
         },
@@ -7806,7 +7806,7 @@ fn notification_show_api_includes_sound_in_semantic_event() {
         ),
     );
     server.foreground_client_id = Some(1);
-    server.app.state.toast_config.delivery = crate::config::ToastDelivery::Herdr;
+    server.app.state.toast_config.delivery = crate::config::ToastDelivery::Shepherd;
 
     let (respond_to, response_rx) = std::sync::mpsc::channel();
     assert!(
@@ -8006,7 +8006,7 @@ fn api_resume_argv_is_ignored_when_its_session_report_is_refused() {
     let report = |session: &str| {
         api::schema::Method::PaneReportAgentSession(api::schema::PaneReportAgentSessionParams {
             pane_id: public_pane_id.clone(),
-            source: "herdr:claude".into(),
+            source: "shepherd:claude".into(),
             agent: "claude".into(),
             seq: None,
             agent_session_id: Some(session.into()),
@@ -8126,13 +8126,13 @@ fn completion_guard_api_session_replacement_does_not_notify_finished() {
                     .unwrap();
             let new_session = cwd.join("completion-new.jsonl").display().to_string();
             terminal.set_persisted_agent_session(PersistedAgentSession {
-                source: "herdr:pi".into(),
+                source: "shepherd:pi".into(),
                 agent: "pi".into(),
                 session_ref: old_session.clone(),
             });
             terminal
                 .set_hook_authority_with_session_ref(
-                    "herdr:pi".into(),
+                    "shepherd:pi".into(),
                     "pi".into(),
                     AgentState::Idle,
                     None,
@@ -8145,7 +8145,7 @@ fn completion_guard_api_session_replacement_does_not_notify_finished() {
                 &mut server,
                 Method::PaneReportAgentSession(PaneReportAgentSessionParams {
                     pane_id: public_pane_id.clone(),
-                    source: "herdr:pi".into(),
+                    source: "shepherd:pi".into(),
                     agent: "pi".into(),
                     seq: Some(11),
                     agent_session_id: None,
@@ -8156,7 +8156,7 @@ fn completion_guard_api_session_replacement_does_not_notify_finished() {
             );
             let mut report = PaneReportAgentParams {
                 pane_id: public_pane_id,
-                source: "herdr:pi".into(),
+                source: "shepherd:pi".into(),
                 agent: "pi".into(),
                 state: PaneAgentState::Idle,
                 message: None,
@@ -8299,7 +8299,7 @@ fn stale_api_agent_report_does_not_forward_done_sound() {
         .get_mut(&terminal_id)
         .unwrap()
         .set_persisted_agent_session(crate::agent_resume::PersistedAgentSession {
-            source: "herdr:pi".into(),
+            source: "shepherd:pi".into(),
             agent: "pi".into(),
             session_ref: crate::agent_resume::AgentSessionRef::path(
                 std::env::current_dir()
@@ -8317,7 +8317,7 @@ fn stale_api_agent_report_does_not_forward_done_sound() {
         .get_mut(&terminal_id)
         .unwrap()
         .set_hook_authority(
-            "herdr:pi".into(),
+            "shepherd:pi".into(),
             "pi".into(),
             crate::detect::AgentState::Working,
             None,
@@ -8347,7 +8347,7 @@ fn stale_api_agent_report_does_not_forward_done_sound() {
             id: "stale".into(),
             method: api::schema::Method::PaneReportAgent(api::schema::PaneReportAgentParams {
                 pane_id: public_pane_id,
-                source: "herdr:pi".into(),
+                source: "shepherd:pi".into(),
                 agent: "pi".into(),
                 state: api::schema::PaneAgentState::Idle,
                 message: None,

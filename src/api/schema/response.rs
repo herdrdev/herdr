@@ -277,6 +277,143 @@ pub enum ResponseResult {
         active: bool,
         projection_revision: u64,
     },
+    ShepherdCall {
+        data: serde_json::Value,
+    },
+    ShepherdAgentList {
+        agents: Vec<shepherd_core::Agent>,
+    },
+    ShepherdAgentSpawned {
+        agent: shepherd_core::Agent,
+    },
+    ShepherdAgentKilled {
+        agent: shepherd_core::Agent,
+    },
+    ShepherdAgentCleaned {
+        cleaned: Vec<String>,
+    },
+    ShepherdAgentFocused {
+        agent: shepherd_core::Agent,
+    },
+    ShepherdAgentReconciled {
+        agents: Vec<shepherd_core::Agent>,
+    },
+    ShepherdAgentResumed {
+        agents: Vec<shepherd_core::Agent>,
+    },
+    ShepherdTaskList {
+        tasks: Vec<shepherd_core::CreatedTask>,
+    },
+    ShepherdTaskCreated {
+        task: shepherd_core::CreatedTask,
+    },
+    ShepherdTaskArchived {
+        archived: bool,
+        path: String,
+    },
+    ShepherdRunList {
+        runs: Vec<shepherd_core::RunSummary>,
+    },
+    ShepherdRunStarted {
+        accepted: bool,
+        job: String,
+        task: String,
+    },
+    ShepherdGateApproved {
+        ok: bool,
+        task: String,
+        approved: String,
+    },
+    ShepherdGateRejected {
+        ok: bool,
+        task: String,
+        rejected: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
+    },
+    ShepherdSkillList {
+        skills: Vec<shepherd_core::skills::Skill>,
+    },
+    ShepherdGitStatus {
+        status: shepherd_core::git::GitRepoStatus,
+    },
+    ShepherdSnapshotCaptured {
+        result: shepherd_core::snapshot::CaptureResult,
+    },
+    ShepherdSnapshotList {
+        snapshots: Vec<shepherd_core::snapshot::SnapshotInfo>,
+    },
+    ShepherdSnapshotShown {
+        result: shepherd_core::snapshot::ShowResult,
+    },
+    ShepherdSnapshotDiffed {
+        diff: shepherd_core::snapshot::DiffResult,
+    },
+    ShepherdSnapshotRestored {
+        result: shepherd_core::snapshot::RestoreResult,
+    },
+    ShepherdSnapshotDeleted {
+        result: shepherd_core::snapshot::DeleteResult,
+    },
+    ShepherdSnapshotPruned {
+        result: shepherd_core::snapshot::PruneResult,
+    },
+    ShepherdPatternList {
+        patterns: Vec<shepherd_core::patterns::PatternSummary>,
+    },
+    ShepherdPatternDetail {
+        pattern: shepherd_core::patterns::PatternDetail,
+    },
+    ShepherdPatternSaved {
+        ok: bool,
+        name: String,
+        path: String,
+        source: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        problems: Vec<shepherd_core::patterns::Problem>,
+    },
+    ShepherdPatternDeleted {
+        ok: bool,
+        name: String,
+        deleted_source: String,
+    },
+    ShepherdPatternValidated {
+        valid: bool,
+        problems: Vec<shepherd_core::patterns::Problem>,
+    },
+    ShepherdTopicList {
+        topics: Vec<shepherd_core::bus::TopicSummary>,
+    },
+    ShepherdTopicCreated {
+        topic: shepherd_core::bus::Topic,
+    },
+    ShepherdMessagePublished {
+        message: shepherd_core::bus::Message,
+    },
+    ShepherdTopicMessages {
+        messages: Vec<shepherd_core::bus::Message>,
+    },
+    ShepherdConsumerGroups {
+        groups: Vec<shepherd_core::bus::ConsumerGroupSummary>,
+    },
+    ShepherdPatternRunStarted {
+        run: shepherd_core::service::patterns_run::PatternRun,
+    },
+    ShepherdPatternRunList {
+        runs: Vec<shepherd_core::service::patterns_run::PatternRunSummary>,
+    },
+    ShepherdPatternRunDetail {
+        run: shepherd_core::service::patterns_run::PatternRun,
+    },
+    ShepherdPatternRunPaused {
+        run: shepherd_core::service::patterns_run::PatternRun,
+    },
+    ShepherdPatternRunResumed {
+        run: shepherd_core::service::patterns_run::PatternRun,
+    },
+    ShepherdPatternRunStopped {
+        run: shepherd_core::service::patterns_run::PatternRun,
+    },
     Ok {},
 }
 

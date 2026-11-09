@@ -25,8 +25,8 @@ fn clone_native_image_source(
     ))
 }
 
-// Herdr's default log filter is `herdr=info`; keep these warnings under its target.
-const LOG_TARGET: &str = "herdr::pane_graphics_files";
+// Shepherd's default log filter is `shepherd=info`; keep these warnings under its target.
+const LOG_TARGET: &str = "shepherd::pane_graphics_files";
 
 #[cfg(unix)]
 const DIRECTORY_MODE: u32 = 0o700;
@@ -162,7 +162,7 @@ impl FileStore {
         })
     }
 
-    // Not test-gated: herdr's own tests use it, and a dependency's cfg(test) is off.
+    // Not test-gated: shepherd's own tests use it, and a dependency's cfg(test) is off.
     #[cfg(unix)]
     pub fn source_directory(&self) -> io::Result<PathBuf> {
         Ok(self.generation()?.source.clone())
@@ -374,7 +374,10 @@ pub fn validate_native_source(path: &Path, expected_len: usize) -> io::Result<()
 fn native_base() -> PathBuf {
     #[cfg(unix)]
     {
-        PathBuf::from(format!("/var/tmp/herdr-native-sources-{}", effective_uid()))
+        PathBuf::from(format!(
+            "/var/tmp/shepherd-native-sources-{}",
+            effective_uid()
+        ))
     }
     #[cfg(not(unix))]
     {
@@ -428,7 +431,7 @@ fn runtime_base() -> PathBuf {
             .map(PathBuf::from)
             .filter(|path| path.is_absolute())
             .unwrap_or_else(|| PathBuf::from("/var/tmp"));
-        root.join(format!("herdr-pane-graphics-{}", effective_uid()))
+        root.join(format!("shepherd-pane-graphics-{}", effective_uid()))
     }
     #[cfg(not(unix))]
     {
@@ -611,7 +614,7 @@ mod tests {
 
     fn store() -> (FileStore, PathBuf) {
         let base = PathBuf::from(format!(
-            "/var/tmp/herdr-graphics-test-{}-{}",
+            "/var/tmp/shepherd-graphics-test-{}-{}",
             std::process::id(),
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));
@@ -773,7 +776,7 @@ mod tests {
     fn tmpfs_source_clone_failure_leaves_no_artifact() {
         use std::os::fd::AsRawFd;
         let path = PathBuf::from(format!(
-            "/dev/shm/herdr-snapshot-{}-{}",
+            "/dev/shm/shepherd-snapshot-{}-{}",
             std::process::id(),
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));

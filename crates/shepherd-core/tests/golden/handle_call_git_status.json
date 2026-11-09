@@ -1,0 +1,20 @@
+{
+  "error": null,
+  "gh_available": false,
+  "gh_note": "<GH_NOTE>",
+  "root": "<ROOT>",
+  "worktrees": [
+    {
+      "agent_id": null,
+      "ahead": 0,
+      "behind": 0,
+      "branch": "master",
+      "dirty_count": 1,
+      "is_clean": false,
+      "is_main": true,
+      "path": "<ROOT>",
+      "pr": null,
+      "upstream": null
+    }
+  ]
+}

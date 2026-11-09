@@ -1,0 +1,4 @@
+restored 2 file(s) from coder-1/2
+previous state saved as coder-1/4 (pre-restore)
+deleted 1 file(s) that were not in the snapshot (recoverable from coder-1/4):
+  later.txt

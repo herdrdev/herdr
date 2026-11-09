@@ -12,15 +12,15 @@ fn capture(args: &[&str], response: Value) -> Capture {
     let socket = base.join("contract.sock");
     let listener = UnixListener::bind(&socket).unwrap();
     listener.set_nonblocking(true).unwrap();
-    let mut child = Command::new(env!("CARGO_BIN_EXE_herdr"))
+    let mut child = Command::new(env!("CARGO_BIN_EXE_shepherd"))
         .args(args)
-        .env("HERDR_SOCKET_PATH", &socket)
+        .env("SHEPHERD_SOCKET_PATH", &socket)
         .env("XDG_CONFIG_HOME", &base)
         .env("XDG_RUNTIME_DIR", &base)
-        .env_remove("HERDR_CLIENT_SOCKET_PATH")
-        .env_remove("HERDR_ENV")
-        .env_remove("HERDR_PANE_ID")
-        .env_remove("HERDR_SESSION")
+        .env_remove("SHEPHERD_CLIENT_SOCKET_PATH")
+        .env_remove("SHEPHERD_ENV")
+        .env_remove("SHEPHERD_PANE_ID")
+        .env_remove("SHEPHERD_SESSION")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -476,7 +476,10 @@ fn workspace_help_preserves_public_and_runtime_grammar_split() {
         assert!(captured.requests.is_empty(), "{leaf}");
         assert!(captured.output.stderr.is_empty(), "{leaf}");
         let help = String::from_utf8(captured.output.stdout).unwrap();
-        assert!(help.contains(&format!("herdr workspace {leaf}")), "{help}");
+        assert!(
+            help.contains(&format!("shepherd workspace {leaf}")),
+            "{help}"
+        );
         for fragment in fragments {
             assert!(help.contains(fragment), "missing {fragment:?}: {help}");
         }

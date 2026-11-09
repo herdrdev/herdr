@@ -1,0 +1,14 @@
+# Task 1-build-login-flow
+
+# Build login flow
+
+# Spec
+
+Design decisions, constraints, interfaces. Agents read this before coding.
+
+# Acceptance criteria
+
+- [ ] (add checkable criteria; the reviewer verifies each one)
+
+# Links
+

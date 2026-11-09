@@ -191,7 +191,7 @@ impl App {
             let space = crate::workspace::git_space_metadata(&path).ok_or_else(|| {
                 ApiFailure::new(
                     "not_git_worktree",
-                    "Herdr worktree actions require a path inside a Git work tree",
+                    "Shepherd worktree actions require a path inside a Git work tree",
                 )
             })?;
             if space.is_linked_worktree {
@@ -256,7 +256,7 @@ impl App {
         let Some(space) = git_space else {
             return Err(ApiFailure::new(
                 "not_git_worktree",
-                "Herdr worktree actions require a workspace inside a Git work tree",
+                "Shepherd worktree actions require a workspace inside a Git work tree",
             ));
         };
         if space.is_linked_worktree {
@@ -603,7 +603,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0);
-        std::env::temp_dir().join(format!("herdr-{name}-{}-{nanos}", std::process::id()))
+        std::env::temp_dir().join(format!("shepherd-{name}-{}-{nanos}", std::process::id()))
     }
 
     fn run_git(repo: &Path, args: &[&str]) {
@@ -625,8 +625,8 @@ mod tests {
         let repo = unique_temp_path(name);
         std::fs::create_dir_all(&repo).unwrap();
         run_git(&repo, &["init", "--quiet"]);
-        run_git(&repo, &["config", "user.email", "herdr@example.invalid"]);
-        run_git(&repo, &["config", "user.name", "Herdr Test"]);
+        run_git(&repo, &["config", "user.email", "shepherd@example.invalid"]);
+        run_git(&repo, &["config", "user.name", "Shepherd Test"]);
         std::fs::write(repo.join("README.md"), "test\n").unwrap();
         run_git(&repo, &["add", "README.md"]);
         run_git(&repo, &["commit", "--quiet", "-m", "initial"]);
@@ -688,7 +688,7 @@ mod tests {
     fn install_event_plugin(app: &mut App, name: &str, event: &str) -> PathBuf {
         let plugin_root = unique_temp_path(name);
         std::fs::create_dir_all(&plugin_root).unwrap();
-        let manifest_path = plugin_root.join("herdr-plugin.toml");
+        let manifest_path = plugin_root.join("shepherd-plugin.toml");
         std::fs::write(&manifest_path, format!("id = 'example.{name}'\n")).unwrap();
         app.state.installed_plugins.insert(
             format!("example.{name}"),
@@ -696,7 +696,7 @@ mod tests {
                 plugin_id: format!("example.{name}"),
                 name: name.into(),
                 version: "0.1.0".into(),
-                min_herdr_version: "0.7.0".into(),
+                min_shepherd_version: "0.7.0".into(),
                 description: None,
                 manifest_path: manifest_path.display().to_string(),
                 plugin_root: plugin_root.display().to_string(),
@@ -829,6 +829,56 @@ mod tests {
                 EventKind::WorktreeCreated,
             ]
         );
+
+        for (_, runtime) in app.terminal_runtimes.drain() {
+            runtime.shutdown();
+        }
+        let remove = crate::worktree::build_worktree_remove_command(
+            &repo,
+            Path::new(&worktree.path),
+            false,
+            false,
+        );
+        crate::worktree::run_worktree_command(&remove).unwrap();
+        let _ = std::fs::remove_dir_all(worktree_root);
+        let _ = std::fs::remove_dir_all(repo);
+    }
+
+    #[tokio::test]
+    async fn api_worktree_create_with_empty_base_defaults_to_head() {
+        let repo = create_committed_repo("api-worktree-create-empty-base-repo");
+        let worktree_root = unique_temp_path("api-worktree-create-empty-base-root");
+        let event_hub = crate::api::EventHub::default();
+        let mut app = test_app_with_event_hub(event_hub.clone());
+        let mut parent = Workspace::test_new("main");
+        parent.identity_cwd = repo.clone();
+        app.state.workspaces = vec![parent];
+        app.state.ensure_test_terminals();
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state.worktree_directory = worktree_root.clone();
+        let workspace_id = app.state.workspaces[0].id.clone();
+
+        let response = run_deferred_api_request(
+            &mut app,
+            Request {
+                id: "req-empty-base".into(),
+                method: crate::api::schema::Method::WorktreeCreate(WorktreeCreateParams {
+                    workspace_id: Some(workspace_id),
+                    branch: Some("worktree/empty-base".into()),
+                    base: Some("".into()),
+                    ..WorktreeCreateParams::default()
+                }),
+            },
+        );
+
+        let success: SuccessResponse = serde_json::from_str(&response)
+            .expect("worktree create with empty base should succeed");
+        let ResponseResult::WorktreeCreated { worktree, .. } = success.result else {
+            panic!("expected worktree_created response");
+        };
+        assert_eq!(worktree.branch.as_deref(), Some("worktree/empty-base"));
+        assert!(Path::new(&worktree.path).join("README.md").exists());
 
         for (_, runtime) in app.terminal_runtimes.drain() {
             runtime.shutdown();
@@ -1073,7 +1123,7 @@ mod tests {
             .event_tx
             .try_send(AppEvent::UpdateReady {
                 version: "9.9.9".into(),
-                install_command: "herdr update".into(),
+                install_command: "shepherd update".into(),
             })
             .is_ok()
         {}
@@ -1146,7 +1196,7 @@ mod tests {
                 source_checkout_path: repo.clone(),
                 source_repo_root: repo.clone(),
                 repo_key: "repo-key".into(),
-                repo_name: "herdr".into(),
+                repo_name: "shepherd".into(),
                 label: None,
                 focus: false,
                 respond_to,
@@ -2632,18 +2682,18 @@ mod tests {
     #[test]
     fn deferred_api_background_worktree_remove_preserves_focused_workspace() {
         let mut app = test_app();
-        let checkout = PathBuf::from("/repo/herdr-issue");
+        let checkout = PathBuf::from("/repo/shepherd-issue");
         let membership = crate::workspace::WorktreeSpaceMembership {
             key: "repo-key".into(),
-            label: "herdr".into(),
-            repo_root: "/repo/herdr".into(),
+            label: "shepherd".into(),
+            repo_root: "/repo/shepherd".into(),
             checkout_path: checkout.clone(),
             is_linked_worktree: true,
         };
         let mut parent = Workspace::test_new("parent");
         parent.worktree_space = Some(crate::workspace::WorktreeSpaceMembership {
             is_linked_worktree: false,
-            checkout_path: "/repo/herdr".into(),
+            checkout_path: "/repo/shepherd".into(),
             ..membership.clone()
         });
         let mut child = Workspace::test_new("child");
@@ -2704,12 +2754,12 @@ mod tests {
     async fn deferred_api_worktree_remove_emits_removed_after_workspace_changes() {
         let event_hub = crate::api::EventHub::default();
         let mut app = test_app_with_event_hub(event_hub.clone());
-        let checkout = PathBuf::from("/repo/herdr-issue");
+        let checkout = PathBuf::from("/repo/shepherd-issue");
         let mut child = Workspace::test_new("child");
         child.worktree_space = Some(crate::workspace::WorktreeSpaceMembership {
             key: "repo-key".into(),
-            label: "herdr".into(),
-            repo_root: "/repo/herdr".into(),
+            label: "shepherd".into(),
+            repo_root: "/repo/shepherd".into(),
             checkout_path: checkout.clone(),
             is_linked_worktree: true,
         });
@@ -2729,8 +2779,8 @@ mod tests {
             .insert(child_pane_id, 1);
         app.state.workspaces[0].worktree_space = Some(crate::workspace::WorktreeSpaceMembership {
             key: "repo-key".into(),
-            label: "herdr".into(),
-            repo_root: "/repo/herdr".into(),
+            label: "shepherd".into(),
+            repo_root: "/repo/shepherd".into(),
             checkout_path: "/repo/other".into(),
             is_linked_worktree: true,
         });

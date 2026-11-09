@@ -1,0 +1,13 @@
+{
+  "id": 23,
+  "jsonrpc": "2.0",
+  "result": {
+    "content": [
+      {
+        "text": "role \"coder\" may not update task context",
+        "type": "text"
+      }
+    ],
+    "isError": true
+  }
+}

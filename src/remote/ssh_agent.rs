@@ -136,8 +136,10 @@ mod tests {
 
     #[test]
     fn registration_stops_when_the_server_rejects_the_agent() {
-        let socket_path =
-            std::env::temp_dir().join(format!("herdr-agent-rejected-{}.sock", std::process::id()));
+        let socket_path = std::env::temp_dir().join(format!(
+            "shepherd-agent-rejected-{}.sock",
+            std::process::id()
+        ));
         let listener = UnixListener::bind(&socket_path).unwrap();
         let server = std::thread::spawn(move || {
             for expected in ["ping", "server.ssh_agent.register"] {
@@ -175,7 +177,7 @@ mod tests {
     #[test]
     fn registration_retries_when_the_api_is_initially_missing() {
         let socket_path =
-            std::env::temp_dir().join(format!("herdr-agent-retry-{}.sock", std::process::id()));
+            std::env::temp_dir().join(format!("shepherd-agent-retry-{}.sock", std::process::id()));
         let registration = Registration::start_at("/test/agent.sock".into(), socket_path.clone())
             .expect("missing API must not permanently disable registration");
         let listener = UnixListener::bind(&socket_path).unwrap();

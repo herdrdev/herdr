@@ -81,7 +81,7 @@ impl App {
         self.session_save_deadline = None;
         let writer = self.session_writer.clone();
         match std::thread::Builder::new()
-            .name("herdr-session-save".into())
+            .name("shepherd-session-save".into())
             .spawn(move || run_session_save_job(job, &writer))
         {
             Ok(thread) => self.session_save_thread = Some(thread),

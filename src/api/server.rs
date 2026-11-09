@@ -119,7 +119,7 @@ fn start_server_inner(
 
     let running = Arc::new(AtomicBool::new(true));
     let listener_running = Arc::clone(&running);
-    let spawned = crate::thread_spawn::spawn_named("herdr-api-accept", move || {
+    let spawned = crate::thread_spawn::spawn_named("shepherd-api-accept", move || {
         run_accept_loop(
             listener.incoming(),
             &listener_running,
@@ -170,7 +170,7 @@ fn start_server_inner(
 /// Starts one connection's worker. When the OS refuses a thread, only this
 /// connection is dropped; the accept loop keeps serving.
 fn spawn_connection_handler(work: impl FnOnce() + Send + 'static) {
-    if let Err(err) = crate::thread_spawn::spawn_named("herdr-api-conn", work) {
+    if let Err(err) = crate::thread_spawn::spawn_named("shepherd-api-conn", work) {
         warn!(err = %err, "failed to spawn api connection thread; dropping connection");
     }
 }
@@ -295,7 +295,7 @@ fn retired_pane_graphics_method_error(line: &str, id: &str) -> Option<ErrorRespo
 fn prepare_socket_path(path: &Path) -> std::io::Result<()> {
     crate::ipc::prepare_socket_path(path, |path| {
         format!(
-            "herdr is already running (socket busy at {})",
+            "shepherd is already running (socket busy at {})",
             path.display()
         )
     })
@@ -687,7 +687,7 @@ mod windows_tests {
 
     fn local_stream_pair(name: &str) -> (LocalStream, LocalStream, PathBuf) {
         let path = std::env::temp_dir().join(format!(
-            "herdr-api-{name}-{}-{}.sock",
+            "shepherd-api-{name}-{}-{}.sock",
             std::process::id(),
             Instant::now().elapsed().as_nanos()
         ));
@@ -1066,7 +1066,7 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        std::env::temp_dir().join(format!("herdr-{name}-{}-{nanos}", std::process::id()))
+        std::env::temp_dir().join(format!("shepherd-{name}-{}-{nanos}", std::process::id()))
     }
 
     fn read_line(stream: &mut LocalStream) -> String {
@@ -1198,7 +1198,7 @@ mod tests {
         let _guard = env_lock().lock().unwrap();
         let dir = unique_test_path("api-accept-spawn-failure");
         fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("herdr.sock");
+        let path = dir.join("shepherd.sock");
         std::env::set_var(crate::api::SOCKET_PATH_ENV_VAR, &path);
         let (api_tx, _api_rx) = mpsc::unbounded_channel();
 
@@ -1214,7 +1214,7 @@ mod tests {
     #[test]
     fn socket_path_prefers_explicit_env_override() {
         let _guard = env_lock().lock().unwrap();
-        let unique = format!("/tmp/herdr-test-{}.sock", std::process::id());
+        let unique = format!("/tmp/shepherd-test-{}.sock", std::process::id());
         std::env::remove_var(crate::session::SESSION_ENV_VAR);
         crate::session::clear_explicit_session_for_test();
         std::env::set_var(crate::api::SOCKET_PATH_ENV_VAR, &unique);
@@ -1235,7 +1235,7 @@ mod tests {
 
         let expected = config_home
             .join(crate::config::app_dir_name())
-            .join("herdr.sock");
+            .join("shepherd.sock");
         assert_eq!(socket_path(), expected);
 
         std::env::remove_var("XDG_CONFIG_HOME");
@@ -1255,7 +1255,7 @@ mod tests {
             .join(crate::config::app_dir_name())
             .join("sessions")
             .join("work")
-            .join("herdr.sock");
+            .join("shepherd.sock");
         assert_eq!(socket_path(), expected);
 
         std::env::remove_var(crate::session::SESSION_ENV_VAR);
@@ -1420,7 +1420,7 @@ mod tests {
             &tx,
             None,
             Some(&stop),
-            Some("pid 42 (herdr)".into()),
+            Some("pid 42 (shepherd)".into()),
             None,
         );
 
@@ -1431,7 +1431,7 @@ mod tests {
         assert_eq!(
             stop.take_reason(),
             Some(ShutdownReason::ApiStop {
-                caller: Some("pid 42 (herdr)".into())
+                caller: Some("pid 42 (shepherd)".into())
             })
         );
 

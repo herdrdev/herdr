@@ -20,7 +20,7 @@ impl SshMachineMetadata {
             return false;
         }
         match self.os.as_str() {
-            "linux" | "macos" => path.starts_with('/') && !path.ends_with("/mise/shims/herdr"),
+            "linux" | "macos" => path.starts_with('/') && !path.ends_with("/mise/shims/shepherd"),
             "windows" => {
                 let bytes = path.as_bytes();
                 path.starts_with(r"\\")
@@ -123,15 +123,19 @@ mod tests {
     #[test]
     fn metadata_accepts_only_supported_platforms_and_absolute_paths() {
         for (os, path, valid) in [
-            ("linux", "/home/a b/herdr", true),
-            ("macos", "/opt/homebrew/bin/herdr", true),
-            ("windows", r"C:\Program Files\herdr.exe", true),
-            ("windows", r"\\server\share\herdr.exe", true),
-            ("windows", "herdr.exe", false),
-            ("linux", "$HOME/.local/bin/herdr", false),
-            ("linux", "/home/user/.local/share/mise/shims/herdr", false),
-            ("linux", "/bin/herdr\nmalformed", false),
-            ("unknown", "/bin/herdr", false),
+            ("linux", "/home/a b/shepherd", true),
+            ("macos", "/opt/homebrew/bin/shepherd", true),
+            ("windows", r"C:\Program Files\shepherd.exe", true),
+            ("windows", r"\\server\share\shepherd.exe", true),
+            ("windows", "shepherd.exe", false),
+            ("linux", "$HOME/.local/bin/shepherd", false),
+            (
+                "linux",
+                "/home/user/.local/share/mise/shims/shepherd",
+                false,
+            ),
+            ("linux", "/bin/shepherd\nmalformed", false),
+            ("unknown", "/bin/shepherd", false),
         ] {
             assert_eq!(
                 SshMachineMetadata {
@@ -147,7 +151,8 @@ mod tests {
 
     #[test]
     fn metadata_is_disposable_fingerprinted_and_independent_per_profile() {
-        let root = std::env::temp_dir().join(format!("herdr-ssh-metadata-{}", std::process::id()));
+        let root =
+            std::env::temp_dir().join(format!("shepherd-ssh-metadata-{}", std::process::id()));
         let first = SshMetadataCache {
             path: root.join("first.json"),
             target: "mac".into(),
@@ -160,7 +165,7 @@ mod tests {
         };
         let metadata = SshMachineMetadata {
             os: "macos".into(),
-            executable: "/some path/herdr".into(),
+            executable: "/some path/shepherd".into(),
         };
         assert!(first.load().is_none());
         first.store(&metadata);
@@ -200,7 +205,7 @@ mod tests {
     #[test]
     fn metadata_does_not_follow_symlinks() {
         let root =
-            std::env::temp_dir().join(format!("herdr-ssh-metadata-link-{}", std::process::id()));
+            std::env::temp_dir().join(format!("shepherd-ssh-metadata-link-{}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
         let cache = SshMetadataCache {
             path: root.join("cache.json"),
@@ -213,7 +218,7 @@ mod tests {
         assert!(cache.load().is_none());
         cache.store(&SshMachineMetadata {
             os: "macos".into(),
-            executable: "/bin/herdr".into(),
+            executable: "/bin/shepherd".into(),
         });
         assert_eq!(std::fs::read_to_string(&other).unwrap(), "untouched");
         std::fs::remove_dir_all(root).unwrap();

@@ -504,7 +504,7 @@ fn capture_bounded_migration_observations() {
     observations.push(terminal.observe());
     // An explicit path prevents fixtures from silently being regenerated.
     // Compare old/new with diff; explain each difference, never bulk-bless it.
-    if let Some(path) = std::env::var_os("HERDR_MIGRATION_OBSERVATIONS") {
+    if let Some(path) = std::env::var_os("SHEPHERD_MIGRATION_OBSERVATIONS") {
         std::fs::write(
             path,
             format!("{observations:#?}\n{:#?}\n", terminal.effects),

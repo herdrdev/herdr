@@ -4,7 +4,7 @@ use super::harness::*;
 fn cli_rejects_protocol_mismatch_before_agent_wait_request() {
     let base = unique_test_dir();
     fs::create_dir_all(&base).unwrap();
-    let socket_path = base.join("herdr.sock");
+    let socket_path = base.join("shepherd.sock");
     let listener = UnixListener::bind(&socket_path).unwrap();
 
     let server = thread::spawn(move || {

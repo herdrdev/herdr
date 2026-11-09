@@ -1,0 +1,3 @@
+{
+  "error": "invalid pattern json: unknown variant `pipeline`, expected one of `orchestrator-worker`, `hierarchical`, `blackboard`, `market`"
+}

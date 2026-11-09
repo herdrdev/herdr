@@ -1,0 +1,22 @@
+id = "example.smoke"
+name = "Smoke Plugin"
+version = "0.1.0"
+min_shepherd_version = "0.6.10"
+description = "Portable plugin smoke fixture"
+platforms = ["linux", "macos", "windows"]
+
+[[actions]]
+id = "workspace-list"
+title = "List workspaces"
+contexts = ["workspace"]
+command = ["shepherd", "workspace", "list"]
+
+[[events]]
+on = "worktree.created"
+command = ["shepherd", "plugin", "log", "list", "--plugin", "example.smoke"]
+
+[[panes]]
+id = "board"
+title = "Board"
+placement = "overlay"
+command = ["shepherd", "workspace", "list"]

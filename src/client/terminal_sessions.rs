@@ -61,7 +61,7 @@ pub fn run_terminal_session_control(
                         return;
                     }
                 }
-                Err(err) => eprintln!("herdr: terminal session control input ignored: {err}"),
+                Err(err) => eprintln!("shepherd: terminal session control input ignored: {err}"),
             }
         }
         let _ = write_to_server(&mut write_stream, &ClientMessage::Detach);
@@ -85,7 +85,7 @@ fn connect_terminal_session_stream(
     let mut stream = match crate::ipc::connect_local_stream(&socket_path) {
         Ok(stream) => stream,
         Err(err) => {
-            eprintln!("herdr: {}", ClientError::ConnectionFailed(err));
+            eprintln!("shepherd: {}", ClientError::ConnectionFailed(err));
             std::process::exit(1);
         }
     };
@@ -110,13 +110,13 @@ fn connect_terminal_session_stream(
         Ok(handshake) if handshake.encoding == RenderEncoding::TerminalAnsi => {}
         Ok(handshake) => {
             eprintln!(
-                "herdr: terminal session observe negotiated unsupported encoding {:?}",
+                "shepherd: terminal session observe negotiated unsupported encoding {:?}",
                 handshake.encoding
             );
             std::process::exit(1);
         }
         Err(err) => {
-            eprintln!("herdr: {err}");
+            eprintln!("shepherd: {err}");
             std::process::exit(1);
         }
     }

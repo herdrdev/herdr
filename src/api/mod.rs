@@ -17,7 +17,7 @@ use tokio::sync::mpsc;
 
 use crate::api::schema::Request;
 
-pub const SOCKET_PATH_ENV_VAR: &str = "HERDR_SOCKET_PATH";
+pub const SOCKET_PATH_ENV_VAR: &str = "SHEPHERD_SOCKET_PATH";
 
 pub(crate) fn request_changes_ui(request: &Request) -> bool {
     request.method.operation().changes_ui

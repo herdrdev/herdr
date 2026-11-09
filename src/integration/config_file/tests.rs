@@ -6,7 +6,7 @@ struct Directory(PathBuf);
 impl Directory {
     fn new() -> Self {
         let path = std::env::temp_dir().join(format!(
-            "herdr-config-write-{}-{}",
+            "shepherd-config-write-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -168,7 +168,7 @@ fn existing_permissions_and_new_file_defaults_are_preserved() {
 #[test]
 fn writable_directory_does_not_bypass_read_only_config() {
     use std::os::unix::{fs::PermissionsExt, process::CommandExt};
-    const CHILD: &str = "HERDR_CONFIG_READ_ONLY_TEST";
+    const CHILD: &str = "SHEPHERD_CONFIG_READ_ONLY_TEST";
     if let Some(path) = std::env::var_os(CHILD) {
         let error = write_config(Path::new(&path), b"must not replace").unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
@@ -202,12 +202,12 @@ fn writable_directory_does_not_bypass_read_only_config() {
 #[cfg(unix)]
 #[test]
 fn partial_write_errors_preserve_files_and_do_not_remove_collisions() {
-    const CHILD: &str = "HERDR_CONFIG_PARTIAL_WRITE_TEST";
+    const CHILD: &str = "SHEPHERD_CONFIG_PARTIAL_WRITE_TEST";
     if let Some(path) = std::env::var_os(CHILD) {
         let dir = PathBuf::from(path);
         // This process runs only this test. A collision must neither be used nor removed.
         NEXT_TEMP.store(0, Ordering::Relaxed);
-        let collision = dir.join(format!(".herdr-config-{}-0.tmp", std::process::id()));
+        let collision = dir.join(format!(".shepherd-config-{}-0.tmp", std::process::id()));
         fs::write(&collision, b"unrelated file").unwrap();
         for name in ["existing", "new"] {
             let error = write_config(&dir.join(name), vec![b'x'; 8192]).unwrap_err();
@@ -220,7 +220,7 @@ fn partial_write_errors_preserve_files_and_do_not_remove_collisions() {
     let dir = Directory::new();
     fs::write(dir.0.join("existing"), b"original").unwrap();
     let output = std::process::Command::new("bash")
-        .args(["-c", "trap '' XFSZ; ulimit -f 1; exec \"$@\"", "herdr-test"])
+        .args(["-c", "trap '' XFSZ; ulimit -f 1; exec \"$@\"", "shepherd-test"])
         .arg(std::env::current_exe().unwrap())
         .args(["--exact", "integration::config_file::tests::partial_write_errors_preserve_files_and_do_not_remove_collisions", "--nocapture"])
         .env(CHILD, &dir.0)

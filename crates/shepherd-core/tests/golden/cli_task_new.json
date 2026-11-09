@@ -1,0 +1,11 @@
+{
+  "directory": "<ROOT>/.shepherd/tasks/1-cli-task-title",
+  "status": {
+    "created": "<TIMESTAMP>",
+    "id": 1,
+    "slug": "cli-task-title",
+    "state": "<STATE_DIR_PATH>",
+    "title": "CLI Task Title",
+    "updated": "<TIMESTAMP>"
+  }
+}

@@ -1,0 +1,114 @@
+[
+  {
+    "description": "Use when reviewing a change as the reviewer role - verify every acceptance criterion, check correctness, readability, tests and performance, and answer APPROVE or REQUEST_CHANGES with file and line comments.",
+    "dir": "embedded:code-review",
+    "global": false,
+    "name": "code-review",
+    "scope": "default"
+  },
+  {
+    "description": "Use when writing commit messages - Conventional Commits format with a short imperative subject and a body that explains why.",
+    "dir": "embedded:conventional-commits",
+    "global": false,
+    "name": "conventional-commits",
+    "scope": "default"
+  },
+  {
+    "description": "Use when something fails or behaves unexpectedly - reproduce, isolate, find the root cause, fix it, and add a regression test.",
+    "dir": "embedded:debug",
+    "global": false,
+    "name": "debug",
+    "scope": "default"
+  },
+  {
+    "description": "Use before assuming how a library, API, CLI flag or framework behaves - find the official documentation, cite the source and version, and say when you could not verify.",
+    "dir": "embedded:docs-lookup",
+    "global": false,
+    "name": "docs-lookup",
+    "scope": "default"
+  },
+  {
+    "description": "Use when implementing a coding task in your worktree - small focused changes, stay in scope, verify before delivering.",
+    "dir": "embedded:implement-task",
+    "global": false,
+    "name": "implement-task",
+    "scope": "default"
+  },
+  {
+    "description": "Use when working in a Go repository - error handling, context propagation, concurrency, testing and linting conventions.",
+    "dir": "embedded:lang-go",
+    "global": false,
+    "name": "lang-go",
+    "scope": "default"
+  },
+  {
+    "description": "Use when working in a Python repository - typing, errors, project layout, testing and linting conventions.",
+    "dir": "embedded:lang-python",
+    "global": false,
+    "name": "lang-python",
+    "scope": "default"
+  },
+  {
+    "description": "Use when working in a TypeScript or JavaScript repository - types, async handling, module style, testing and linting conventions.",
+    "dir": "embedded:lang-ts",
+    "global": false,
+    "name": "lang-ts",
+    "scope": "default"
+  },
+  {
+    "description": "Use when you must turn a task or issue into a plan - split it into independent, parallelizable subtasks, each with acceptance criteria and a verification command.",
+    "dir": "embedded:plan-tasks",
+    "global": false,
+    "name": "plan-tasks",
+    "scope": "default"
+  },
+  {
+    "description": "Use when taking work from branch to pull request - branch naming, commits, running checks, and writing the PR description that links the issue and summarizes the spec and review.",
+    "dir": "embedded:pr-workflow",
+    "global": false,
+    "name": "pr-workflow",
+    "scope": "default"
+  },
+  {
+    "description": "Use when reviewing a change for security - secrets, injection, input validation, authentication and authorization, unsafe file or process handling, and dependencies.",
+    "dir": "embedded:security-review",
+    "global": false,
+    "name": "security-review",
+    "scope": "default"
+  },
+  {
+    "description": "Use when you are an agent running under shepherd and need to spawn sub-agents, message other agents, wait for results, or deliver your own result. Explains the shepherd MCP tools and the fallback for agents without MCP.",
+    "dir": "embedded:shepherd-comms",
+    "global": false,
+    "name": "shepherd-comms",
+    "scope": "default"
+  },
+  {
+    "description": "Use when you are an agent running inside Shepherd and need to inspect or control its terminals with the `shepherd` CLI: list workspaces, tabs and panes, run a command in another pane, read output, or start, prompt and wait for another agent. Requires SHEPHERD_ENV=1.",
+    "dir": "embedded:shepherd-control",
+    "global": false,
+    "name": "shepherd-control",
+    "scope": "default"
+  },
+  {
+    "description": "Use when collaborating via event topics, partitioned message streams, consumer groups, offsets, acknowledgments, and replays in Shepherd multi-agent patterns.",
+    "dir": "embedded:shepherd-events",
+    "global": false,
+    "name": "shepherd-events",
+    "scope": "default"
+  },
+  {
+    "description": "Use when you are asked to plan, delegate or run work with Shepherd (tasks, patterns, coder/reviewer agents), to check that Shepherd is enabled, or to unblock an agent that never received its task. Explains the CLI, the safe order of steps and how to recover.",
+    "dir": "embedded:shepherd-orchestrate",
+    "global": false,
+    "name": "shepherd-orchestrate",
+    "scope": "default"
+  },
+  {
+    "description": "Use when writing or fixing tests - table-driven cases, edge cases, and avoiding mocks that do not earn their keep.",
+    "dir": "embedded:write-tests",
+    "global": false,
+    "name": "write-tests",
+    "scope": "default"
+  }
+]

@@ -45,7 +45,7 @@ fn with_manifest_dirs<T>(name: &str, f: impl FnOnce() -> T) -> T {
     let old_config = std::env::var_os("XDG_CONFIG_HOME");
     let old_state = std::env::var_os("XDG_STATE_HOME");
     let base = std::env::temp_dir().join(format!(
-        "herdr-manifest-loader-{name}-{}",
+        "shepherd-manifest-loader-{name}-{}",
         std::process::id()
     ));
     let config_dir = base.join("config");

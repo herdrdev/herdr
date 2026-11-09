@@ -1,0 +1,22 @@
+{
+  "added": 3,
+  "files": [
+    {
+      "added": 2,
+      "binary": false,
+      "path": "a.txt",
+      "removed": 1,
+      "status": "modified"
+    },
+    {
+      "added": 1,
+      "binary": false,
+      "path": "new.txt",
+      "removed": 0,
+      "status": "added"
+    }
+  ],
+  "from": "coder-1/1",
+  "removed": 1,
+  "to": "coder-1/2"
+}

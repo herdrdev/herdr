@@ -1,0 +1,10 @@
+[
+  {
+    "committed_offsets": {},
+    "group": "group-alpha",
+    "members": [
+      "agent-1"
+    ],
+    "topic": "groups-topic"
+  }
+]

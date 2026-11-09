@@ -336,7 +336,7 @@ pub struct CustomCommandKeybind {
     pub height: Option<PopupSize>,
 }
 
-/// Parsed keybinds for Herdr actions.
+/// Parsed keybinds for Shepherd actions.
 #[derive(Debug, Clone)]
 pub struct NavigateKeybinds {
     pub workspace_up: ActionKeybinds,
@@ -347,12 +347,13 @@ pub struct NavigateKeybinds {
     pub pane_right: ActionKeybinds,
 }
 
-/// Parsed keybinds for Herdr actions.
+/// Parsed keybinds for Shepherd actions.
 #[derive(Debug, Clone)]
 pub struct Keybinds {
     pub navigate: NavigateKeybinds,
     pub help: ActionKeybinds,
     pub settings: ActionKeybinds,
+    pub shepherd: ActionKeybinds,
     pub new_workspace: ActionKeybinds,
     pub new_worktree: ActionKeybinds,
     pub open_worktree: ActionKeybinds,
@@ -536,6 +537,7 @@ impl Config {
             },
             help: empty_action!(),
             settings: empty_action!(),
+            shepherd: empty_action!(),
             new_workspace: empty_action!(),
             new_worktree: empty_action!(),
             open_worktree: empty_action!(),
@@ -665,6 +667,7 @@ impl Config {
             apply_navigate!(keybinds.navigate.pane_right, navigate_pane_right, source);
             apply_action!(keybinds.help, help, source);
             apply_action!(keybinds.settings, settings, source);
+            apply_action!(keybinds.shepherd, shepherd, source);
             apply_action!(keybinds.new_workspace, new_workspace, source);
             apply_action!(keybinds.new_worktree, new_worktree, source);
             apply_action!(keybinds.open_worktree, open_worktree, source);

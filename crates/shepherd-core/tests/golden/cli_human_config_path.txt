@@ -1,0 +1,3 @@
+global	<TEST_DIR>/xdg_config/shepherd/config.yaml
+project	<ROOT>/.shepherd/config.yaml
+state	<STATE_DIR>

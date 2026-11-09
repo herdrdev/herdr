@@ -9,11 +9,11 @@ const TIMEOUT: Duration = Duration::from_millis(300);
 
 #[test]
 fn bridge_child() {
-    let Some(path) = std::env::var_os("HERDR_BRIDGE_TEST_SOCKET") else {
+    let Some(path) = std::env::var_os("SHEPHERD_BRIDGE_TEST_SOCKET") else {
         return;
     };
     let stream = crate::ipc::connect_local_stream(&PathBuf::from(path)).unwrap();
-    let timeout = (std::env::var_os("HERDR_BRIDGE_TEST_LEGACY").is_none()).then_some(TIMEOUT);
+    let timeout = (std::env::var_os("SHEPHERD_BRIDGE_TEST_LEGACY").is_none()).then_some(TIMEOUT);
     super::unix_common::forward_remote_bridge_stdio_with_timeout(stream, timeout).unwrap();
 }
 
@@ -40,13 +40,13 @@ impl Bridge {
                 "platform::remote_bridge_tests::bridge_child",
                 "--nocapture",
             ])
-            .env("HERDR_BRIDGE_TEST_SOCKET", &path)
-            .env_remove("HERDR_BRIDGE_TEST_LEGACY")
+            .env("SHEPHERD_BRIDGE_TEST_SOCKET", &path)
+            .env_remove("SHEPHERD_BRIDGE_TEST_LEGACY")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit());
         if legacy {
-            command.env("HERDR_BRIDGE_TEST_LEGACY", "1");
+            command.env("SHEPHERD_BRIDGE_TEST_LEGACY", "1");
         }
         let mut child = command.spawn().unwrap();
         let deadline = Instant::now() + Duration::from_secs(3);

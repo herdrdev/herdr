@@ -40,7 +40,7 @@ fn navigate_update_status_uses_released_desktop_and_mobile_placement() {
             workspace_id: None,
             tab_id: None,
             pane_id: None,
-            position: Some(crate::config::ToastHerdrPosition::BottomRight),
+            position: Some(crate::config::ToastShepherdPosition::BottomRight),
         },
         deadline: std::time::Instant::now(),
     });
@@ -203,6 +203,7 @@ fn mobile_header_and_switcher_render_released_sections_and_stable_targets() {
         state_labels: vec![("blocked".into(), "waiting".into())],
         tokens: Vec::new(),
         focused: true,
+        shepherd: None,
     });
     projected.workspaces[0].agent_status = AgentStatus::Blocked;
     state.set_snapshot(Box::new(projected));

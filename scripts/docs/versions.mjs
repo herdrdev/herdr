@@ -11,8 +11,8 @@ import {
 } from './snapshot.mjs';
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
-const repoRoot = process.env.HERDR_DOCS_REPO_ROOT
-  ? resolve(process.env.HERDR_DOCS_REPO_ROOT)
+const repoRoot = process.env.SHEPHERD_DOCS_REPO_ROOT
+  ? resolve(process.env.SHEPHERD_DOCS_REPO_ROOT)
   : resolve(scriptDir, '../..');
 const versionsDir = resolve(repoRoot, 'docs/versions');
 const manifestPath = resolve(versionsDir, 'manifest.json');

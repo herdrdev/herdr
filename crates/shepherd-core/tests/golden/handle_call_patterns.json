@@ -1,0 +1,38 @@
+[
+  {
+    "agents_count": 3,
+    "description": "Shared knowledge base where specialist agents read hypotheses and post discoveries. Starts: researcher (posts the first hypothesis to `blackboard`). Analyst and synthesizer wait for entries on `blackboard`, then post validations and the final synthesis there.",
+    "kind": "blackboard",
+    "name": "blackboard",
+    "shadowed": false,
+    "source": "builtin",
+    "topics_count": 1
+  },
+  {
+    "agents_count": 7,
+    "description": "Multi-tier command hierarchy where managers supervise specialized worker teams. Starts: director (level 0; publishes directives to `root-orders`). Managers wait for `root-orders`, publish assignments to `team-orders` and report to `root-results`; specialists wait for `team-orders` and publish to `team-results`.",
+    "kind": "hierarchical",
+    "name": "hierarchical",
+    "shadowed": false,
+    "source": "builtin",
+    "topics_count": 4
+  },
+  {
+    "agents_count": 6,
+    "description": "Competitive market where solvers bid on asks coordinated by a market-maker. Starts: requesters (publish `ask` from the objective). Solvers wait for `ask` and publish `bid`; the market-maker waits for `ask`/`bid` and publishes the `transaction`; requesters and solvers then react to it.",
+    "kind": "market",
+    "name": "market",
+    "shadowed": false,
+    "source": "builtin",
+    "topics_count": 3
+  },
+  {
+    "agents_count": 4,
+    "description": "Central orchestrator dispatches partitioned tasks to a worker pool and aggregates results. Starts: orchestrator (receives the objective, publishes task orders to `orders`). Workers wait for `orders` and publish results to `results`; the orchestrator aggregates them.",
+    "kind": "orchestrator-worker",
+    "name": "orchestrator-worker",
+    "shadowed": false,
+    "source": "builtin",
+    "topics_count": 2
+  }
+]

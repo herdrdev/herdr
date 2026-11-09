@@ -1,0 +1,1 @@
+deleted pattern 'test-pattern-to-del' from project

@@ -1,0 +1,16 @@
+{
+  "id": 16,
+  "jsonrpc": "2.0",
+  "result": {
+    "content": [
+      {
+        "text": "{\"committed\":{\"0\":1},\"status\":\"ok\",\"topic\":\"poll-topic\"}",
+        "type": "text"
+      }
+    ],
+    "isError": false,
+    "structuredContent": {
+      "text": "{\"committed\":{\"0\":1},\"status\":\"ok\",\"topic\":\"poll-topic\"}"
+    }
+  }
+}

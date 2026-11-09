@@ -330,22 +330,22 @@ pub fn detect_agent_with_osc(
 pub(crate) fn full_lifecycle_hook_authority(source: &str, agent_label: &str) -> bool {
     matches!(
         (source, agent_label),
-        ("herdr:pi", "pi")
-            | ("herdr:omp", "omp")
-            | ("herdr:mastracode", "mastracode")
-            | ("herdr:opencode", "opencode")
-            | ("herdr:kilo", "kilo")
-            | ("herdr:kimi", "kimi")
+        ("shepherd:pi", "pi")
+            | ("shepherd:omp", "omp")
+            | ("shepherd:mastracode", "mastracode")
+            | ("shepherd:opencode", "opencode")
+            | ("shepherd:kilo", "kilo")
+            | ("shepherd:kimi", "kimi")
     )
 }
 
 pub(crate) fn session_identity_only_integration(source: &str, agent_label: &str) -> bool {
     matches!(
         (source, agent_label),
-        ("herdr:hermes", "hermes")
-            | ("herdr:qwen", "qwen")
-            | ("herdr:letta", "letta")
-            | ("herdr:antigravity_cli", "agy")
+        ("shepherd:hermes", "hermes")
+            | ("shepherd:qwen", "qwen")
+            | ("shepherd:letta", "letta")
+            | ("shepherd:antigravity_cli", "agy")
     )
 }
 
@@ -973,7 +973,7 @@ mod tests {
     #[cfg(unix)]
     fn temp_detection_path(name: &str) -> std::path::PathBuf {
         let unique = format!(
-            "herdr-detect-tests-{}-{}-{}",
+            "shepherd-detect-tests-{}-{}-{}",
             name,
             std::process::id(),
             std::time::SystemTime::now()
@@ -1128,7 +1128,7 @@ mod tests {
     #[test]
     fn mastracode_is_hook_authority_without_screen_manifest() {
         assert!(full_lifecycle_hook_authority(
-            "herdr:mastracode",
+            "shepherd:mastracode",
             "mastracode"
         ));
         assert!(!Agent::SCREEN_MANIFEST_AGENTS.contains(&Agent::Mastracode));
@@ -1137,10 +1137,10 @@ mod tests {
     #[test]
     fn session_identity_integrations_leave_state_to_screen_detection() {
         for (source, label, agent) in [
-            ("herdr:hermes", "hermes", Agent::Hermes),
-            ("herdr:qwen", "qwen", Agent::Qwen),
-            ("herdr:letta", "letta", Agent::Letta),
-            ("herdr:antigravity_cli", "agy", Agent::Antigravity),
+            ("shepherd:hermes", "hermes", Agent::Hermes),
+            ("shepherd:qwen", "qwen", Agent::Qwen),
+            ("shepherd:letta", "letta", Agent::Letta),
+            ("shepherd:antigravity_cli", "agy", Agent::Antigravity),
         ] {
             assert!(!full_lifecycle_hook_authority(source, label));
             assert!(session_identity_only_integration(source, label));
@@ -1693,7 +1693,7 @@ mod tests {
             ("bun", "/home/can/.bun/bin/omp"),
             (
                 "bun.exe",
-                r"C:\Users\herdr\AppData\Roaming\npm\node_modules\@oh-my-pi\pi-coding-agent\dist\cli.js",
+                r"C:\Users\shepherd\AppData\Roaming\npm\node_modules\@oh-my-pi\pi-coding-agent\dist\cli.js",
             ),
         ] {
             let job = crate::platform::ForegroundJob {
@@ -1714,7 +1714,7 @@ mod tests {
                 "bun.exe",
                 &[
                     "bun.exe",
-                    r"C:\Users\herdr\AppData\Roaming\npm\node_modules\@oh-my-pi\pi-coding-agent\dist\setup.js",
+                    r"C:\Users\shepherd\AppData\Roaming\npm\node_modules\@oh-my-pi\pi-coding-agent\dist\setup.js",
                 ],
             )],
         };
@@ -1730,7 +1730,7 @@ mod tests {
                 "node.exe",
                 &[
                     "node.exe",
-                    "C:\\Users\\herdr\\AppData\\Roaming\\npm\\node_modules\\@earendil-works\\pi-coding-agent\\dist\\cli.js",
+                    "C:\\Users\\shepherd\\AppData\\Roaming\\npm\\node_modules\\@earendil-works\\pi-coding-agent\\dist\\cli.js",
                 ],
             )],
         };
@@ -1752,8 +1752,8 @@ mod tests {
                 123,
                 "node.exe",
                 &[
-                    r"C:\Users\herdr\AppData\Local\pi-node\current\node.exe",
-                    r"C:\Users\herdr\AppData\Local\pi-node\current/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js",
+                    r"C:\Users\shepherd\AppData\Local\pi-node\current\node.exe",
+                    r"C:\Users\shepherd\AppData\Local\pi-node\current/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js",
                 ],
             )],
         };
@@ -1773,7 +1773,7 @@ mod tests {
                 "node.exe",
                 &[
                     "node.exe",
-                    "C:\\Users\\herdr\\AppData\\Roaming\\npm\\node_modules\\mastracode\\dist\\cli.js",
+                    "C:\\Users\\shepherd\\AppData\\Roaming\\npm\\node_modules\\mastracode\\dist\\cli.js",
                 ],
             )],
         };
@@ -1807,8 +1807,8 @@ mod tests {
     #[test]
     fn identify_agent_in_job_ignores_non_cli_pi_package_scripts() {
         for script in [
-            r"C:\Users\herdr\AppData\Roaming\npm\node_modules\@earendil-works\pi-coding-agent\scripts\build.js",
-            r"C:\Users\herdr\AppData\Local\pi-node\current\node_modules\@earendil-works\pi-coding-agent\dist\bundle\update.js",
+            r"C:\Users\shepherd\AppData\Roaming\npm\node_modules\@earendil-works\pi-coding-agent\scripts\build.js",
+            r"C:\Users\shepherd\AppData\Local\pi-node\current\node_modules\@earendil-works\pi-coding-agent\dist\bundle\update.js",
             r"C:\workspace\dist\bundle\cli.js",
             r"C:\workspace\node_modules\other-package\dist\bundle\cli.js",
             r"C:\workspace\node_modules\@earendil-works\pi-coding-agent\dist\cli.exe",
@@ -1837,7 +1837,7 @@ mod tests {
                     "/D",
                     "/S",
                     "/C",
-                    "C:\\Users\\herdr\\AppData\\Roaming\\npm\\codex.cmd --model gpt-5",
+                    "C:\\Users\\shepherd\\AppData\\Roaming\\npm\\codex.cmd --model gpt-5",
                 ],
             )],
         };
@@ -1859,7 +1859,7 @@ mod tests {
                     "powershell.exe",
                     "-NoProfile",
                     "-File",
-                    "C:\\Users\\herdr\\Documents\\PowerShell\\Scripts\\claude.ps1",
+                    "C:\\Users\\shepherd\\Documents\\PowerShell\\Scripts\\claude.ps1",
                 ],
             )],
         };
@@ -1870,11 +1870,11 @@ mod tests {
         );
     }
 
-    // A plain shell pane launched with herdr's injected prompt integration
+    // A plain shell pane launched with shepherd's injected prompt integration
     // must still classify as a shell, not an agent, even though its argv now
     // carries a -Command payload.
     #[test]
-    fn identify_agent_in_job_ignores_herdr_powershell_shell_integration_argv() {
+    fn identify_agent_in_job_ignores_shepherd_powershell_shell_integration_argv() {
         let job = crate::platform::ForegroundJob {
             process_group_id: 123,
             processes: vec![foreground_process(

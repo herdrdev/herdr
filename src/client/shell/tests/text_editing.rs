@@ -397,7 +397,7 @@ fn every_field_renders_long_unicode_across_resize_without_mutation() {
 #[test]
 fn plain_and_ime_text_fill_every_field_on_a_report_all_host() {
     // #5255: a report-all pane under a Kitty host still lets plain bytes and
-    // IME commits type into Herdr's own fields.
+    // IME commits type into Shepherd's own fields.
     for field in 0..10 {
         let mut state = shell(field);
         state.set_host_reports_key_releases(true);

@@ -14,7 +14,7 @@ const MAX_IMAGE_BYTES: usize = 16 * 1024 * 1024;
 // slots are live/recent, a new client uses inline rather than allocating more.
 const MAX_GENERATIONS: usize = 8;
 const STALE_GRACE: Duration = Duration::from_secs(60);
-const GENERATION_PREFIX: &str = "herdr-tty-graphics-protocol-";
+const GENERATION_PREFIX: &str = "shepherd-tty-graphics-protocol-";
 const CONSUMPTION_TIMEOUT: Duration = Duration::from_secs(10);
 
 struct Pending {
@@ -229,7 +229,7 @@ fn lock_directory(file: &fs::File) -> io::Result<()> {
 }
 
 fn create_generation(root: &Path, now: SystemTime) -> io::Result<Generation> {
-    let parent = root.join(format!("herdr-kitty-files-{}", effective_uid()));
+    let parent = root.join(format!("shepherd-kitty-files-{}", effective_uid()));
     match DirBuilder::new().mode(0o700).create(&parent) {
         Ok(()) => fs::set_permissions(&parent, fs::Permissions::from_mode(0o700))?,
         Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
@@ -589,7 +589,7 @@ mod tests {
         let fixture = test_ledger();
         let parent = fixture
             .scratch
-            .join(format!("herdr-kitty-files-{}", effective_uid()));
+            .join(format!("shepherd-kitty-files-{}", effective_uid()));
         let destination = fixture.scratch.join("destination");
         fs::create_dir(&destination).unwrap();
         symlink(&destination, &parent).unwrap();

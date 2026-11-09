@@ -17,11 +17,11 @@ RELEASE_FILES = {
     "skills/herdr/SKILL.md",
 }
 ASSETS = {
-    "herdr-linux-x86_64",
-    "herdr-linux-aarch64",
-    "herdr-macos-x86_64",
-    "herdr-macos-aarch64",
-    "herdr-windows-x86_64.zip",
+    "shepherd-linux-x86_64",
+    "shepherd-linux-aarch64",
+    "shepherd-macos-x86_64",
+    "shepherd-macos-aarch64",
+    "shepherd-windows-x86_64.zip",
 }
 
 
@@ -74,9 +74,9 @@ def normalized_cargo(text: str, path: str) -> tuple[dict, str]:
     if path == "Cargo.toml":
         version = data["package"].pop("version")
     else:
-        packages = [p for p in data["package"] if p["name"] == "herdr" and "source" not in p]
+        packages = [p for p in data["package"] if p["name"] == "shepherd" and "source" not in p]
         if len(packages) != 1:
-            raise ValueError("expected exactly one local herdr package in Cargo.lock")
+            raise ValueError("expected exactly one local shepherd package in Cargo.lock")
         version = packages[0].pop("version")
     return data, version
 
@@ -90,7 +90,7 @@ def validate_diff(preview: str, candidate: str, version: str | None = None) -> N
             before, _ = normalized_cargo(git("show", f"{preview}:{path}"), path)
             after, _ = normalized_cargo(git("show", f"{candidate}:{path}"), path)
             if before != after:
-                raise ValueError(f"{path}: only the herdr package version may change")
+                raise ValueError(f"{path}: only the shepherd package version may change")
         elif path not in RELEASE_FILES and not (
             path.startswith("docs/next/website/src/content/docs/")
             and path.endswith((".md", ".mdx"))

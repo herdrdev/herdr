@@ -1,0 +1,28 @@
+name: orchestrator-worker
+kind: orchestrator-worker
+description: 'Central orchestrator dispatches partitioned tasks to a worker pool and aggregates results. Starts: orchestrator (receives the objective, publishes task orders to `orders`). Workers wait for `orders` and publish results to `results`; the orchestrator aggregates them.'
+topics:
+  - name: orders
+    partitions: 4
+    key: task_id
+  - name: results
+    partitions: 1
+agents:
+  - id: orchestrator
+    role: brain
+    count: 1
+    start: true
+    prompt: You are the lead orchestrator. Split the run objective into independent tasks and publish each to orders; when workers answer on results, aggregate them into the final deliverable.
+    publishes:
+      - orders
+    consumes:
+      - results
+  - id: worker
+    role: coder
+    count: 3
+    group: worker-pool
+    prompt: You are an autonomous task worker. When a task arrives on orders, execute it cleanly and publish the verified result to results.
+    consumes:
+      - orders
+    publishes:
+      - results

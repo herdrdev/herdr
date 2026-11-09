@@ -121,7 +121,10 @@ impl App {
             );
             return;
         }
-        let base = params.base.unwrap_or_else(|| "HEAD".into());
+        let base = params
+            .base
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| "HEAD".into());
         let source = match self.resolve_worktree_source(params.workspace_id, params.cwd) {
             Ok(source) => source,
             Err(err) => {
@@ -198,7 +201,7 @@ impl App {
             result: Ok(()),
         };
         let spawned = crate::thread_spawn::spawn_named_with(
-            "herdr-worktree-add",
+            "shepherd-worktree-add",
             finished,
             move |mut finished| {
                 finished.result = if let Some(parent_dir) = parent_dir {
@@ -274,7 +277,7 @@ impl App {
                 encode_error(
                     id,
                     "not_linked_worktree",
-                    "workspace is not a Herdr-managed worktree checkout",
+                    "workspace is not a Shepherd-managed worktree checkout",
                 ),
             );
             return;
@@ -383,7 +386,7 @@ impl App {
             result: Ok(()),
         };
         let spawned = crate::thread_spawn::spawn_named_with(
-            "herdr-worktree-remove",
+            "shepherd-worktree-remove",
             finished,
             move |mut finished| {
                 finished.result = crate::worktree::run_worktree_remove_command_with_recovery(

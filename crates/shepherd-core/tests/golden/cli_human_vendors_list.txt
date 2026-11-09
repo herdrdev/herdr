@@ -1,0 +1,3 @@
+claude	claude	available
+codex	codex	available
+gemini	agy	available

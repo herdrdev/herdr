@@ -1,0 +1,16 @@
+{
+  "context": "# Task 1-task-to-show\n\n# Task To Show\n\nSample test task description\n\n# Spec\n\nDesign decisions, constraints, interfaces. Agents read this before coding.\n\n# Acceptance criteria\n\n- [ ] Criterion 1\n- [ ] Criterion 2\n\n# Links\n\n",
+  "created": "<TIMESTAMP>",
+  "directory": "<ROOT>/.shepherd/tasks/1-task-to-show",
+  "id": 1,
+  "sections": {
+    "acceptance": "# Acceptance criteria\n\n- [ ] Criterion 1\n- [ ] Criterion 2\n",
+    "issue": "# Task To Show\n\nSample test task description\n",
+    "links": "# Links\n\n",
+    "spec": "# Spec\n\nDesign decisions, constraints, interfaces. Agents read this before coding.\n"
+  },
+  "slug": "task-to-show",
+  "state": "<STATE_DIR_PATH>",
+  "title": "Task To Show",
+  "updated": "<TIMESTAMP>"
+}

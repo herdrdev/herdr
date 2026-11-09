@@ -3,7 +3,7 @@
 //! A process started from a terminal stays in that terminal app's launchd job
 //! and resource coalition, even after `setsid`. When the app quits, macOS
 //! removes its job and kills what is left inside it, so a server started from
-//! Ghostty died with every pane on Cmd-Q (herdr#4920).
+//! Ghostty died with every pane on Cmd-Q (shepherd#4920).
 //!
 //! The daemon is therefore submitted as a one-shot job in the user's GUI
 //! launchd domain, which gives it a coalition of its own. The job immediately
@@ -18,9 +18,9 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const LAUNCHCTL: &str = "/bin/launchctl";
-const LABEL_PREFIX: &str = "dev.herdr.server.";
+const LABEL_PREFIX: &str = "dev.shepherd.server.";
 /// Tells the job process to fork the server and exit; never inherited by panes.
-const DETACH_ENV: &str = "HERDR_LAUNCHD_DETACH";
+const DETACH_ENV: &str = "SHEPHERD_LAUNCHD_DETACH";
 /// Finished jobs stay loaded until logout; older ones are removed on the next launch.
 const STALE_JOB_AGE: Duration = Duration::from_secs(60);
 
@@ -86,7 +86,7 @@ struct PrivateDir(PathBuf);
 
 impl PrivateDir {
     fn create() -> io::Result<Self> {
-        let template = std::env::temp_dir().join("herdr-launchd.XXXXXXXX");
+        let template = std::env::temp_dir().join("shepherd-launchd.XXXXXXXX");
         let mut bytes = CString::new(template.as_os_str().as_bytes())
             .map_err(|_| io::Error::other("temporary path contains a NUL byte"))?
             .into_bytes_with_nul();
@@ -146,7 +146,7 @@ fn job_is_running(target: &str) -> bool {
     })
 }
 
-/// Removes finished herdr server jobs from earlier launches. Running jobs and
+/// Removes finished shepherd server jobs from earlier launches. Running jobs and
 /// recent ones (which may still be starting) are left alone.
 fn remove_stale_jobs(domain: &str, now: Duration) {
     let Ok(list) = launchctl(&["list"]) else {
@@ -300,21 +300,21 @@ mod tests {
     use std::os::unix::ffi::OsStringExt;
 
     #[test]
-    fn only_old_finished_herdr_jobs_are_stale() {
+    fn only_old_finished_shepherd_jobs_are_stale() {
         let now = Duration::from_secs(1_000);
         let old = Duration::from_secs(900).as_nanos();
         let recent = Duration::from_secs(990).as_nanos();
         let list = format!(
             "PID\tStatus\tLabel\n\
-             -\t0\tdev.herdr.server.12.{old}\n\
-             42\t0\tdev.herdr.server.13.{old}\n\
-             -\t0\tdev.herdr.server.14.{recent}\n\
+             -\t0\tdev.shepherd.server.12.{old}\n\
+             42\t0\tdev.shepherd.server.13.{old}\n\
+             -\t0\tdev.shepherd.server.14.{recent}\n\
              -\t0\tcom.example.other.{old}\n"
         );
 
         assert_eq!(
             stale_job_labels(&list, now),
-            vec![format!("dev.herdr.server.12.{old}").as_str()]
+            vec![format!("dev.shepherd.server.12.{old}").as_str()]
         );
     }
 
@@ -323,10 +323,10 @@ mod tests {
         let mut command = Command::new("/opt/her<dr>");
         command
             .arg("a&b")
-            .env("HERDR_TEST_VALUE", "\"q\"\tx")
+            .env("SHEPHERD_TEST_VALUE", "\"q\"\tx")
             .env_remove("HOME");
         let plist = job_plist(
-            "dev.herdr.server.1.2",
+            "dev.shepherd.server.1.2",
             &command,
             Some(Path::new("/tmp")),
             0o077,
@@ -335,7 +335,7 @@ mod tests {
 
         assert!(plist.contains("<string>/opt/her&lt;dr&gt;</string>"));
         assert!(plist.contains("<string>a&amp;b</string>"));
-        assert!(plist.contains("<key>HERDR_TEST_VALUE</key>\n<string>&quot;q&quot;\tx</string>"));
+        assert!(plist.contains("<key>SHEPHERD_TEST_VALUE</key>\n<string>&quot;q&quot;\tx</string>"));
         assert!(!plist.contains("<key>HOME</key>"));
         assert!(plist.contains(&format!("<key>{DETACH_ENV}</key>")));
         assert!(plist.contains("<key>KeepAlive</key>\n<false/>"));
@@ -351,9 +351,9 @@ mod tests {
             std::ffi::OsString::from_vec(vec![0x66, 0xff]),
         ] {
             let mut command = Command::new("/bin/true");
-            command.env("HERDR_TEST_VALUE", &value);
+            command.env("SHEPHERD_TEST_VALUE", &value);
             assert!(
-                job_plist("dev.herdr.server.1.2", &command, None, 0o022).is_err(),
+                job_plist("dev.shepherd.server.1.2", &command, None, 0o022).is_err(),
                 "{value:?}"
             );
         }
@@ -421,7 +421,7 @@ mod tests {
         assert_eq!(coalition, resource_coalition(std::process::id()));
     }
 
-    const DETACH_HELPER_OUT: &str = "HERDR_LAUNCHD_DETACH_HELPER_OUT";
+    const DETACH_HELPER_OUT: &str = "SHEPHERD_LAUNCHD_DETACH_HELPER_OUT";
 
     /// Body of the launchd job in `detached_server_outlives_its_launcher_job`.
     #[test]
@@ -533,8 +533,8 @@ mod tests {
         let mut command = Command::new("/bin/sh");
         command
             .arg("-c")
-            .arg("printf '%s %s %s' $$ \"$HERDR_LAUNCHD_TEST\" \"${HERDR_LAUNCHD_DETACH-unset}\" > out; exec sleep 30")
-            .env("HERDR_LAUNCHD_TEST", "yes")
+            .arg("printf '%s %s %s' $$ \"$SHEPHERD_LAUNCHD_TEST\" \"${SHEPHERD_LAUNCHD_DETACH-unset}\" > out; exec sleep 30")
+            .env("SHEPHERD_LAUNCHD_TEST", "yes")
             .current_dir(dir.path());
 
         let label = spawn_launchd_job(&command).expect("launchd job");

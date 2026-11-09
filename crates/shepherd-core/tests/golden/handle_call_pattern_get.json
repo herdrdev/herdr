@@ -1,0 +1,45 @@
+{
+  "agents": [
+    {
+      "consumes": [
+        "results"
+      ],
+      "id": "orchestrator",
+      "prompt": "You are the lead orchestrator. Split the run objective into independent tasks and publish each to orders; when workers answer on results, aggregate them into the final deliverable.",
+      "publishes": [
+        "orders"
+      ],
+      "role": "brain",
+      "start": true
+    },
+    {
+      "consumes": [
+        "orders"
+      ],
+      "count": 3,
+      "group": "worker-pool",
+      "id": "worker",
+      "prompt": "You are an autonomous task worker. When a task arrives on orders, execute it cleanly and publish the verified result to results.",
+      "publishes": [
+        "results"
+      ],
+      "role": "coder"
+    }
+  ],
+  "description": "Central orchestrator dispatches partitioned tasks to a worker pool and aggregates results. Starts: orchestrator (receives the objective, publishes task orders to `orders`). Workers wait for `orders` and publish results to `results`; the orchestrator aggregates them.",
+  "kind": "orchestrator-worker",
+  "name": "orchestrator-worker",
+  "problems": [],
+  "source": "builtin",
+  "topics": [
+    {
+      "key": "task_id",
+      "name": "orders",
+      "partitions": 4
+    },
+    {
+      "name": "results",
+      "partitions": 1
+    }
+  ]
+}

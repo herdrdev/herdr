@@ -1,85 +1,179 @@
-# herdr
+# shepherd
 
-
-<p align="center">
-  <img src="assets/logo.png" alt="herdr" width="100" />
-</p>
+> **a fork of [herdr](https://github.com/herdrdev/herdr)** (apache-2.0), forked from herdr 0.9.5 at upstream commit `ee5bfb5`. the herdr history is preserved below the shepherd commit; shepherd is not affiliated with the herdr project.
 
 <p align="center">
-  <a href="https://herdr.dev">herdr.dev</a> · <a href="#install">install</a> · <a href="https://herdr.dev/docs/quick-start/">quick start</a> · <a href="https://herdr.dev/docs/">docs</a>
-</p>
-
-<p align="center">
-  English · <a href="README.zh-CN.md">简体中文</a>
+  <a href="#install">install</a> · <a href="#quick-start">quick start</a> · <a href="#try-it-from-scratch">try it from scratch</a> · <a href="#documentation">docs</a> · <a href="#built-on-herdr">built on herdr</a> · <a href="#license">license</a>
 </p>
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-666666?labelColor=333333" alt="Apache 2.0 license" /></a>
-  <a href="https://github.com/herdrdev/herdr/releases"><img src="https://img.shields.io/github/downloads/herdrdev/herdr/total?labelColor=333333&color=666666" alt="total GitHub release downloads" /></a>
-  <a href="https://github.com/herdrdev/herdr/stargazers"><img src="https://img.shields.io/github/stars/herdrdev/herdr?labelColor=333333&color=666666&logo=github" alt="GitHub stars" /></a>
-  <a href="https://github.com/herdrdev/herdr/releases/latest"><img src="https://img.shields.io/github/v/release/herdrdev/herdr?label=release&labelColor=333333&color=666666" alt="latest stable release" /></a>
-  <a href="https://formulae.brew.sh/formula/herdr"><img src="https://img.shields.io/homebrew/v/herdr?label=homebrew&labelColor=333333&color=666666" alt="Homebrew version" /></a>
-  <a href="https://x.com/herdrdev"><img src="https://img.shields.io/badge/follow-%40herdrdev-000000?logo=x&logoColor=white" alt="follow @herdrdev on X" /></a>
+  <a href="https://github.com/herdrdev/herdr"><img src="https://img.shields.io/badge/fork%20of-herdr%200.9.5-666666?labelColor=333333" alt="fork of herdr 0.9.5" /></a>
+  <a href="https://github.com/Rivaldito/shepherd/releases"><img src="https://img.shields.io/badge/release-0.1.0--beta-666666?labelColor=333333" alt="release 0.1.0-beta" /></a>
+  <img src="https://img.shields.io/badge/status-beta-666666?labelColor=333333" alt="beta" />
 </p>
 
 ---
 
-https://github.com/user-attachments/assets/043ec09f-4bdd-41d5-aee0-8fda6b83e267
+**the orchestrator for your coding agents.**
 
-**the runtime your coding agents live on.**
+shepherd is a fork of [herdr](https://github.com/herdrdev/herdr) that adds multi-agent orchestration on top of herdr's terminal runtime. you keep the native terminal of every agent; shepherd decides who works on what, in which worktree, and how they talk to each other.
 
-- **detach without stopping work** — herdr keeps terminals running in a background server when you close the client or lose your SSH connection. after a server or machine restart, herdr restores the saved layout and can resume supported agent sessions; the original processes do not survive. [session state →](https://herdr.dev/docs/session-state/)
-- **several machines, one window** — keep local work and saved ssh machines together, with a combined agent list and independent reconnects. [remote machines →](https://herdr.dev/docs/connecting-machines/)
-- **never hunt for the stuck one** — every pane is marked working, blocked, or idle. when an agent stops and needs an answer, herdr says so.
-- **agent-native** — agents drive herdr through the cli and socket api: they can spawn panes, prompt each other, and wait until another agent is genuinely blocked. [agent skill →](https://herdr.dev/docs/agent-skill/)
-- **runs what you already run** — claude code, codex, cursor, opencode, grok and the rest. herdr doesn't wrap or replace them; it owns their terminals. building an agent? [add herdr support →](https://herdr.dev/docs/add-herdr-support/)
-- **keyboard and mouse, both first-class** — tmux-style prefix keys *and* click, drag, split. pick per moment, not per tool.
-- **plugins** — extend panes and workflows. [browse the marketplace →](https://herdr.dev/plugins/)
+- **agents with roles** — claude, codex and gemini (agy) as `brain`, `coder`, `reviewer`, `docs` or `tester`. routing by role, with fallbacks and a different-vendor rule for reviews. `shepherd spawn coder "…"`.
+- **one git worktree per agent** — each coder gets its own branch and worktree, so agents never step on each other. you integrate with plain git; shepherd never merges or pushes on its own.
+- **multi-agent patterns** — orchestrator-worker, hierarchical, blackboard and market as YAML teams you can copy, edit, validate and run. `shepherd pattern run webteam --task "…"`.
+- **event bus** — topics, partitions, consumer groups, offsets and replay, exposed to agents as MCP tools and to you as `shepherd topic …`. publishing wakes idle agents.
+- **tasks and gated runs** — tasks with specs and acceptance criteria; plan, implement, review, check and publish with explicit human approval.
+- **local snapshots** — automatic safety copies of every agent's worktree in hidden git refs, with diff and safe restore. no network, no extra dependencies.
+- **a shepherd tab in the terminal** — `ctrl+b a` opens agents, tasks, runs, patterns, skills, git and events as an in-window section with herdr's look, keyboard and mouse. no pop-ups.
+- **cli for everything** — every action is a command with `--json` output.
 - **one rust binary, no electron** — runs in whatever terminal you already use.
 
 ---
 
 ## install
 
-```bash
-curl -fsSL https://herdr.dev/install.sh | sh
-```
-
-or `brew install herdr` · `mise use -g herdr` · windows: `powershell -ExecutionPolicy Bypass -c "irm https://herdr.dev/install.ps1 | iex"` · [endpoint-protected Windows](https://herdr.dev/docs/windows-beta/) · [binaries](https://github.com/herdrdev/herdr/releases)
-
-then start it where the work lives:
+shepherd is in beta (0.1.0-beta) and ships no binaries yet; build it from source.
 
 ```bash
-herdr
+git clone https://github.com/Rivaldito/shepherd.git
+cd shepherd
+./cargo-fork.sh build --release     # or: cargo build --release
 ```
 
-run your agents, split panes, walk away. `ctrl+b q` detaches, `herdr` reattaches. [quick start →](https://herdr.dev/docs/quick-start/)
+requirements: Rust 1.96.1+ and Zig 0.16.0 (to build the vendored terminal library). the binary is `target/release/shepherd`.
 
-## docs
+## quick start
 
-everything lives at [herdr.dev/docs](https://herdr.dev/docs/): [quick start](https://herdr.dev/docs/quick-start/) · [concepts](https://herdr.dev/docs/concepts/) · [supported agents](https://herdr.dev/docs/agents/) · [keyboard](https://herdr.dev/docs/keyboard/) · [configuration](https://herdr.dev/docs/configuration/) · [session state](https://herdr.dev/docs/session-state/) · [connecting machines](https://herdr.dev/docs/connecting-machines/) · [remote](https://herdr.dev/docs/persistence-remote/) · [integrations](https://herdr.dev/docs/integrations/) · [add herdr support to your agent](https://herdr.dev/docs/add-herdr-support/) · [plugins](https://herdr.dev/docs/plugins/) · [socket api](https://herdr.dev/docs/socket-api/)
+enable the orchestrator in `~/.config/shepherd/config.toml`:
 
-## thanks
+```toml
+[shepherd]
+enabled = true
+```
 
-every past sponsor and backer is listed in [SPONSORS.md](./SPONSORS.md) — thank you 🐑
+start it where the work lives, then open the shepherd section:
 
-enterprise / partnership: hey@herdr.dev
+```bash
+shepherd                 # then press ctrl+b a, or click the "Shepherd" tab
+shepherd config check    # validate your configuration
+shepherd spawn coder "Add GET /health and a test. Commit." --vendor claude --model haiku
+shepherd agents
+```
 
-## agent instructions
+`ctrl+b q` detaches, `shepherd` reattaches.
 
-if you are an ai agent helping with this repository, read [`AGENTS.md`](./AGENTS.md) before making changes and read [`CONTRIBUTING.md`](./CONTRIBUTING.md) before opening issues or PRs.
+## try it from scratch
+
+a complete walk from an empty machine to a team of agents. it takes about ten minutes plus the first build.
+
+**1. get the tools.** you need git, Rust 1.96.1+, Zig 0.16.0 and at least one agent cli (`claude`, `codex` or `agy`). check with `rustc --version`, `zig version` and `git --version`. if zig is not on your `PATH`, run `export ZIG=/path/to/zig`.
+
+**2. build it.**
+
+```bash
+git clone https://github.com/Rivaldito/shepherd.git
+cd shepherd
+./cargo-fork.sh build --release
+export PATH="$PWD/target/release:$PATH"      # so you can just type `shepherd`
+```
+
+**3. turn the orchestrator on.**
+
+```bash
+mkdir -p ~/.config/shepherd
+printf '[shepherd]\nenabled = true\n' > ~/.config/shepherd/config.toml
+shepherd config check                        # prints: config: ok
+```
+
+**4. make a repository to play in.** shepherd works on git repositories with at least one commit.
+
+```bash
+mkdir ~/shepherd-playground && cd ~/shepherd-playground
+git init -q && git commit -q --allow-empty -m "init"
+```
+
+**5. look at what you have.**
+
+```bash
+shepherd roles list        # brain, coder, docs, reviewer, tester and their default vendors
+shepherd vendors list      # which agent clis were found on your PATH
+shepherd pattern list      # the four built-in team templates
+```
+
+**6. start shepherd and run one agent.** in one terminal run `shepherd`, then press `ctrl+b a` to open the shepherd section. in a second terminal, in the same folder:
+
+```bash
+shepherd spawn coder "Create hello.txt containing 'hi' and commit it." --vendor claude --model haiku
+shepherd agents            # watch it go from starting to working to idle
+shepherd attach coder-1    # open its terminal; answer a trust prompt if it asks
+```
+
+the agent works in its own git worktree on a branch named `shep/<n>-...`. when it finishes, merge it yourself with `git merge`; shepherd never does.
+
+**7. run a team.**
+
+```bash
+shepherd pattern new webteam --from orchestrator-worker
+shepherd pattern validate webteam
+shepherd pattern run webteam --task "Create a.txt containing A and b.txt containing B, one worker each. Commit."
+shepherd pattern runs      # state of the run
+shepherd topic tail results
+```
+
+**8. optional: the native app.**
+
+```bash
+(cd native && cargo build --release -p shepherd-native)
+native/dev/demo.sh         # opens the window against a throwaway server with sample data
+```
+
+`ctrl+shift+s` switches between the terminal and the shepherd panel. to connect it to your own server instead, see [docs/shepherd/native-app.md](docs/shepherd/native-app.md).
+
+to explore without touching your own configuration at all, use `scripts/shepherd-iso.sh start` for an isolated session. the details of every step are in [docs/shepherd/getting-started.md](docs/shepherd/getting-started.md).
+
+## documentation
+
+| guide | what it covers |
+|---|---|
+| [why shepherd](docs/shepherd/why-shepherd.md) | what shepherd adds on top of herdr and when it helps |
+| [getting started](docs/shepherd/getting-started.md) | build, enable, first agent, first team, where files live, limits |
+| [agents, roles and skills](docs/shepherd/agents-roles-skills.md) | agent lifecycle, roles, vendors, writing and assigning skills, mcp tools, snapshots |
+| [patterns](docs/shepherd/patterns.md) | the four team topologies, the yaml format, validation, run states, a full example |
+| [topics and events](docs/shepherd/topics-and-events.md) | the event bus: topics, partitions, consumer groups, replay |
+| [native app](docs/shepherd/native-app.md) | the desktop window, its ten views and how to connect it |
+
+## keeping up with herdr
+
+this fork follows herdr with a repeatable routine, described in [docs/UPSTREAM-SYNC.md](docs/UPSTREAM-SYNC.md).
+
+## built on herdr
+
+shepherd would not exist without [herdr](https://github.com/herdrdev/herdr) ([herdr.dev](https://herdr.dev)), created by the herdr contributors and licensed under the Apache License 2.0. the terminal multiplexer, pty management, session persistence, agent detection, client/server protocol, socket api and plugin system in this repository are their work. shepherd is based on herdr 0.9.5, keeps its history, and merges upstream changes regularly. thank you to everyone who builds herdr 🐑
+
+what differs from herdr:
+
+- **focus** — herdr manages agent panes; shepherd adds coordination: roles, worktrees, patterns, bus, tasks and snapshots.
+- **separate config and state** — `~/.config/shepherd`, with a read-only fallback to herdr's `config.toml`.
+- **no upstream auto-update** — update checks against herdr's release channels are disabled so they never replace the shepherd binary.
+- **human gates** — changes and git publishing need explicit confirmation unless you override it.
+
+shepherd is an independent fork; it is not affiliated with or endorsed by the herdr project. see [NOTICE](NOTICE) for the full attribution and the list of modified upstream files.
 
 ## development
 
 ```bash
-git clone https://github.com/herdrdev/herdr
-cd herdr
-cargo build --release
+./cargo-fork.sh build                 # debug build
+./cargo-fork.sh test -p shepherd-core # orchestrator core tests
+./cargo-fork.sh test --bin shepherd -- shepherd:: client::shell protocol:: api:: config::
 
-just test        # unit tests
-just check       # formatting, tests, and maintenance checks
+scripts/rename-from-herdr.sh --check              # no leftover upstream names
+scripts/upstream-sync.sh --dry-run --allow-branch shepherd   # preview merging upstream herdr
+scripts/shepherd-iso.sh start                     # isolated session for manual checks
 ```
+
+code style follows herdr: rustfmt and clippy clean on shepherd-owned files, a typed socket api, and minimal, additive hooks in herdr files. see [AGENTS.md](AGENTS.md) and [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## license
 
-Herdr is licensed under the [Apache License 2.0](LICENSE).
+shepherd is licensed under the [Apache License 2.0](LICENSE). copyright (c) 2026 Sebastián Araque Rivaldito for the shepherd additions; the herdr code remains copyright of the herdr contributors under the same license. see [NOTICE](NOTICE).

@@ -1,0 +1,16 @@
+{
+  "id": 9,
+  "jsonrpc": "2.0",
+  "result": {
+    "content": [
+      {
+        "text": "delivered message 1 to user",
+        "type": "text"
+      }
+    ],
+    "isError": false,
+    "structuredContent": {
+      "text": "delivered message 1 to user"
+    }
+  }
+}

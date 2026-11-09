@@ -89,7 +89,7 @@ impl Registration {
             return Err(io::Error::other("IORegisterForSystemPower failed"));
         }
         registration.queue =
-            unsafe { dispatch_queue_create(c"herdr.host-power".as_ptr(), std::ptr::null()) };
+            unsafe { dispatch_queue_create(c"shepherd.host-power".as_ptr(), std::ptr::null()) };
         if registration.queue.is_null() {
             return Err(io::Error::other("dispatch_queue_create failed"));
         }

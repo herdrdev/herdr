@@ -16,8 +16,8 @@ ASSET_TARGETS = (
     "windows-x86_64",
 )
 EXPECTED_ASSET_NAMES = {
-    **{target: f"herdr-{target}" for target in ASSET_TARGETS},
-    "windows-x86_64": "herdr-windows-x86_64.zip",
+    **{target: f"shepherd-{target}" for target in ASSET_TARGETS},
+    "windows-x86_64": "shepherd-windows-x86_64.zip",
 }
 ENDPOINT_PROTOCOL_SOURCE_PATH = Path("src/protocol/endpoint.rs")
 

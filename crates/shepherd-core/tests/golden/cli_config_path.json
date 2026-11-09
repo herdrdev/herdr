@@ -1,0 +1,5 @@
+{
+  "global": "<GLOBAL_CONFIG_PATH>",
+  "project": "<ROOT>/.shepherd/config.yaml",
+  "state": "<STATE_DIR_PATH>"
+}

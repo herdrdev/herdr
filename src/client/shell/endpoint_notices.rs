@@ -65,7 +65,7 @@ pub(super) fn render_notice(
         area,
         &notice.title,
         &notice.body,
-        crate::config::ToastHerdrPosition::TopRight,
+        crate::config::ToastShepherdPosition::TopRight,
         top_offset,
         match notice.key.kind {
             ClientEndpointNoticeKind::Unsupported | ClientEndpointNoticeKind::Rejected => {

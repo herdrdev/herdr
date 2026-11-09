@@ -5,9 +5,9 @@ fn pane_close_only_removes_the_target_tab_when_other_tabs_exist() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let socket_path = runtime_dir.join("herdr.sock");
+    let socket_path = runtime_dir.join("shepherd.sock");
 
-    let herdr = spawn_herdr(&config_home, &runtime_dir, &socket_path);
+    let shepherd = spawn_shepherd(&config_home, &runtime_dir, &socket_path);
     wait_for_socket(&socket_path, Duration::from_secs(5));
 
     let created = run_cli(
@@ -57,7 +57,7 @@ fn pane_close_only_removes_the_target_tab_when_other_tabs_exist() {
     let tabs_json: serde_json::Value = serde_json::from_slice(&tabs.stdout).unwrap();
     assert_eq!(tabs_json["result"]["tabs"].as_array().unwrap().len(), 1);
 
-    cleanup_spawned_herdr(herdr, base);
+    cleanup_spawned_shepherd(shepherd, base);
 }
 
 #[test]
@@ -65,9 +65,9 @@ fn pane_close_removes_the_workspace_when_it_closes_the_last_pane() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let socket_path = runtime_dir.join("herdr.sock");
+    let socket_path = runtime_dir.join("shepherd.sock");
 
-    let herdr = spawn_herdr(&config_home, &runtime_dir, &socket_path);
+    let shepherd = spawn_shepherd(&config_home, &runtime_dir, &socket_path);
     wait_for_socket(&socket_path, Duration::from_secs(5));
 
     let created = run_cli(
@@ -94,7 +94,7 @@ fn pane_close_removes_the_workspace_when_it_closes_the_last_pane() {
         .unwrap()
         .is_empty());
 
-    cleanup_spawned_herdr(herdr, base);
+    cleanup_spawned_shepherd(shepherd, base);
 }
 
 #[test]
@@ -102,9 +102,9 @@ fn pane_run_read_and_wait_commands_work() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let socket_path = runtime_dir.join("herdr.sock");
+    let socket_path = runtime_dir.join("shepherd.sock");
 
-    let herdr = spawn_herdr(&config_home, &runtime_dir, &socket_path);
+    let shepherd = spawn_shepherd(&config_home, &runtime_dir, &socket_path);
     wait_for_socket(&socket_path, Duration::from_secs(5));
 
     send_request(
@@ -164,7 +164,7 @@ fn pane_run_read_and_wait_commands_work() {
     assert!(text.contains("alpha"));
     assert!(text.contains("ready"));
 
-    cleanup_spawned_herdr(herdr, base);
+    cleanup_spawned_shepherd(shepherd, base);
 }
 
 #[test]
@@ -172,9 +172,9 @@ fn wait_output_matches_recent_unwrapped_text() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let socket_path = runtime_dir.join("herdr.sock");
+    let socket_path = runtime_dir.join("shepherd.sock");
 
-    let herdr = spawn_herdr(&config_home, &runtime_dir, &socket_path);
+    let shepherd = spawn_shepherd(&config_home, &runtime_dir, &socket_path);
     wait_for_socket(&socket_path, Duration::from_secs(5));
 
     let created = run_cli(
@@ -239,7 +239,7 @@ fn wait_output_matches_recent_unwrapped_text() {
     let text = String::from_utf8(read.stdout).unwrap();
     assert!(text.contains(token));
 
-    cleanup_spawned_herdr(herdr, base);
+    cleanup_spawned_shepherd(shepherd, base);
 }
 
 #[test]
@@ -247,9 +247,9 @@ fn closing_pane_terminates_processes_inside_it() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let socket_path = runtime_dir.join("herdr.sock");
+    let socket_path = runtime_dir.join("shepherd.sock");
 
-    let herdr = spawn_herdr(&config_home, &runtime_dir, &socket_path);
+    let shepherd = spawn_shepherd(&config_home, &runtime_dir, &socket_path);
     wait_for_socket(&socket_path, Duration::from_secs(5));
 
     let created = run_cli(
@@ -300,7 +300,7 @@ fn closing_pane_terminates_processes_inside_it() {
         "process {pid} survived pane close"
     );
 
-    cleanup_spawned_herdr(herdr, base);
+    cleanup_spawned_shepherd(shepherd, base);
 }
 
 #[test]
@@ -308,9 +308,9 @@ fn closing_workspace_terminates_processes_inside_it() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let socket_path = runtime_dir.join("herdr.sock");
+    let socket_path = runtime_dir.join("shepherd.sock");
 
-    let herdr = spawn_herdr(&config_home, &runtime_dir, &socket_path);
+    let shepherd = spawn_shepherd(&config_home, &runtime_dir, &socket_path);
     wait_for_socket(&socket_path, Duration::from_secs(5));
 
     let created = run_cli(
@@ -353,7 +353,7 @@ fn closing_workspace_terminates_processes_inside_it() {
         "process {pid} survived workspace close"
     );
 
-    cleanup_spawned_herdr(herdr, base);
+    cleanup_spawned_shepherd(shepherd, base);
 }
 
 #[test]
@@ -361,9 +361,9 @@ fn workspace_ids_and_public_pane_ids_are_stable() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let socket_path = runtime_dir.join("herdr.sock");
+    let socket_path = runtime_dir.join("shepherd.sock");
 
-    let herdr = spawn_herdr(&config_home, &runtime_dir, &socket_path);
+    let shepherd = spawn_shepherd(&config_home, &runtime_dir, &socket_path);
     wait_for_socket(&socket_path, Duration::from_secs(5));
 
     let ws1_json = run_cli_json(
@@ -506,17 +506,17 @@ fn workspace_ids_and_public_pane_ids_are_stable() {
         format!("{ws1_id}:p4")
     );
 
-    cleanup_spawned_herdr(herdr, base);
+    cleanup_spawned_shepherd(shepherd, base);
 }
 
 #[test]
-fn pane_shell_gets_herdr_socket_and_pane_env() {
+fn pane_shell_gets_shepherd_socket_and_pane_env() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let socket_path = runtime_dir.join("herdr.sock");
+    let socket_path = runtime_dir.join("shepherd.sock");
 
-    let herdr = spawn_herdr(&config_home, &runtime_dir, &socket_path);
+    let shepherd = spawn_shepherd(&config_home, &runtime_dir, &socket_path);
     wait_for_socket(&socket_path, Duration::from_secs(5));
 
     let created = send_request(
@@ -539,7 +539,7 @@ fn pane_shell_gets_herdr_socket_and_pane_env() {
             "run",
             "1-1",
             &format!(
-                "printf '%s\\n%s\\n' \"$HERDR_SOCKET_PATH\" \"$HERDR_PANE_ID\" > {}",
+                "printf '%s\\n%s\\n' \"$SHEPHERD_SOCKET_PATH\" \"$SHEPHERD_PANE_ID\" > {}",
                 env_capture.display()
             ),
         ],
@@ -564,7 +564,7 @@ fn pane_shell_gets_herdr_socket_and_pane_env() {
     );
     assert!(text.contains(&pane_id), "env file was: {text:?}");
 
-    cleanup_spawned_herdr(herdr, base);
+    cleanup_spawned_shepherd(shepherd, base);
 }
 
 #[test]
@@ -572,9 +572,9 @@ fn pane_agent_reports_accept_options_before_pane() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let socket_path = runtime_dir.join("herdr.sock");
+    let socket_path = runtime_dir.join("shepherd.sock");
 
-    let herdr = spawn_herdr(&config_home, &runtime_dir, &socket_path);
+    let shepherd = spawn_shepherd(&config_home, &runtime_dir, &socket_path);
     wait_for_socket(&socket_path, Duration::from_secs(5));
 
     let created = send_request(
@@ -634,7 +634,7 @@ fn pane_agent_reports_accept_options_before_pane() {
     assert!(session_report.stdout.is_empty());
     assert!(session_report.stderr.is_empty());
 
-    cleanup_spawned_herdr(herdr, base);
+    cleanup_spawned_shepherd(shepherd, base);
 }
 
 #[test]
@@ -642,7 +642,7 @@ fn pane_read_rejects_invalid_value_with_usage_error() {
     // Invalid option values fail as CLI usage errors before any server
     // contact: exit 2 with the plain parser message, not the old
     // `Error: Custom { ... }` io::Error wrapper from main.
-    let socket_path = Path::new("/tmp/herdr-cli-invalid-values-no-server.sock");
+    let socket_path = Path::new("/tmp/shepherd-cli-invalid-values-no-server.sock");
 
     let read = run_cli(socket_path, &["pane", "read", "w1:p1", "--source", "bogus"]);
     assert_eq!(read.status.code(), Some(2));

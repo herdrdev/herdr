@@ -59,7 +59,8 @@ pub(crate) fn remote_ssh_config_paths() -> super::RemoteSshConfigPaths {
 
 pub(crate) fn create_remote_ssh_config_dir(_control_socket_name: &str) -> std::io::Result<PathBuf> {
     for attempt in 0..100 {
-        let dir = std::env::temp_dir().join(format!("herdr-ssh-{}-{attempt}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("shepherd-ssh-{}-{attempt}", std::process::id()));
         match create_remote_private_dir(&dir) {
             Ok(()) => return Ok(dir),
             Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
@@ -68,7 +69,7 @@ pub(crate) fn create_remote_ssh_config_dir(_control_socket_name: &str) -> std::i
     }
     Err(std::io::Error::new(
         std::io::ErrorKind::AlreadyExists,
-        "failed to create private herdr ssh config directory",
+        "failed to create private shepherd ssh config directory",
     ))
 }
 

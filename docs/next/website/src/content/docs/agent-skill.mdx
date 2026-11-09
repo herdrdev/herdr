@@ -1,15 +1,15 @@
 ---
 title: Agent skill file
-description: Install Herdr instructions for Claude Code or another coding agent.
+description: Install Shepherd instructions for Claude Code or another coding agent.
 ---
 
 Herdr ships a reusable agent skill file at [`skills/herdr/SKILL.md`](https://github.com/herdrdev/herdr/blob/master/skills/herdr/SKILL.md).
 
-Install that file into any coding agent that supports reusable skills or custom instructions. The skill teaches the agent how to control Herdr from inside a Herdr pane.
+Install that file into any coding agent that supports reusable skills or custom instructions. The skill teaches the agent how to control Shepherd from inside a Shepherd pane.
 
 ## What the skill does
 
-The skill tells an agent to use the `herdr` CLI when `HERDR_ENV=1` is set. That means the agent is running inside a Herdr-managed pane and can safely talk to the local Herdr socket.
+The skill tells an agent to use the `shepherd` CLI when `SHEPHERD_ENV=1` is set. That means the agent is running inside a Shepherd-managed pane and can safely talk to the local Shepherd socket.
 
 With the skill installed, an agent can:
 
@@ -19,7 +19,7 @@ With the skill installed, an agent can:
 - wait for servers, tests, or another agent to finish
 - start helper agents in sibling panes
 
-The skill is a Markdown instruction file for agents. If Herdr is already installed, run `herdr --skill` to print the release-matched copy bundled with that binary.
+The skill is a Markdown instruction file for agents. If Shepherd is already installed, run `shepherd --skill` to print the release-matched copy bundled with that binary.
 
 ## Install it
 
@@ -39,22 +39,22 @@ Use the repository copy as the manual fallback and source of truth:
 https://github.com/herdrdev/herdr/blob/master/skills/herdr/SKILL.md
 ```
 
-For agents with a skill system, install that file as a skill named `herdr`. For agents without a skill system, paste the file into the agent's project or user instructions.
+For agents with a skill system, install that file as a skill named `shepherd`. For agents without a skill system, paste the file into the agent's project or user instructions.
 
-After installation, start the agent inside Herdr:
+After installation, start the agent inside Shepherd:
 
 ```bash
-herdr
+shepherd
 claude
 ```
 
-Or use any other coding agent in a Herdr pane so `HERDR_ENV=1` is available to the agent process.
+Or use any other coding agent in a Shepherd pane so `SHEPHERD_ENV=1` is available to the agent process.
 
 ## Safety rule
 
-The skill starts with one guardrail: if `HERDR_ENV=1` is not set, the agent should stop and say it is not running inside a Herdr-managed pane.
+The skill starts with one guardrail: if `SHEPHERD_ENV=1` is not set, the agent should stop and say it is not running inside a Shepherd-managed pane.
 
-This prevents an agent outside Herdr from trying to control a session it does not own.
+This prevents an agent outside Shepherd from trying to control a session it does not own.
 
 ## Agent-facing reference
 

@@ -1,9 +1,9 @@
-//! Headless server mode — runs the herdr event loop without a real terminal.
+//! Headless server mode — runs the shepherd event loop without a real terminal.
 //!
 //! The server:
 //! - Does not enter raw mode or read stdin
-//! - Creates and listens on both `herdr.sock` (existing JSON API) and
-//!   `herdr-client.sock` (new binary protocol)
+//! - Creates and listens on both `shepherd.sock` (existing JSON API) and
+//!   `shepherd-client.sock` (new binary protocol)
 //! - Initializes AppState and all PTYs from session restore or fresh state
 //! - Runs the main event loop (drain events, drain API requests, scheduled tasks)
 //! - Renders to a virtual ratatui Buffer in memory
@@ -188,7 +188,7 @@ enum AltScreenReadConflict {
     Defer,
 }
 
-/// The headless server — runs the herdr event loop without a real terminal.
+/// The headless server — runs the shepherd event loop without a real terminal.
 pub struct HeadlessServer {
     app: app::App,
     #[cfg(unix)]
@@ -268,7 +268,7 @@ fn spawn_windows_client_accept_thread(
     should_quit: Arc<AtomicBool>,
     server_event_tx: mpsc::Sender<ServerEvent>,
 ) -> io::Result<std::thread::JoinHandle<()>> {
-    crate::thread_spawn::spawn_named("herdr-client-accept", move || {
+    crate::thread_spawn::spawn_named("shepherd-client-accept", move || {
         let mut next_client_id = 1_u64;
         while !should_quit.load(Ordering::Acquire) {
             let stream = match listener.accept() {
@@ -293,7 +293,7 @@ fn spawn_windows_client_accept_thread(
 
             let should_quit = should_quit.clone();
             let server_event_tx = server_event_tx.clone();
-            let spawned = crate::thread_spawn::spawn_named("herdr-client-conn", move || {
+            let spawned = crate::thread_spawn::spawn_named("shepherd-client-conn", move || {
                 if let Err(err) = crate::server::client_transport::handle_client_handshake(
                     stream,
                     client_id,
@@ -318,12 +318,13 @@ impl HeadlessServer {
     /// 2. Binds the client socket listener
     /// 3. Returns the server ready to run
     pub fn new(
-        app: app::App,
+        mut app: app::App,
         config_diagnostics: &[String],
         api_tx: Option<api::ApiRequestSender>,
         api_server: Option<api::ServerHandle>,
         server_stop: ServerStop,
     ) -> io::Result<Self> {
+        app.start_shepherd_service_if_enabled(api_tx.clone());
         let should_quit = server_stop.flag().clone();
         let client_path = client_socket_path();
         prepare_socket_path(&client_path)?;
@@ -492,6 +493,7 @@ impl HeadlessServer {
 
             self.app.sync_focus_events();
             self.app.sync_session_save_schedule();
+            self.app.sync_shepherd_agents_panel();
 
             // 4. Accept new client connections.
             self.accept_client_connections()?;
@@ -1457,7 +1459,7 @@ impl HeadlessServer {
 
     /// Renders `ui.window_title` against the foreground client view. `None` means
     /// window titles are disabled or every token resolved empty, which leaves
-    /// the client on Herdr's default title.
+    /// the client on Shepherd's default title.
     fn configured_window_title(&self) -> Option<String> {
         self.foreground_window_title_target()
             .map_or_else(
@@ -1471,7 +1473,7 @@ impl HeadlessServer {
     }
 
     /// Pushes the configured outer window title to the foreground client when it
-    /// changed. Herdr consumes each pane's own `OSC 0`/`OSC 2`, so without this
+    /// changed. Shepherd consumes each pane's own `OSC 0`/`OSC 2`, so without this
     /// the host terminal title never follows the session — which is what window
     /// managers read for tab and group bar labels.
     fn sync_window_title(&mut self) {
@@ -1539,7 +1541,7 @@ impl HeadlessServer {
         };
         let set_title = title.is_some();
         // An explicit title suppresses `ui.window_title` until it is cleared,
-        // and clearing restores the configured title rather than only "herdr".
+        // and clearing restores the configured title rather than only "shepherd".
         self.api_window_title = title.clone();
         let title = title.or_else(|| self.configured_window_title());
         let changed = self.send_window_title(title);
@@ -2109,7 +2111,8 @@ impl HeadlessServer {
                 size,
                 max,
             } => {
-                let detail = format!("Input message is {size} bytes; Herdr's limit is {max} bytes");
+                let detail =
+                    format!("Input message is {size} bytes; Shepherd's limit is {max} bytes");
                 let message = if matches!(
                     self.clients.get(&client_id).map(|client| &client.mode),
                     Some(ClientConnectionMode::ClientShell)
@@ -2906,6 +2909,53 @@ impl HeadlessServer {
         let _ = msg.respond_to.send(response);
     }
 
+    fn is_shepherd_method(method: &api::schema::Method) -> bool {
+        matches!(
+            method,
+            api::schema::Method::ShepherdCall(_)
+                | api::schema::Method::ShepherdAgentList(_)
+                | api::schema::Method::ShepherdAgentSpawn(_)
+                | api::schema::Method::ShepherdAgentKill(_)
+                | api::schema::Method::ShepherdAgentClean(_)
+                | api::schema::Method::ShepherdAgentFocus(_)
+                | api::schema::Method::ShepherdAgentReconcile(_)
+                | api::schema::Method::ShepherdAgentResume(_)
+                | api::schema::Method::ShepherdTaskList(_)
+                | api::schema::Method::ShepherdTaskCreate(_)
+                | api::schema::Method::ShepherdTaskArchive(_)
+                | api::schema::Method::ShepherdRunList(_)
+                | api::schema::Method::ShepherdRunStart(_)
+                | api::schema::Method::ShepherdRunApprove(_)
+                | api::schema::Method::ShepherdRunReject(_)
+                | api::schema::Method::ShepherdSkillList(_)
+                | api::schema::Method::ShepherdGitStatus(_)
+                | api::schema::Method::ShepherdSnapshotCapture(_)
+                | api::schema::Method::ShepherdSnapshotList(_)
+                | api::schema::Method::ShepherdSnapshotShow(_)
+                | api::schema::Method::ShepherdSnapshotDiff(_)
+                | api::schema::Method::ShepherdSnapshotRestore(_)
+                | api::schema::Method::ShepherdSnapshotDelete(_)
+                | api::schema::Method::ShepherdSnapshotPrune(_)
+                | api::schema::Method::ShepherdPatternList(_)
+                | api::schema::Method::ShepherdPatternGet(_)
+                | api::schema::Method::ShepherdPatternSave(_)
+                | api::schema::Method::ShepherdPatternDelete(_)
+                | api::schema::Method::ShepherdPatternValidate(_)
+                | api::schema::Method::ShepherdPatternRunStart(_)
+                | api::schema::Method::ShepherdPatternRunList(_)
+                | api::schema::Method::ShepherdPatternRunShow(_)
+                | api::schema::Method::ShepherdPatternRunPause(_)
+                | api::schema::Method::ShepherdPatternRunResume(_)
+                | api::schema::Method::ShepherdPatternRunStop(_)
+                | api::schema::Method::ShepherdTopicList(_)
+                | api::schema::Method::ShepherdTopicCreate(_)
+                | api::schema::Method::ShepherdTopicPublish(_)
+                | api::schema::Method::ShepherdTopicTail(_)
+                | api::schema::Method::ShepherdTopicReplay(_)
+                | api::schema::Method::ShepherdTopicGroups(_)
+        )
+    }
+
     fn handle_api_request_with_shutdown_check_inner(
         &mut self,
         msg: api::ApiRequestMessage,
@@ -2958,6 +3008,39 @@ impl HeadlessServer {
                 self.handle_notification_show_api(msg.request.id.clone(), params.clone());
             let _ = msg.respond_to.send(response);
             return true;
+        }
+
+        if Self::is_shepherd_method(&msg.request.method) {
+            if let Some(ref svc) = self.app.shepherd_service {
+                let job = crate::shepherd::ShepherdCallJob {
+                    request_id: msg.request.id.clone(),
+                    method: msg.request.method.clone(),
+                    respond_to: msg.respond_to.clone(),
+                };
+                if let Err(err) = svc.enqueue_call(job) {
+                    let response = serde_json::to_string(&api::schema::ErrorResponse {
+                        id: msg.request.id,
+                        error: api::schema::ErrorBody {
+                            code: "shepherd_error".into(),
+                            message: err,
+                        },
+                    })
+                    .unwrap_or_else(|_| "{}".to_string());
+                    let _ = msg.respond_to.send(response);
+                }
+                return true;
+            } else {
+                let response = serde_json::to_string(&api::schema::ErrorResponse {
+                    id: msg.request.id,
+                    error: api::schema::ErrorBody {
+                        code: "shepherd_not_running".into(),
+                        message: "Shepherd service is not running; enable shepherd in config (shepherd.enabled = true)".into(),
+                    },
+                })
+                .unwrap_or_else(|_| "{}".to_string());
+                let _ = msg.respond_to.send(response);
+                return false;
+            }
         }
 
         match &msg.request.method {
@@ -3125,7 +3208,7 @@ impl HeadlessServer {
         let _ = msg.respond_to.send(response);
 
         // Forward new toast state only when a client-local delivery mode is selected.
-        // Herdr delivery renders the toast in-frame and must not ask clients to
+        // Shepherd delivery renders the toast in-frame and must not ask clients to
         // show a terminal or system notification.
         let toast_after = self.app.state.toast.clone();
         let forwarded_toast_from_state = if should_forward_toast_to_clients(

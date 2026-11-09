@@ -74,7 +74,7 @@ mod tests {
         let _guard = pty_fd_test_lock().lock().expect("pty fd test lock");
         let before = parent_pty_fd_count();
         let mut cmd = CommandBuilder::new("/bin/cat");
-        cmd.env(crate::HERDR_ENV_VAR, crate::HERDR_ENV_VALUE);
+        cmd.env(crate::SHEPHERD_ENV_VAR, crate::SHEPHERD_ENV_VALUE);
 
         let mut spawned =
             spawn_with_portable_pty(24, 80, cmd).expect("portable pty setup succeeds");
@@ -83,7 +83,7 @@ mod tests {
         assert_eq!(
             after_spawn,
             before + 1,
-            "portable-pty setup should leave only the Herdr-owned master fd in the parent: {:?}",
+            "portable-pty setup should leave only the Shepherd-owned master fd in the parent: {:?}",
             parent_pty_fd_targets()
         );
 

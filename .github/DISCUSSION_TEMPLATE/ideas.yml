@@ -12,7 +12,7 @@ body:
     id: requested-change
     attributes:
       label: requested change
-      description: what would you like herdr to support?
+      description: what would you like shepherd to support?
     validations:
       required: true
 

@@ -2,7 +2,7 @@ id = "pi"
 version = "2026.10.01.1"
 min_engine_version = 1
 updated_at = "2026-10-01T00:00:00Z"
-aliases = ["herdr:pi"]
+aliases = ["shepherd:pi"]
 
 [[rules]]
 id = "working_literal"

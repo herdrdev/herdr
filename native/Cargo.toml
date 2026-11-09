@@ -1,0 +1,4 @@
+# The native app lives in its own workspace so iced and wgpu do not enter the main project's lockfile.
+[workspace]
+resolver = "2"
+members = ["app-core", "app"]

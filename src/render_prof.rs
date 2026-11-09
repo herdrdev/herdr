@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-const ENV_VAR: &str = "HERDR_RENDER_PROF";
+const ENV_VAR: &str = "SHEPHERD_RENDER_PROF";
 
 static ENABLED: OnceLock<bool> = OnceLock::new();
 static PROFILER: OnceLock<Mutex<RenderProfiler>> = OnceLock::new();

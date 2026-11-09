@@ -14,7 +14,8 @@ use super::common::{AgentStatus, PaneAgentState, ReadFormat, ReadSource, SplitDi
 #[serde(rename_all = "snake_case")]
 pub enum PaneRightClickTarget {
     #[default]
-    Herdr,
+    #[serde(rename = "herdr", alias = "shepherd")] // wire contract v1 compatibility
+    Shepherd,
     Pane,
 }
 
@@ -33,7 +34,7 @@ crate::cli::projection::cli_params! {
         #[serde(default)]
         pub focus: bool => Field::new(false).input(binding::boolean("focus", true)).input(binding::boolean("no-focus", false)),
         #[serde(default)]
-        pub right_click: PaneRightClickTarget => Field::new(PaneRightClickTarget::Herdr).input(binding::right_click()),
+        pub right_click: PaneRightClickTarget => Field::new(PaneRightClickTarget::Shepherd).input(binding::right_click()),
         #[serde(default, skip_serializing_if = "HashMap::is_empty")]
         pub env: HashMap<String, String> => Field::new(HashMap::new()).input(binding::environment()),
     }
@@ -43,7 +44,7 @@ crate::cli::projection::cli_params! {
     #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
     pub struct PaneInputSetParams => PaneInputProjection {
         pub pane_id: String => binding::input_target(),
-        pub right_click: PaneRightClickTarget => Field::new(PaneRightClickTarget::Herdr).input(binding::right_click().required()),
+        pub right_click: PaneRightClickTarget => Field::new(PaneRightClickTarget::Shepherd).input(binding::right_click().required()),
     }
 }
 
@@ -415,7 +416,7 @@ crate::cli::projection::cli_params! {
         pub agent_session_id: Option<String> => Field::new(None).input(binding::optional_text("agent-session-id", "ID")),
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub agent_session_path: Option<String> => Field::new(None).input(binding::optional_text("agent-session-path", "PATH").path()),
-        /// Command that resumes this agent's session after a Herdr restart. The
+        /// Command that resumes this agent's session after a Shepherd restart. The
         /// first element must be a plain command name.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub resume_argv: Option<Vec<String>> => Field::new(None).input(binding::resume()),
@@ -436,7 +437,7 @@ crate::cli::projection::cli_params! {
         pub agent_session_path: Option<String> => Field::new(None).input(binding::optional_text("agent-session-path", "PATH").path()),
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub session_start_source: Option<String> => Field::new(None).input(binding::optional_text("session-start-source", "SOURCE")),
-        /// Command that resumes this agent's session after a Herdr restart. The
+        /// Command that resumes this agent's session after a Shepherd restart. The
         /// first element must be a plain command name.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub resume_argv: Option<Vec<String>> => Field::new(None).input(binding::resume()),

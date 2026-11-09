@@ -284,7 +284,7 @@ fn ctrl_hover_ignores_late_reply_after_pointer_leaves() {
     let ignored = state.handle_raw_events(vec![RawInputEvent::Mouse(mouse)]);
     assert!(
         ignored.actions.is_empty(),
-        "native links must not request Herdr hover"
+        "native links must not request Shepherd hover"
     );
     assert!(state.link_hover.is_none());
 }

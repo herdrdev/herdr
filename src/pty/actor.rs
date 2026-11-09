@@ -226,7 +226,7 @@ mod windows {
                 enter_completion: None,
             }));
 
-            crate::thread_spawn::spawn_named("herdr-pty-writer", move || {
+            crate::thread_spawn::spawn_named("shepherd-pty-writer", move || {
                 run_writer(&mut writer, write_rx);
                 debug!(pane_id, "windows pty writer thread exiting");
             })?;
@@ -243,7 +243,7 @@ mod windows {
             {
                 let write_tx = write_tx.clone();
                 let response_order = Arc::clone(&response_order);
-                crate::thread_spawn::spawn_named("herdr-pty-reader", move || {
+                crate::thread_spawn::spawn_named("shepherd-pty-reader", move || {
                     let mut buf = [0u8; 8192];
                     loop {
                         match reader.read(&mut buf) {
@@ -274,7 +274,7 @@ mod windows {
 
             {
                 let write_tx = write_tx.clone();
-                crate::thread_spawn::spawn_named("herdr-pty-control", move || {
+                crate::thread_spawn::spawn_named("shepherd-pty-control", move || {
                     for command in control_rx {
                         match command {
                             PtyIoControlCommand::Resize(request) => {

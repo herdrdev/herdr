@@ -1,0 +1,5 @@
+brain	claude/opus
+coder	codex/default
+docs	gemini/default
+reviewer	gemini/default
+tester	claude/sonnet

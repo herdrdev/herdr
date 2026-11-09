@@ -1,30 +1,30 @@
 ---
 title: Plugins
-description: Author local Herdr plugins with manifest actions, event hooks, and panes.
+description: Author local Shepherd plugins with manifest actions, event hooks, and panes.
 ---
 
-Herdr plugins are shareable, executable workflow packages. A plugin can be a
+Shepherd plugins are shareable, executable workflow packages. A plugin can be a
 Bash script, JavaScript app, Lua script, Rust binary, or any other argv command
-your machine can run. Herdr owns the host surface: installation, manifest
+your machine can run. Shepherd owns the host surface: installation, manifest
 validation, keybindings, terminal panes, events, invocation context, and socket
 access. The plugin owns its implementation language, dependencies, files, and
 durable state.
 
-Plugins exist so Herdr can stay lean. The core stays focused on terminal
+Plugins exist so Shepherd can stay lean. The core stays focused on terminal
 workspaces, panes, agents, and a stable CLI/socket API. Plugins turn that
 existing extension surface into reusable workflows that people can build,
-install, and share without adding every workflow to Herdr itself.
+install, and share without adding every workflow to Shepherd itself.
 
-A plugin is a directory with a `herdr-plugin.toml` manifest and commands Herdr
-can launch. Herdr validates the manifest, injects runtime context, starts the
-declared commands, and records logs. The commands call back into Herdr through
+A plugin is a directory with a `shepherd-plugin.toml` manifest and commands Shepherd
+can launch. Shepherd validates the manifest, injects runtime context, starts the
+declared commands, and records logs. The commands call back into Shepherd through
 the CLI or socket when they need to do more work.
 
-There is no separate plugin SDK or restricted command set. The entire Herdr CLI
+There is no separate plugin SDK or restricted command set. The entire Shepherd CLI
 is the plugin API. Every command in the
 [CLI reference](/docs/cli-reference/) is available to a plugin, and a plugin can
-run anything you can run yourself as `herdr ...`. Most plugins should call Herdr
-through `HERDR_BIN_PATH`, which points at the running Herdr binary. That keeps
+run anything you can run yourself as `shepherd ...`. Most plugins should call Shepherd
+through `SHEPHERD_BIN_PATH`, which points at the running Shepherd binary. That keeps
 plugins portable across Unix sockets and Windows named pipes. Use the
 [socket API](/docs/socket-api/) when you want to send raw JSON requests yourself.
 
@@ -35,33 +35,33 @@ the manifest.
 ## Trust and security
 
 A plugin is ordinary code that runs on your machine. Its build and runtime
-commands run as your user, inherit your environment, and can call the full Herdr
+commands run as your user, inherit your environment, and can call the full Shepherd
 CLI. Treat a plugin like any extension you add to an editor, shell, or coding
 agent.
 
 Install or link plugins only from authors and repositories you trust. Before
-installing or linking one, skim the `herdr-plugin.toml` manifest and the scripts
-or binaries it runs. `herdr plugin install` shows a preview of the source and
+installing or linking one, skim the `shepherd-plugin.toml` manifest and the scripts
+or binaries it runs. `shepherd plugin install` shows a preview of the source and
 the commands it will run in interactive terminals, so you can review before
 confirming. Use `--yes` for
 sources you already trust, and pin `--ref` when you want a specific revision.
 
-Herdr validates the manifest and keeps each plugin's config and state in its own
+Shepherd validates the manifest and keeps each plugin's config and state in its own
 directory, but it does not review or sandbox plugin code. Third-party plugins
-come from their authors, not Herdr; you are responsible for deciding whether to
+come from their authors, not Shepherd; you are responsible for deciding whether to
 run them.
 
 ## Manifest
 
-The manifest is the contract between Herdr and the plugin. It declares package
+The manifest is the contract between Shepherd and the plugin. It declares package
 metadata, supported platforms, optional build commands, and the entrypoints
-Herdr can run.
+Shepherd can run.
 
 ```toml
 id = "example.layout"
 name = "Layout"
 version = "0.1.0"
-min_herdr_version = "0.7.0"
+min_shepherd_version = "0.7.0"
 description = "Apply project layouts"
 platforms = ["linux", "macos", "windows"]
 
@@ -83,13 +83,13 @@ command = ["node", "dist/apply.js"]
 
 [[events]]
 on = "worktree.created"
-command = ["herdr", "workspace", "list"]
+command = ["shepherd", "workspace", "list"]
 
 [[panes]]
 id = "board"
 title = "Project board"
 placement = "overlay"
-command = ["herdr-board"]
+command = ["shepherd-board"]
 
 [[link_handlers]]
 id = "github-issue"
@@ -98,16 +98,16 @@ pattern = "^https://github\\.com/[^/]+/[^/]+/(issues|pull)/[0-9]+$"
 action = "apply"
 ```
 
-Top-level `id`, `name`, `version`, and `min_herdr_version` are required.
-Set `min_herdr_version` to the oldest Herdr version that supports the plugin
-APIs, event names, and manifest fields your plugin uses. Herdr refuses to link
+Top-level `id`, `name`, `version`, and `min_shepherd_version` are required.
+Set `min_shepherd_version` to the oldest Shepherd version that supports the plugin
+APIs, event names, and manifest fields your plugin uses. Shepherd refuses to link
 or install a plugin when its minimum version is newer than the current binary.
 `description` is optional. Plugin ids may use ASCII letters, digits, dot,
 colon, underscore, and hyphen.
 
 Action ids, pane ids, and link handler ids are local ids inside the plugin.
 They may use ASCII letters, digits, colon, underscore, and hyphen, but not
-dots. Each id type must be unique inside a plugin. Herdr qualifies action ids
+dots. Each id type must be unique inside a plugin. Shepherd qualifies action ids
 as `plugin.id.action` when it needs a globally unique name.
 
 Use `platforms = ["linux", "macos", "windows"]` to declare where the plugin
@@ -116,18 +116,18 @@ handlers can also declare their own `platforms`; item-level platforms override
 the top-level list. Local plugins without top-level `platforms` link with a
 warning.
 
-`command` values are argv arrays. Herdr does not run them through a shell, so
+`command` values are argv arrays. Shepherd does not run them through a shell, so
 there is no shell expansion unless your command starts a shell itself. Put
 language-specific behavior in your script or binary.
 
 ## First plugin
 
-Start with a directory that contains `herdr-plugin.toml` and one executable
+Start with a directory that contains `shepherd-plugin.toml` and one executable
 script or program:
 
 ```text
 my-plugin/
-  herdr-plugin.toml
+  shepherd-plugin.toml
   index.js
 ```
 
@@ -135,7 +135,7 @@ my-plugin/
 id = "example.workspace-tools"
 name = "Workspace Tools"
 version = "0.1.0"
-min_herdr_version = "0.7.0"
+min_shepherd_version = "0.7.0"
 description = "Small workspace helpers"
 platforms = ["linux", "macos", "windows"]
 
@@ -146,13 +146,13 @@ contexts = ["workspace"]
 command = ["node", "index.js"]
 ```
 
-Inside the command, call back into Herdr with `HERDR_BIN_PATH`:
+Inside the command, call back into Shepherd with `SHEPHERD_BIN_PATH`:
 
 ```js
 const { spawnSync } = require("node:child_process");
 
-const herdr = process.env.HERDR_BIN_PATH ?? "herdr";
-const result = spawnSync(herdr, ["workspace", "list"], {
+const shepherd = process.env.SHEPHERD_BIN_PATH ?? "shepherd";
+const result = spawnSync(shepherd, ["workspace", "list"], {
   encoding: "utf8",
   stdio: ["ignore", "pipe", "pipe"],
 });
@@ -172,26 +172,26 @@ Install an example plugin:
 
 ```bash
 herdr plugin install ogulcancelik/herdr-plugin-examples/agent-telegram-notify
-herdr plugin update
-herdr plugin config-dir examples.agent-telegram-notify
-herdr plugin list
-herdr plugin action list --plugin examples.agent-telegram-notify
+shepherd plugin update
+shepherd plugin config-dir examples.agent-telegram-notify
+shepherd plugin list
+shepherd plugin action list --plugin examples.agent-telegram-notify
 ```
 
 When you are authoring a local plugin, link the working directory instead:
 
 ```bash
-herdr plugin link /path/to/plugin
-herdr plugin config-dir example.layout
-herdr plugin action list --plugin example.layout
-herdr plugin action invoke example.layout.apply
-herdr plugin pane open --plugin example.layout --entrypoint board
-herdr plugin log list --plugin example.layout
+shepherd plugin link /path/to/plugin
+shepherd plugin config-dir example.layout
+shepherd plugin action list --plugin example.layout
+shepherd plugin action invoke example.layout.apply
+shepherd plugin pane open --plugin example.layout --entrypoint board
+shepherd plugin log list --plugin example.layout
 ```
 
 `plugin install` accepts GitHub shorthand only, such as
 `owner/repo/subdir`. It clones with `git`, shows a preview in interactive
-terminals, builds in a new Herdr-managed installation directory, and registers
+terminals, builds in a new Shepherd-managed installation directory, and registers
 it. Use `--yes` for noninteractive installs. Updates and reinstalls leave the
 previous installation in place: running commands and panes keep their original
 files, while new invocations use the new installation without a config reload.
@@ -202,9 +202,9 @@ target, or only the listed plugin ids or GitHub sources. It refetches the ref
 recorded during install, skips unchanged commits, and ignores locally linked
 plugins during bulk updates. Use `--yes` for noninteractive updates.
 Installed and linked plugins, including their enabled state, are global to the
-current user and available in every Herdr session. Both `plugin install` and
-`plugin link` can register plugins while no Herdr server is running. Plugins
-installed only in a named session on Herdr 0.7.3 must be installed or linked
+current user and available in every Shepherd session. Both `plugin install` and
+`plugin link` can register plugins while no Shepherd server is running. Plugins
+installed only in a named session on Shepherd 0.7.3 must be installed or linked
 again. Existing plugin config and state remain in place.
 Installing over a locally linked plugin is refused; unlink or uninstall the
 local plugin first. `plugin install` and `plugin link` create the plugin's
@@ -227,72 +227,72 @@ useful for local development.
 The example cookbook repo is `ogulcancelik/herdr-plugin-examples`. It contains
 separate example plugins in subdirectories, including `agent-telegram-notify`,
 `github-link-preview`, and `dev-layout-bootstrap`. Use them as examples to copy;
-Herdr does not maintain them as official plugins.
+Shepherd does not maintain them as official plugins.
 
 ## Build commands
 
 Build commands run during GitHub `plugin install` after confirmation and before
-Herdr registers the plugin. If a build command fails, install aborts and the
+Shepherd registers the plugin. If a build command fails, install aborts and the
 plugin is not registered. `plugin link` does not run build commands; local
 authors build their working tree themselves. Build commands may generate files,
-but changing `herdr-plugin.toml` after the install preview aborts install. Build
+but changing `shepherd-plugin.toml` after the install preview aborts install. Build
 failures show the plugin id, build index, working directory, command, exit
 status or spawn error, and capped stdout/stderr without interpreting tool output.
 
 Build commands are plain argv commands too, but they do not receive runtime
-plugin context or Herdr socket env. Plugin authors should document required
-system tools such as `cargo`, `npm`, `bun`, or `lua`; Herdr reports build
+plugin context or Shepherd socket env. Plugin authors should document required
+system tools such as `cargo`, `npm`, `bun`, or `lua`; Shepherd reports build
 failures but does not install missing toolchains.
 
 ## Startup hooks
 
-`[[startup]]` commands run once for each enabled plugin after Herdr restores the
+`[[startup]]` commands run once for each enabled plugin after Shepherd restores the
 session and its API socket is ready. They run again when a new server takes over
 during live handoff, but not when a client attaches, config reloads, or a plugin
-is linked or enabled. Herdr starts them asynchronously and records their
+is linked or enabled. Shepherd starts them asynchronously and records their
 completion in the normal plugin command log. A startup failure does not stop the
 server.
 
 Startup hooks are one-shot initialization commands rather than supervised
-daemons. A hook should restore plugin-owned state, call any required Herdr APIs,
+daemons. A hook should restore plugin-owned state, call any required Shepherd APIs,
 and exit. For example, a plugin can save a declarative Agent view under
-`HERDR_PLUGIN_STATE_DIR`, then read and reapply that view from its startup hook.
+`SHEPHERD_PLUGIN_STATE_DIR`, then read and reapply that view from its startup hook.
 
 Startup hooks receive the normal runtime plugin environment and
-`HERDR_PLUGIN_EVENT=startup`. The install preview lists every startup command so
+`SHEPHERD_PLUGIN_EVENT=startup`. The install preview lists every startup command so
 users can review code that will run automatically.
 
 ## Commands and environment
 
-Runtime commands run with the plugin directory as their working directory. Herdr
-injects `HERDR_SOCKET_PATH`, `HERDR_BIN_PATH`, `HERDR_ENV=1`,
-`HERDR_PLUGIN_ID`, `HERDR_PLUGIN_ROOT`, `HERDR_PLUGIN_CONFIG_DIR`,
-`HERDR_PLUGIN_STATE_DIR`, `HERDR_PLUGIN_CONTEXT_JSON`, and any available
-`HERDR_WORKSPACE_ID`, `HERDR_TAB_ID`, and `HERDR_PANE_ID`. Action commands also
-receive `HERDR_PLUGIN_ACTION_ID`; startup and event hooks receive
-`HERDR_PLUGIN_EVENT` (`startup` for startup hooks), event hooks additionally
-receive `HERDR_PLUGIN_EVENT_JSON`, and pane commands receive
-`HERDR_PLUGIN_ENTRYPOINT_ID`.
+Runtime commands run with the plugin directory as their working directory. Shepherd
+injects `SHEPHERD_SOCKET_PATH`, `SHEPHERD_BIN_PATH`, `SHEPHERD_ENV=1`,
+`SHEPHERD_PLUGIN_ID`, `SHEPHERD_PLUGIN_ROOT`, `SHEPHERD_PLUGIN_CONFIG_DIR`,
+`SHEPHERD_PLUGIN_STATE_DIR`, `SHEPHERD_PLUGIN_CONTEXT_JSON`, and any available
+`SHEPHERD_WORKSPACE_ID`, `SHEPHERD_TAB_ID`, and `SHEPHERD_PANE_ID`. Action commands also
+receive `SHEPHERD_PLUGIN_ACTION_ID`; startup and event hooks receive
+`SHEPHERD_PLUGIN_EVENT` (`startup` for startup hooks), event hooks additionally
+receive `SHEPHERD_PLUGIN_EVENT_JSON`, and pane commands receive
+`SHEPHERD_PLUGIN_ENTRYPOINT_ID`.
 
-`HERDR_PLUGIN_ROOT` is the installed or linked plugin directory. Do not store
+`SHEPHERD_PLUGIN_ROOT` is the installed or linked plugin directory. Do not store
 user credentials or durable state there, because GitHub-installed plugin roots
 are managed source checkouts. Put user-editable config such as `.env` files
-under `HERDR_PLUGIN_CONFIG_DIR`, and put local runtime state under
-`HERDR_PLUGIN_STATE_DIR`. Herdr creates those directories and seeds
-`HERDR_PLUGIN_CONFIG_DIR` from the legacy plugin config locations when present,
+under `SHEPHERD_PLUGIN_CONFIG_DIR`, and put local runtime state under
+`SHEPHERD_PLUGIN_STATE_DIR`. Shepherd creates those directories and seeds
+`SHEPHERD_PLUGIN_CONFIG_DIR` from the legacy plugin config locations when present,
 but it does not validate, sync, or delete their contents. The plugin owns the
 file format and lifecycle.
 
-`HERDR_PLUGIN_CONTEXT_JSON` can include workspace, tab, focused pane, worktree,
+`SHEPHERD_PLUGIN_CONTEXT_JSON` can include workspace, tab, focused pane, worktree,
 agent, selected text, clicked URL, and link handler fields when they are
 available for that invocation. Shell plugins can read the individual env vars
 for common ids, or parse the context JSON for the full shape.
 
-Use `HERDR_BIN_PATH` when a plugin needs to call Herdr portably from Node,
+Use `SHEPHERD_BIN_PATH` when a plugin needs to call Shepherd portably from Node,
 PowerShell, Bash, or another runtime. The raw socket transport behind
-`HERDR_SOCKET_PATH` is OS-specific: Unix clients connect to a Unix socket path,
+`SHEPHERD_SOCKET_PATH` is OS-specific: Unix clients connect to a Unix socket path,
 while Windows clients connect to a named pipe. CLI calls through
-`HERDR_BIN_PATH` avoid that transport difference. See the
+`SHEPHERD_BIN_PATH` avoid that transport difference. See the
 [CLI reference](/docs/cli-reference/) for available commands and
 [socket API](/docs/socket-api/) for raw request shapes.
 
@@ -325,21 +325,21 @@ height = 20
 command = ["sh", "picker.sh"]
 ```
 
-Split, tab, zoomed, and overlay plugin panes are normal Herdr panes after they
+Split, tab, zoomed, and overlay plugin panes are normal Shepherd panes after they
 open. Plugins can call standard pane APIs such as `pane.move`, `pane.swap`,
-`pane.resize`, and `pane.zoom` through the socket or CLI; Herdr keeps plugin
+`pane.resize`, and `pane.zoom` through the socket or CLI; Shepherd keeps plugin
 pane ownership attached to the underlying pane when it moves across tabs or
-workspaces. A popup is a singleton session resource rather than a Herdr pane:
+workspaces. A popup is a singleton session resource rather than a Shepherd pane:
 it has no pane ID, does not change plugin focus context, emits no pane lifecycle
 events, and does not participate in pane, layout, persistence, or agent APIs.
-Its process does not receive `HERDR_PANE_ID`; the underlying tiled pane remains
-available through `HERDR_PLUGIN_CONTEXT_JSON`.
-Opening a popup returns `ui_busy` while Settings, Copy mode, or another Herdr
+Its process does not receive `SHEPHERD_PANE_ID`; the underlying tiled pane remains
+available through `SHEPHERD_PLUGIN_CONTEXT_JSON`.
+Opening a popup returns `ui_busy` while Settings, Copy mode, or another Shepherd
 modal is active, and `plugin.pane.open` returns an `ok` result after launch.
 
 On Windows, build commands, action commands, and event commands resolve common
 `PATHEXT` shims such as `npm.cmd`, `bun.cmd`, and `pnpm.cmd` when the bare
-command is on `PATH`. Pane commands use Herdr's normal Windows pane launcher and
+command is on `PATH`. Pane commands use Shepherd's normal Windows pane launcher and
 must still be valid Windows argv commands.
 
 ## Keybindings
@@ -364,26 +364,26 @@ click. `pattern` is a Rust regular expression matched against the clicked URL,
 and `action` must
 name an action declared by the same plugin. Link handler actions receive
 `invocation_source = "link_click"`, `clicked_url`, and `link_handler_id` in
-`HERDR_PLUGIN_CONTEXT_JSON`; shell plugins can also read
-`HERDR_PLUGIN_CLICKED_URL` and `HERDR_PLUGIN_LINK_HANDLER_ID`. Handlers are
+`SHEPHERD_PLUGIN_CONTEXT_JSON`; shell plugins can also read
+`SHEPHERD_PLUGIN_CLICKED_URL` and `SHEPHERD_PLUGIN_LINK_HANDLER_ID`. Handlers are
 checked in manifest order inside each plugin.
 
 Link clicks invoke plugins only while `ui.mouse_capture` is enabled. Matching handlers run first. A launch failure shows an error and stops. Without a matching handler, only HTTP(S) links open externally. When capture is disabled, the outer terminal handles explicit hyperlinks using its own shortcuts and warnings. See [mouse controls](/docs/quick-start/#use-the-mouse) for the Windows Terminal URL detection caveat.
 
 ## Storage
 
-There is no Herdr-managed plugin storage API in v1. Plugins that need durable
+There is no Shepherd-managed plugin storage API in v1. Plugins that need durable
 state should own their files or database.
 
 ## Marketplace
 
 Community plugins are discoverable in the [marketplace](/plugins/), an automatic
-index of public GitHub repositories tagged with `herdr-plugin` that contain one
-or more `herdr-plugin.toml` files whose required metadata can be parsed. Plugins
+index of public GitHub repositories tagged with `shepherd-plugin` that contain one
+or more `shepherd-plugin.toml` files whose required metadata can be parsed. Plugins
 stay ordinary GitHub repositories: publish one, then share
-`herdr plugin install owner/repo[/subdir]`.
+`shepherd plugin install owner/repo[/subdir]`.
 
-To get plugins listed, add the GitHub topic `herdr-plugin` and place their
+To get plugins listed, add the GitHub topic `shepherd-plugin` and place their
 manifests at the root or in subdirectories of the repository's default branch.
 One repository card can contain multiple separately installable plugins. The
 index refreshes every 30 minutes. See

@@ -1,0 +1,30 @@
+[
+  {
+    "committed_offsets": {},
+    "group": "brain-1",
+    "lag_by_partition": {
+      "0": 3,
+      "1": 1
+    },
+    "members": [
+      "brain-1"
+    ],
+    "topic": "results",
+    "total_messages": 4
+  },
+  {
+    "committed_offsets": {
+      "0": 1
+    },
+    "group": "coder-1",
+    "lag_by_partition": {
+      "0": 1,
+      "1": 1
+    },
+    "members": [
+      "coder-1"
+    ],
+    "topic": "results",
+    "total_messages": 4
+  }
+]

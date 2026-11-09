@@ -27,8 +27,8 @@ jobs:
               49699333, // dependabot[bot]
               41898282, // github-actions[bot]
             ]);
-            const REVIEW_TRIGGER_MARKER = '<!-- herdr:ai-review-trigger -->';
-            const COMMENT_MARKER = '<!-- herdr:pr-gate -->';
+            const REVIEW_TRIGGER_MARKER = '<!-- shepherd:ai-review-trigger -->';
+            const COMMENT_MARKER = '<!-- shepherd:pr-gate -->';
 
             const pullNumber = context.payload.pull_request.number;
             const defaultBranch = context.payload.repository.default_branch;
@@ -162,11 +162,11 @@ jobs:
               const message = [
                 `Hi @${prAuthor}, thanks for your interest in contributing.`,
                 '',
-                'Herdr does not accept unsolicited implementation pull requests from contributors who are not listed in `.github/APPROVED_CONTRIBUTORS`.',
+                'Shepherd does not accept unsolicited implementation pull requests from contributors who are not listed in `.github/APPROVED_CONTRIBUTORS`.',
                 '',
                 reason,
                 '',
-                'If you encountered a reproducible bug, report the observed behavior through the bug issue template. A report does not reserve the work or authorize a pull request; accepted fixes are normally implemented by Herdr’s maintainer-controlled agents.',
+                'If you encountered a reproducible bug, report the observed behavior through the bug issue template. A report does not reserve the work or authorize a pull request; accepted fixes are normally implemented by Shepherd’s maintainer-controlled agents.',
                 '',
                 'Feature requests, behavior changes, and other proposals belong in GitHub Discussions. Do not open an issue merely to justify an implementation that was already written.',
                 '',

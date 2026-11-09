@@ -110,7 +110,7 @@ impl Leaf {
     pub(crate) fn request(&self, args: &[String]) -> Result<Request, ParseError> {
         let method = super::projection::parse(
             self.command()
-                .bin_name(format!("herdr workspace {}", self.name)),
+                .bin_name(format!("shepherd workspace {}", self.name)),
             args,
             self.method,
         )?;

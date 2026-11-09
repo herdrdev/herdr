@@ -210,7 +210,7 @@ impl ClientShellState {
 
             match self.config.toast_delivery {
                 crate::config::ToastDelivery::Off => {}
-                crate::config::ToastDelivery::Herdr if !target_active => {
+                crate::config::ToastDelivery::Shepherd if !target_active => {
                     self.queue_visible_notification(
                         ClientVisibleNotification {
                             endpoint_id: pending.endpoint_id,
@@ -221,7 +221,7 @@ impl ClientShellState {
                     );
                     repaint = true;
                 }
-                crate::config::ToastDelivery::Herdr => {}
+                crate::config::ToastDelivery::Shepherd => {}
                 crate::config::ToastDelivery::Terminal if !suppress_external => {
                     effects.push(ClientShellNotificationEffect::Terminal {
                         title: pending.event.title,

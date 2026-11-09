@@ -1,0 +1,40 @@
+name: market
+kind: market
+description: 'Competitive market where solvers bid on asks coordinated by a market-maker. Starts: requesters (publish `ask` from the objective). Solvers wait for `ask` and publish `bid`; the market-maker waits for `ask`/`bid` and publishes the `transaction`; requesters and solvers then react to it.'
+topics:
+  - name: bid
+    partitions: 2
+  - name: ask
+    partitions: 2
+  - name: transaction
+    partitions: 1
+agents:
+  - id: market-maker
+    role: brain
+    count: 1
+    prompt: You are the market-maker. Wait for asks and bids; when an ask has at least one bid, pick the best bid and publish a transaction naming the ask and the winning solver id, then end your turn.
+    consumes:
+      - bid
+      - ask
+    publishes:
+      - transaction
+  - id: requester
+    role: docs
+    count: 2
+    start: true
+    group: requesters
+    prompt: You are a requester. Turn the run objective into one concrete ask and publish it to the ask topic right away, then end your turn; you will be notified when a transaction settles it.
+    publishes:
+      - ask
+    consumes:
+      - transaction
+  - id: solver
+    role: coder
+    count: 3
+    group: solvers
+    prompt: You are a solver. When an ask arrives, publish one bid with your cost and latency estimate; if a later transaction names you as winner, do the work and report the outcome in the terminal.
+    publishes:
+      - bid
+    consumes:
+      - ask
+      - transaction

@@ -1,9 +1,9 @@
 ---
 title: ソケット API
-description: スクリプト、ツール、コーディングエージェントから実行中の Herdr サーバーを制御します。
+description: スクリプト、ツール、コーディングエージェントから実行中の Shepherd サーバーを制御します。
 ---
 
-Herdr は、実行中のセッションを調査・制御する必要があるスクリプトやエージェント向けに、ローカルソケット API を公開しています。
+Shepherd は、実行中のセッションを調査・制御する必要があるスクリプトやエージェント向けに、ローカルソケット API を公開しています。
 
 ほとんどの自動化は CLI ラッパーから始めるべきです。生のソケット API は、直接のリクエスト/レスポンス制御や長寿命のイベント購読が必要なときだけ使ってください。
 
@@ -11,7 +11,7 @@ Herdr は、実行中のセッションを調査・制御する必要がある�
 
 | 層 | 用途 |
 | --- | --- |
-| エージェントスキル | ペイン内からの Herdr の使い方をコーディングエージェントに教える。 |
+| エージェントスキル | ペイン内からの Shepherd の使い方をコーディングエージェントに教える。 |
 | CLI ラッパー | シェルスクリプト、シンプルなオーケストレーション、人間によるデバッグ。 |
 | 生のソケット API | カスタムツール、プロトコルクライアント、イベント購読者。 |
 
@@ -19,15 +19,15 @@ Herdr は、実行中のセッションを調査・制御する必要がある�
 
 ## スキーマ
 
-インストール済み CLI は、その Herdr バイナリに同梱されたソケットプロトコルスキーマを表示できます:
+インストール済み CLI は、その Shepherd バイナリに同梱されたソケットプロトコルスキーマを表示できます:
 
 ```bash
-herdr api schema
-herdr api schema --json
-herdr api schema --output herdr-api.schema.json
+shepherd api schema
+shepherd api schema --json
+shepherd api schema --output shepherd-api.schema.json
 ```
 
-通常の `herdr api schema` は短い概要を表示します。`--json` はツール向けの完全な JSON Schema を表示し、`--output PATH` はそのドキュメントをファイルに書き込みます。スキーマには、生のリクエスト、成功レスポンス、エラーレスポンス、発行イベント、購読イベントが含まれます。
+通常の `shepherd api schema` は短い概要を表示します。`--json` はツール向けの完全な JSON Schema を表示し、`--output PATH` はそのドキュメントをファイルに書き込みます。スキーマには、生のリクエスト、成功レスポンス、エラーレスポンス、発行イベント、購読イベントが含まれます。
 
 ## 制御できるもの
 
@@ -47,43 +47,43 @@ herdr api schema --output herdr-api.schema.json
 ワークスペースを作成する:
 
 ```bash
-herdr workspace create --cwd ~/project --label api
+shepherd workspace create --cwd ~/project --label api
 ```
 
 タブを作成する:
 
 ```bash
-herdr tab create --label logs
+shepherd tab create --label logs
 ```
 
 ペインを分割してコマンドを実行する:
 
 ```bash
-herdr pane split w1:p1 --direction right
-herdr pane run w1:p2 "npm test"
+shepherd pane split w1:p1 --direction right
+shepherd pane run w1:p2 "npm test"
 ```
 
 ペインを調査して並べ替える:
 
 ```bash
-herdr pane layout --current
-herdr pane neighbor --direction right --current
-herdr pane resize --direction right --amount 0.1 --current
-herdr pane swap --direction right --current
-herdr pane zoom --on --current
-herdr pane split w1:p1 --direction right --ratio 0.333
+shepherd pane layout --current
+shepherd pane neighbor --direction right --current
+shepherd pane resize --direction right --amount 0.1 --current
+shepherd pane swap --direction right --current
+shepherd pane zoom --on --current
+shepherd pane split w1:p1 --direction right --ratio 0.333
 ```
 
 エージェントを待つ:
 
 ```bash
-herdr agent wait w1:p1 --until done
+shepherd agent wait w1:p1 --until done
 ```
 
 ペインの出力を読む:
 
 ```bash
-herdr pane read w1:p2 --source recent --lines 50
+shepherd pane read w1:p2 --source recent --lines 50
 ```
 
 ## 生のメソッド
@@ -113,11 +113,11 @@ herdr pane read w1:p2 --source recent --lines 50
 
 `session.snapshot` は、独自のローカルランタイムキャッシュを持つクライアント向けに、一度限りのブートストラップスナップショットを返します。レスポンスには、バージョン/プロトコルメタデータ、フォーカス中のワークスペース/タブ/ペイン id、ワークスペース、タブ、ペイン、タブレイアウト、エージェントの各レコードが含まれます。これは購読ではありません。キャッシュの初期化と復旧では、先に購読を開始し、後述のイベント購読セクションの手順でサーバーから現在の状態を読み取り、キャッシュを照合・更新します。イベントはキャッシュの無効化を知らせるものであり、スナップショットに無条件で再適用できるものではありません。再接続後やキャッシュが古い可能性がある場合は、`session.snapshot` を再度呼び出します。ワークスペースレコードには、関連付けられた worktree の出自情報も含まれます。リポジトリ全体の worktree 検出には引き続き `worktree.list` を使います。
 
-CLI の `herdr api snapshot` は、クライアントやエージェントが簡単にブートストラップできるよう、現在の `session.snapshot` レスポンスを JSON で出力します。
+CLI の `shepherd api snapshot` は、クライアントやエージェントが簡単にブートストラップできるよう、現在の `session.snapshot` レスポンスを JSON で出力します。
 
 ペイン制御メソッドは `w1:p1` のような公開ペイン id を使います。スキーマ上 `pane_id` が省略可能なメソッドは、省略時にサーバーのアクティブなフォーカス中ペインを使います。`pane.move` は常に送信元の `pane_id` を要求します。
 
-`pane.send_keys` と `pane.send_input.keys` は Herdr のキーコンボ文字列を受け付けます: 通常の印字可能キー、`enter` や `esc` のような特殊キー、`ctrl+h`、`control+j`、`alt+x`、`shift+tab` のような修飾キーコード、`f1` のようなファンクションキー、`minus` や `plus` のような名前付き記号です。`prefix+` のバインド文字列は受け付けません。
+`pane.send_keys` と `pane.send_input.keys` は Shepherd のキーコンボ文字列を受け付けます: 通常の印字可能キー、`enter` や `esc` のような特殊キー、`ctrl+h`、`control+j`、`alt+x`、`shift+tab` のような修飾キーコード、`f1` のようなファンクションキー、`minus` や `plus` のような名前付き記号です。`prefix+` のバインド文字列は受け付けません。
 
 macOS では、`pane.send_input`（`pane run` が使用）と `agent.start` は、コマンドを入力キューに受け入れる前に、ターミナルの現在のカノニカルモードの入力上限を確認します。Enter を含むエンコード済みの行が上限を超える場合、入力全体を拒否します。シェルプロンプトが表示されてから再試行してください。複数の短い行と raw モードの入力は引き続き使用できます。成功応答はキューへの受け入れを示し、コマンドの実行完了を意味しません。この確認は今回の送信だけを対象とし、以前の未完了行を検査したり、キューで待機中にターミナルモードが変わらないことを保証したりするものではありません。
 
@@ -129,7 +129,7 @@ macOS では、`pane.send_input`（`pane run` が使用）と `agent.start` は�
 {"id":"req_focus","method":"pane.focus_direction","params":{"direction":"right"}}
 {"id":"req_resize","method":"pane.resize","params":{"pane_id":"w1:p1","direction":"right","amount":0.1}}
 {"id":"req_zoom","method":"pane.zoom","params":{"pane_id":"w1:p1","mode":"toggle"}}
-{"id":"req_split","method":"pane.split","params":{"direction":"right","ratio":0.333,"env":{"HERDR_ROLE":"tests"}}}
+{"id":"req_split","method":"pane.split","params":{"direction":"right","ratio":0.333,"env":{"SHEPHERD_ROLE":"tests"}}}
 {"id":"req_process","method":"pane.process_info","params":{"pane_id":"w1:p1"}}
 ```
 
@@ -149,7 +149,7 @@ macOS では、`pane.send_input`（`pane run` が使用）と `agent.start` は�
 
 ### ペイングラフィックス
 
-アプリケーションとプラグインは、ペインのターミナル出力を通じて標準の Kitty グラフィックスプロトコルを送信してください。Herdr が対応する外側ターミナルで画像の配置、クリッピング、表示状態を管理します。
+アプリケーションとプラグインは、ペインのターミナル出力を通じて標準の Kitty グラフィックスプロトコルを送信してください。Shepherd が対応する外側ターミナルで画像の配置、クリッピング、表示状態を管理します。
 
 外部ソケットのペイン画像オーバーレイ API は削除されました。`pane.graphics.info`、`pane.graphics.set`、`pane.graphics.clear`、`pane.graphics.stream` は利用できず、代替のソケット画像 API もありません。旧サーバーとの内部通信プロトコルの互換性は、これらの公開メソッドを復活させるものではありません。
 
@@ -165,7 +165,7 @@ macOS では、`pane.send_input`（`pane run` が使用）と `agent.start` は�
 
 レスポンスには `workspace_id`、`tab_id`、`zoomed`、`focused_pane_id`、`root` が含まれます。`root` は `pane` ノードと `split` ノードの BSP ツリーです。ペインノードは `pane_id`、`label`、`cwd`、argv の `command` を含められます。分割ノードは `direction` (`right` または `down`)、`ratio`、`first`、`second` を使います。
 
-`layout.apply` は宣言的なツリーから新しいタブを作成します。`tab_id` が与えられた場合、Herdr は先に置き換え用のタブを作成してから古いタブを閉じます。これは構造、ラベル、cwd、env、任意の argv コマンドを復元しますが、ライブの PTY、スクロールバック、実行中プロセスは保存しません。
+`layout.apply` は宣言的なツリーから新しいタブを作成します。`tab_id` が与えられた場合、Shepherd は先に置き換え用のタブを作成してから古いタブを閉じます。これは構造、ラベル、cwd、env、任意の argv コマンドを復元しますが、ライブの PTY、スクロールバック、実行中プロセスは保存しません。
 
 ```json
 {
@@ -189,7 +189,7 @@ macOS では、`pane.send_input`（`pane run` が使用）と `agent.start` は�
         "label": "tests",
         "cwd": "/repo",
         "command": ["sh", "-c", "just test"],
-        "env": { "HERDR_ROLE": "tests" }
+        "env": { "SHEPHERD_ROLE": "tests" }
       }
     }
   }
@@ -202,7 +202,7 @@ macOS では、`pane.send_input`（`pane run` が使用）と `agent.start` は�
 {"id":"req_ratio","method":"layout.set_split_ratio","params":{"tab_id":"w1:t1","path":[],"ratio":0.6}}
 ```
 
-プロセスを起動するメソッドは `env` オブジェクトを受け付けます。Herdr はそのキー/値ペアを新しく起動されるプロセスにのみ適用します。Herdr は管理下のペインプロセスに `HERDR_SOCKET_PATH`、`HERDR_ENV=1`、`HERDR_WORKSPACE_ID`、`HERDR_TAB_ID`、`HERDR_PANE_ID` も注入します。呼び出し側が与えた環境変数と衝突した場合、Herdr 管理の変数が権威を持ちます。
+プロセスを起動するメソッドは `env` オブジェクトを受け付けます。Shepherd はそのキー/値ペアを新しく起動されるプロセスにのみ適用します。Shepherd は管理下のペインプロセスに `SHEPHERD_SOCKET_PATH`、`SHEPHERD_ENV=1`、`SHEPHERD_WORKSPACE_ID`、`SHEPHERD_TAB_ID`、`SHEPHERD_PANE_ID` も注入します。呼び出し側が与えた環境変数と衝突した場合、Shepherd 管理の変数が権威を持ちます。
 
 `pane.swap` は方向指定と明示指定の両方の形式をサポートします:
 
@@ -223,7 +223,7 @@ macOS では、`pane.send_input`（`pane run` が使用）と `agent.start` は�
 
 既存タブへの移動には `split: "right" | "down"` が必要です。`target_pane_id` は任意で、デフォルトは移動先タブのフォーカス中ペインです。同じタブ内のレイアウト変更は引き続き `pane.swap` です。元のタブへの移動は `reason: "same_tab"` 付きで `changed: false` を返します。ズームされた移動元/移動先タブを含む移動は `reason: "zoomed_tab"` 付きで `changed: false` を返します。
 
-レスポンスは `type: "pane_move"` で、`changed`、任意の `reason`、`previous_pane_id`、`previous_workspace_id`、`previous_tab_id`、移動された `pane`、任意の `source_layout`、`target_layout`、任意の作成されたワークスペース/タブのレコード、任意の閉じられたワークスペース/タブの id、`focused_pane_id` を含みます。ワークスペースをまたぐ移動では、内部のペインとターミナルは生きたまま、移動先ワークスペースで新しい公開ペイン id が割り当てられます。購読者は `pane.moved` を購読できます。Herdr は移動されたターミナルプロセスについて偽のペインの close/create イベントを発行しません。
+レスポンスは `type: "pane_move"` で、`changed`、任意の `reason`、`previous_pane_id`、`previous_workspace_id`、`previous_tab_id`、移動された `pane`、任意の `source_layout`、`target_layout`、任意の作成されたワークスペース/タブのレコード、任意の閉じられたワークスペース/タブの id、`focused_pane_id` を含みます。ワークスペースをまたぐ移動では、内部のペインとターミナルは生きたまま、移動先ワークスペースで新しい公開ペイン id が割り当てられます。購読者は `pane.moved` を購読できます。Shepherd は移動されたターミナルプロセスについて偽のペインの close/create イベントを発行しません。
 
 `pane.zoom` は、対象ペインのタブのズームをトグル、有効化、無効化します:
 
@@ -238,7 +238,7 @@ macOS では、`pane.send_input`（`pane run` が使用）と `agent.start` は�
 `notification.show` の CLI ラッパーは次のとおりです:
 
 ```bash
-herdr notification show "build failed" --body "api workspace" --position top-left --sound request
+shepherd notification show "build failed" --body "api workspace" --position top-left --sound request
 ```
 
 設定済みのトースト配信を通じてユーザー通知を表示します:
@@ -247,7 +247,7 @@ herdr notification show "build failed" --body "api workspace" --position top-lef
 {"id":"req_notify","method":"notification.show","params":{"title":"build failed","body":"api workspace","position":"top-left","sound":"request"}}
 ```
 
-`title` は必須で、制御文字と連続する空白を除去した後に可視のテキストが残っていなければなりません。`body` は任意です。Herdr は改行、タブ、キャリッジリターン、連続する空白をスペースにまとめてから、通知テキストを `title` は 80 文字、`body` は 240 文字に切り詰めます。サニタイズ後の `title` が空の場合は `invalid_params` を返します。`position` は任意で、`ui.toast.delivery = "herdr"` のときのみ適用されます。デスクトップの位置は Herdr のフレーム全体を基準とし、省略時は `ui.toast.herdr.position` を使います。terminal、system、off の配信では `position` は無視されます。`sound` は任意で `none`、`done`、`request` のいずれかを指定でき、デフォルトは `none` で、通知が表示されたときにのみ再生されます。
+`title` は必須で、制御文字と連続する空白を除去した後に可視のテキストが残っていなければなりません。`body` は任意です。Shepherd は改行、タブ、キャリッジリターン、連続する空白をスペースにまとめてから、通知テキストを `title` は 80 文字、`body` は 240 文字に切り詰めます。サニタイズ後の `title` が空の場合は `invalid_params` を返します。`position` は任意で、`ui.toast.delivery = "shepherd"` のときのみ適用されます。デスクトップの位置は Shepherd のフレーム全体を基準とし、省略時は `ui.toast.shepherd.position` を使います。terminal、system、off の配信では `position` は無視されます。`sound` は任意で `none`、`done`、`request` のいずれかを指定でき、デフォルトは `none` で、通知が表示されたときにのみ再生されます。
 
 レスポンスは何かが表示されたかどうかを報告します:
 
@@ -255,18 +255,18 @@ herdr notification show "build failed" --body "api workspace" --position top-lef
 {"id":"req_notify","result":{"type":"notification_show","shown":true,"reason":"shown"}}
 ```
 
-reason の候補は `shown`、`disabled`、`rate_limited`、`no_foreground_client`、`busy` です。`disabled` は `ui.toast.delivery = "off"` を意味します。`busy` は既存のアプリ内トーストが置き換えられなかったことを意味します。terminal と system の配信は、現在フォアグラウンドでアタッチしている Herdr クライアントを通じたベストエフォートです。
+reason の候補は `shown`、`disabled`、`rate_limited`、`no_foreground_client`、`busy` です。`disabled` は `ui.toast.delivery = "off"` を意味します。`busy` は既存のアプリ内トーストが置き換えられなかったことを意味します。terminal と system の配信は、現在フォアグラウンドでアタッチしている Shepherd クライアントを通じたベストエフォートです。
 
 フォアグラウンドクライアントの外側ターミナルウィンドウタイトルを設定またはクリアします:
 
 ```json
-{"id":"req_title","method":"client.window_title.set","params":{"title":"herdr api"}}
+{"id":"req_title","method":"client.window_title.set","params":{"title":"shepherd api"}}
 {"id":"req_title_clear","method":"client.window_title.clear","params":{}}
 ```
 
 `client.window_title.clear` はタイトルを `ui.window_title` に戻します。レスポンスは `type: "client_window_title"` で、`changed` と、`set`、`cleared`、`no_foreground_client` のいずれかの reason を含みます。
 
-Worktree メソッドは Git チェックアウトを Herdr ワークスペースとして管理します。`worktree.create` はチェックアウトを作成し、新しい `workspace`、`tab`、`root_pane`、`worktree` のレコードを返します。要求されたブランチがローカルに既存ならそれをチェックアウトし、なければ要求されたベースまたは `HEAD` からブランチを作成します。`worktree.open` は既存のチェックアウトを開くか、すでに開いているワークスペースを返します。`worktree.remove` はリンクされた子ワークスペースに対して `git worktree remove` を実行し、ブランチは決して削除しません。
+Worktree メソッドは Git チェックアウトを Shepherd ワークスペースとして管理します。`worktree.create` はチェックアウトを作成し、新しい `workspace`、`tab`、`root_pane`、`worktree` のレコードを返します。要求されたブランチがローカルに既存ならそれをチェックアウトし、なければ要求されたベースまたは `HEAD` からブランチを作成します。`worktree.open` は既存のチェックアウトを開くか、すでに開いているワークスペースを返します。`worktree.remove` はリンクされた子ワークスペースに対して `git worktree remove` を実行し、ブランチは決して削除しません。
 
 元のワークスペースから worktree を作成する:
 
@@ -286,9 +286,9 @@ Worktree メソッドは Git チェックアウトを Herdr ワークスペー�
 {"id":"req_3","method":"worktree.remove","params":{"workspace_id":"2","force":false}}
 ```
 
-`worktree.list`、`worktree.create`、`worktree.open` では `workspace_id` と `cwd` は最大どちらか一方だけを使い、両方省略するとアクティブなワークスペースを使います。`worktree.open` では `path` と `branch` のちょうど一方を使います。生のソケットの `cwd` と `path` の値は絶対パスでなければなりません。CLI は相対の `--cwd` と `--path` の値をリクエスト送信前に展開します。ワークスペースが Herdr の worktree グループに属している場合、ワークスペースのレスポンスには任意の `worktree` 出自情報が含まれます。既存のワークスペースが worktree の出自情報を獲得または変更したとき、worktree コマンドは `workspace.updated` を発行することがあります。
+`worktree.list`、`worktree.create`、`worktree.open` では `workspace_id` と `cwd` は最大どちらか一方だけを使い、両方省略するとアクティブなワークスペースを使います。`worktree.open` では `path` と `branch` のちょうど一方を使います。生のソケットの `cwd` と `path` の値は絶対パスでなければなりません。CLI は相対の `--cwd` と `--path` の値をリクエスト送信前に展開します。ワークスペースが Shepherd の worktree グループに属している場合、ワークスペースのレスポンスには任意の `worktree` 出自情報が含まれます。既存のワークスペースが worktree の出自情報を獲得または変更したとき、worktree コマンドは `workspace.updated` を発行することがあります。
 
-worktree コマンドはライフサイクルイベントも発行します。`worktree.create` は `workspace.created`、`tab.created`、`pane.created`、`worktree.created` を発行します。`worktree.open` は `worktree.opened` を発行し、新しい Herdr ワークスペースを開いた場合はワークスペース/タブ/ペインの作成イベントも発行します。`worktree.remove` は `worktree.removed` を発行し、リンクされたワークスペースがまだ開いている場合は `workspace.closed` も発行します。
+worktree コマンドはライフサイクルイベントも発行します。`worktree.create` は `workspace.created`、`tab.created`、`pane.created`、`worktree.created` を発行します。`worktree.open` は `worktree.opened` を発行し、新しい Shepherd ワークスペースを開いた場合はワークスペース/タブ/ペインの作成イベントも発行します。`worktree.remove` は `worktree.removed` を発行し、リンクされたワークスペースがまだ開いている場合は `workspace.closed` も発行します。
 
 リンクされた worktree ワークスペースが開いている親ワークスペースを `workspace.close` で閉じるには、params に `"close_group": true` が必要です。明示的なグループクローズ指定がない場合は `workspace_group_close_required` を返します。明示的なグループクローズは、閉じた各ワークスペースについて `workspace.closed` イベントを 1 件ずつ発行します。
 
@@ -349,12 +349,12 @@ worktree コマンドはライフサイクルイベントも発行します。`w
 `ui.agent_panel_sort` ポリシーが有効です。カスタムソートは設定を書き換えず、一時的に
 そのポリシーを置き換えます。
 
-`source` は所有者を識別します。プラグインは `plugin:<HERDR_PLUGIN_ID>` を使います。
-所有元のプラグインが存在しないか無効な場合、Herdr は設定を拒否します。他の呼び出し元は
+`source` は所有者を識別します。プラグインは `plugin:<SHEPHERD_PLUGIN_ID>` を使います。
+所有元のプラグインが存在しないか無効な場合、Shepherd は設定を拒否します。他の呼び出し元は
 独自の非 `plugin:` source を使えます。設定に成功すると以前のビューはアトミックに
 置き換えられます。ビューは clear または置換されるか、所有プラグインが disable、unlink、
 uninstall されるか、サーバーが終了するまで有効です。永続的な動作が必要なプラグインは、
-クエリを `HERDR_PLUGIN_STATE_DIR` に保存し、`[[startup]]` フックから再適用してください。
+クエリを `SHEPHERD_PLUGIN_STATE_DIR` に保存し、`[[startup]]` フックから再適用してください。
 
 無条件で clear するか、指定した source がまだ所有している場合だけ clear できます:
 
@@ -368,11 +368,11 @@ source が一致しない場合、アクティブなビューは変わりませ�
 
 ## プラグイン API
 
-プラグイン API は、実行可能なワークフローツールのための初期のホスト面です。プラグインは `herdr-plugin.toml` マニフェストを持つパッケージです。マニフェストは、共有可能なアクション、イベントフック、ターミナルペインのエントリーポイント、リンクハンドラーを宣言します。アクションとペインはマニフェスト専用です。ランタイムでのアクション登録とランタイムでの argv ペイン作成は v1 の範囲外です。
+プラグイン API は、実行可能なワークフローツールのための初期のホスト面です。プラグインは `shepherd-plugin.toml` マニフェストを持つパッケージです。マニフェストは、共有可能なアクション、イベントフック、ターミナルペインのエントリーポイント、リンクハンドラーを宣言します。アクションとペインはマニフェスト専用です。ランタイムでのアクション登録とランタイムでの argv ペイン作成は v1 の範囲外です。
 
-インストールおよびリンクされたプラグインは再起動をまたいで永続化されます。Herdr は `plugin.link`、`plugin.unlink`、`plugin.enable`、`plugin.disable` の際に、`session.json` の隣に `plugins.json` レジストリファイルを書き込みます。`herdr plugin install` CLI も、Herdr が動作していないときに同じレジストリを書き込み、起動時に自動的に読み込まれます。起動時、Herdr は各マニフェストを元のパスから再読み込みします。ファイルが欠落しているかパースできない場合、エントリは `warnings` フィールド付きで保持され、`plugin.list` がそれを表面化します。
+インストールおよびリンクされたプラグインは再起動をまたいで永続化されます。Shepherd は `plugin.link`、`plugin.unlink`、`plugin.enable`、`plugin.disable` の際に、`session.json` の隣に `plugins.json` レジストリファイルを書き込みます。`shepherd plugin install` CLI も、Shepherd が動作していないときに同じレジストリを書き込み、起動時に自動的に読み込まれます。起動時、Shepherd は各マニフェストを元のパスから再読み込みします。ファイルが欠落しているかパースできない場合、エントリは `warnings` フィールド付きで保持され、`plugin.list` がそれを表面化します。
 
-イベントフックの `on` の値は、リンク時に既知の Herdr イベント名と照合されます。認識されない名前はエラーではなく、リンクは成功しますが、返されるプラグイン情報に警告が含まれます (例: `"unknown event 'worktree.craeted'"`)。`plugin.link` と `plugin.list` のレスポンスの `warnings` フィールドを確認してください。
+イベントフックの `on` の値は、リンク時に既知の Shepherd イベント名と照合されます。認識されない名前はエラーではなく、リンクは成功しますが、返されるプラグイン情報に警告が含まれます (例: `"unknown event 'worktree.craeted'"`)。`plugin.link` と `plugin.list` のレスポンスの `warnings` フィールドを確認してください。
 
 ローカルのプラグインマニフェストをリンクする:
 
@@ -383,16 +383,16 @@ source が一致しない場合、アクティブなビューは変わりませ�
 `plugin.link` は任意の `source` メタデータも受け付けます。CLI は GitHub からインストールするときにこれを使い、`plugin.list` が出自、要求された ref、解決されたコミット、管理チェックアウトのパスを表示できるようにします:
 
 ```json
-{"id":"req_plugin_link","method":"plugin.link","params":{"path":"/managed/plugin/herdr-plugin.toml","enabled":true,"source":{"kind":"github","owner":"ogulcancelik","repo":"herdr-plugin-examples","subdir":"worktree-bootstrap","requested_ref":"main","resolved_commit":"abc123","managed_path":"/data/plugins/github/<managed-checkout>","installed_unix_ms":1780000000000}}}
+{"id":"req_plugin_link","method":"plugin.link","params":{"path":"/managed/plugin/shepherd-plugin.toml","enabled":true,"source":{"kind":"github","owner":"ogulcancelik","repo":"shepherd-plugin-examples","subdir":"worktree-bootstrap","requested_ref":"main","resolved_commit":"abc123","managed_path":"/data/plugins/github/<managed-checkout>","installed_unix_ms":1780000000000}}}
 ```
 
-パスは `herdr-plugin.toml` を含むプラグインディレクトリでも、マニフェストへの直接パスでも構いません。マニフェストの形式は次のとおりです:
+パスは `shepherd-plugin.toml` を含むプラグインディレクトリでも、マニフェストへの直接パスでも構いません。マニフェストの形式は次のとおりです:
 
 ```toml
 id = "example.worktree-bootstrap"
 name = "Worktree Bootstrap"
 version = "0.1.0"
-min_herdr_version = "0.7.0"
+min_shepherd_version = "0.7.0"
 description = "Prepare new worktrees"
 platforms = ["linux", "macos", "windows"]
 
@@ -422,7 +422,7 @@ pattern = "^https://github\\.com/[^/]+/[^/]+/(issues|pull)/[0-9]+$"
 action = "bootstrap"
 ```
 
-`min_herdr_version` は必須です。このフィールドが欠落している、無効、または実行中の Herdr バイナリより新しい場合、サーバーはプラグインのリンクを拒否します。
+`min_shepherd_version` は必須です。このフィールドが欠落している、無効、または実行中の Shepherd バイナリより新しい場合、サーバーはプラグインのリンクを拒否します。
 
 プラグインが対応する OS 識別子 (`linux`、`macos`、`windows`) をトップレベルの `platforms` で宣言してください。ローカル開発では `platforms` の省略が許されます — `plugin.link` は成功しますが、レスポンスに警告が含まれます。個々のビルドコマンド、アクション、イベントフック、ペイン、リンクハンドラーは独自の `platforms` を宣言してプラグインレベルのリストを上書きできます。省略時はプラグインから継承します。実効的な platforms が現在の OS を含まないアクションの呼び出しやペインのオープンは `platform_unsupported` エラーを返します。
 
@@ -450,9 +450,9 @@ action = "bootstrap"
 {"id":"req_plugin_invoke","method":"plugin.action.invoke","params":{"action_id":"example.worktree-bootstrap.bootstrap","context":{"invocation_source":"keybinding"}}}
 ```
 
-`plugin.action.invoke` はマニフェストのアクションを解決し、マニフェストのコマンドを起動し、Herdr が構築した呼び出しコンテキストと、開始されたコマンドのログレコードを返します。欠けているコンテキストフィールドは、アクティブなワークスペース、タブ、フォーカス中のペイン、worktree の出自情報、リクエスト id から補完されます。無効化されたプラグインのアクションの呼び出しは `plugin_disabled` エラーを返します。
+`plugin.action.invoke` はマニフェストのアクションを解決し、マニフェストのコマンドを起動し、Shepherd が構築した呼び出しコンテキストと、開始されたコマンドのログレコードを返します。欠けているコンテキストフィールドは、アクティブなワークスペース、タブ、フォーカス中のペイン、worktree の出自情報、リクエスト id から補完されます。無効化されたプラグインのアクションの呼び出しは `plugin_disabled` エラーを返します。
 
-Herdr は `HERDR_SOCKET_PATH`、`HERDR_BIN_PATH`、`HERDR_ENV=1`、`HERDR_PLUGIN_ID`、`HERDR_PLUGIN_ROOT`、`HERDR_PLUGIN_CONFIG_DIR`、`HERDR_PLUGIN_STATE_DIR`、`HERDR_PLUGIN_CONTEXT_JSON`、そして利用可能な `HERDR_WORKSPACE_ID`、`HERDR_TAB_ID`、`HERDR_PANE_ID` の値を注入します。アクションコマンドは加えて `HERDR_PLUGIN_ACTION_ID` を受け取ります。イベントフックは `HERDR_PLUGIN_EVENT` と `HERDR_PLUGIN_EVENT_JSON` を、ペインコマンドは `HERDR_PLUGIN_ENTRYPOINT_ID` を受け取ります。
+Shepherd は `SHEPHERD_SOCKET_PATH`、`SHEPHERD_BIN_PATH`、`SHEPHERD_ENV=1`、`SHEPHERD_PLUGIN_ID`、`SHEPHERD_PLUGIN_ROOT`、`SHEPHERD_PLUGIN_CONFIG_DIR`、`SHEPHERD_PLUGIN_STATE_DIR`、`SHEPHERD_PLUGIN_CONTEXT_JSON`、そして利用可能な `SHEPHERD_WORKSPACE_ID`、`SHEPHERD_TAB_ID`、`SHEPHERD_PANE_ID` の値を注入します。アクションコマンドは加えて `SHEPHERD_PLUGIN_ACTION_ID` を受け取ります。イベントフックは `SHEPHERD_PLUGIN_EVENT` と `SHEPHERD_PLUGIN_EVENT_JSON` を、ペインコマンドは `SHEPHERD_PLUGIN_ENTRYPOINT_ID` を受け取ります。
 
 直近のアクションおよびイベントコマンドのログを一覧する:
 
@@ -460,21 +460,21 @@ Herdr は `HERDR_SOCKET_PATH`、`HERDR_BIN_PATH`、`HERDR_ENV=1`、`HERDR_PLUGIN
 {"id":"req_plugin_logs","method":"plugin.log.list","params":{"plugin_id":"example.worktree-bootstrap","limit":20}}
 ```
 
-イベントフックは、Herdr が `worktree.created` のような一致するイベント名を発行したときに、有効なインストール済みプラグインに対して実行されます。
+イベントフックは、Shepherd が `worktree.created` のような一致するイベント名を発行したときに、有効なインストール済みプラグインに対して実行されます。
 
-v1 には Herdr が管理するプラグインストレージ API はありません。`HERDR_PLUGIN_CONFIG_DIR` と `HERDR_PLUGIN_STATE_DIR` はパスの発見だけを提供します。ファイル、スキーマ、マイグレーション、クリーンアップはプラグインが所有します。
+v1 には Shepherd が管理するプラグインストレージ API はありません。`SHEPHERD_PLUGIN_CONFIG_DIR` と `SHEPHERD_PLUGIN_STATE_DIR` はパスの発見だけを提供します。ファイル、スキーマ、マイグレーション、クリーンアップはプラグインが所有します。
 
 管理されたターミナル UI を開く:
 
 ```json
-{"id":"req_plugin_pane","method":"plugin.pane.open","params":{"plugin_id":"example.board","entrypoint":"board","placement":"zoomed","target_pane_id":"w1:p1","env":{"HERDR_ROLE":"board"},"focus":true}}
+{"id":"req_plugin_pane","method":"plugin.pane.open","params":{"plugin_id":"example.board","entrypoint":"board","placement":"zoomed","target_pane_id":"w1:p1","env":{"SHEPHERD_ROLE":"board"},"focus":true}}
 ```
 
-`plugin.pane.open` は、インストール済みで有効かつプラットフォーム互換のプラグインを要求し、要求されたマニフェストの `[[panes]]` エントリーポイントを argv ベースのターミナルペインとして起動します。マニフェストのペイン `placement` のデフォルトは `overlay` です。リクエストの `placement` は `overlay`、`popup`、`split`、`tab`、`zoomed` でマニフェストを上書きできます。overlay と popup はアクティブなタイルペインを起動コンテキストとして使います。ポップアップターミナルはセッションモーダルで、タブレイアウトを変更しません。任意の `width` と `height` は、外側のサイズをターミナルセル数または `"80%"` のような割合で指定します。省略した寸法はデフォルトでターミナルの半分になり、小さすぎる値は最小サイズに制限されます。ポップアップはペイン id を持たず、`pane.*` とエージェント API の対象外で、ペインのライフサイクルイベントを発行せず、プラグインのフォーカスコンテキストを背後のタイルペインに維持し、そのプロセスへ `HERDR_PANE_ID` を渡しません。起動は `ok` を返し、`popup.close` はアクティブなポップアップを閉じ、ポップアップがない場合は `popup_not_open` を返します。split と zoomed は既存のペインを対象とし、tab はワークスペースを対象にできます。split、tab、zoomed、overlay は通常の Herdr ペインとして振る舞い、`plugin.pane.focus` と `plugin.pane.close` は引き続きそれらのペインに作用します。
+`plugin.pane.open` は、インストール済みで有効かつプラットフォーム互換のプラグインを要求し、要求されたマニフェストの `[[panes]]` エントリーポイントを argv ベースのターミナルペインとして起動します。マニフェストのペイン `placement` のデフォルトは `overlay` です。リクエストの `placement` は `overlay`、`popup`、`split`、`tab`、`zoomed` でマニフェストを上書きできます。overlay と popup はアクティブなタイルペインを起動コンテキストとして使います。ポップアップターミナルはセッションモーダルで、タブレイアウトを変更しません。任意の `width` と `height` は、外側のサイズをターミナルセル数または `"80%"` のような割合で指定します。省略した寸法はデフォルトでターミナルの半分になり、小さすぎる値は最小サイズに制限されます。ポップアップはペイン id を持たず、`pane.*` とエージェント API の対象外で、ペインのライフサイクルイベントを発行せず、プラグインのフォーカスコンテキストを背後のタイルペインに維持し、そのプロセスへ `SHEPHERD_PANE_ID` を渡しません。起動は `ok` を返し、`popup.close` はアクティブなポップアップを閉じ、ポップアップがない場合は `popup_not_open` を返します。split と zoomed は既存のペインを対象とし、tab はワークスペースを対象にできます。split、tab、zoomed、overlay は通常の Shepherd ペインとして振る舞い、`plugin.pane.focus` と `plugin.pane.close` は引き続きそれらのペインに作用します。
 
 ## ソケットトランスポート
 
-Herdr はローカルソケット上の改行区切り JSON を使います。Unix では Unix ドメインソケットです。Windows では名前付きパイプです。
+Shepherd はローカルソケット上の改行区切り JSON を使います。Unix では Unix ドメインソケットです。Windows では名前付きパイプです。
 
 1 行につき 1 リクエストを送ります:
 
@@ -494,25 +494,25 @@ JSON のデコードまで到達したリクエスト行では、メソッドや
 
 ## ソケットパス
 
-デフォルトのソケットは Herdr の設定ディレクトリの下にあります。
+デフォルトのソケットは Shepherd の設定ディレクトリの下にあります。
 
 名前付きセッションは別のソケットを持ちます:
 
 ```text
-~/.config/herdr/herdr.sock
-~/.config/herdr/sessions/<name>/herdr.sock
+~/.config/shepherd/shepherd.sock
+~/.config/shepherd/sessions/<name>/shepherd.sock
 ```
 
 解決順:
 
 1. 明示的な CLI の `--session <name>`
-2. `HERDR_SOCKET_PATH`
-3. `HERDR_SESSION=<name>`
+2. `SHEPHERD_SOCKET_PATH`
+3. `SHEPHERD_SESSION=<name>`
 4. デフォルトセッションのソケット
 
-`HERDR_SOCKET_PATH` は低レベルな上書きにのみ使ってください。
+`SHEPHERD_SOCKET_PATH` は低レベルな上書きにのみ使ってください。
 
-プラグインでは、移植性のある Windows の挙動が必要なときは `HERDR_BIN_PATH` と CLI ラッパーの呼び出しを推奨します。生のソケットクライアントは、プラットフォームネイティブのローカルソケット形式を使う責任を負います。
+プラグインでは、移植性のある Windows の挙動が必要なときは `SHEPHERD_BIN_PATH` と CLI ラッパーの呼び出しを推奨します。生のソケットクライアントは、プラットフォームネイティブのローカルソケット形式を使う責任を負います。
 
 ## エージェント状態の報告
 
@@ -542,14 +542,14 @@ JSON のデコードまで到達したリクエスト行では、メソッドや
   "method": "pane.report_agent_session",
   "params": {
     "pane_id": "w1:p1",
-    "source": "herdr:codex",
+    "source": "shepherd:codex",
     "agent": "codex",
     "agent_session_id": "..."
   }
 }
 ```
 
-どちらのメソッドも、Herdr サーバーの再起動後に報告元の現在のセッションを再開するコマンドを、省略可能な `resume_argv` 配列で受け付けます。配列は最大 64 要素、合計 8 KiB までです。最初の要素はパスではなく単純なコマンド名でなければならず、どの要素にもアポストロフィや制御文字を含めることはできません。無効な値は `invalid_resume_argv` で失敗し、その報告は適用されません。カスタムエージェントは、コマンドを付ける前に `pane.report_agent` でペインを保持している必要があり、そうでない場合は `resume_not_accepted` で失敗します。Herdr は同じ `source` と `agent` がペインを保持している間だけコマンドを保持し、そのエージェントに対する Herdr 組み込みの resume コマンドより優先します。古い Herdr はこのフィールドを無視します。
+どちらのメソッドも、Shepherd サーバーの再起動後に報告元の現在のセッションを再開するコマンドを、省略可能な `resume_argv` 配列で受け付けます。配列は最大 64 要素、合計 8 KiB までです。最初の要素はパスではなく単純なコマンド名でなければならず、どの要素にもアポストロフィや制御文字を含めることはできません。無効な値は `invalid_resume_argv` で失敗し、その報告は適用されません。カスタムエージェントは、コマンドを付ける前に `pane.report_agent` でペインを保持している必要があり、そうでない場合は `resume_not_accepted` で失敗します。Shepherd は同じ `source` と `agent` がペインを保持している間だけコマンドを保持し、そのエージェントに対する Shepherd 組み込みの resume コマンドより優先します。古い Shepherd はこのフィールドを無視します。
 
 ```json
 {
@@ -565,12 +565,12 @@ JSON のデコードまで到達したリクエスト行では、メソッドや
 }
 ```
 
-Herdr に保存されたネイティブセッション参照があるとき、`pane.get`、`pane.list`、`agent.get`、`agent.list` は読み取り専用の `agent_session` オブジェクトを公開します:
+Shepherd に保存されたネイティブセッション参照があるとき、`pane.get`、`pane.list`、`agent.get`、`agent.list` は読み取り専用の `agent_session` オブジェクトを公開します:
 
 ```json
 {
   "agent_session": {
-    "source": "herdr:codex",
+    "source": "shepherd:codex",
     "agent": "codex",
     "kind": "id",
     "value": "..."
@@ -584,7 +584,7 @@ Herdr に保存されたネイティブセッション参照があるとき、`p
 
 `PaneInfo` と `AgentInfo` は、任意の `terminal_title` と `terminal_title_stripped` フィールドを公開します。`terminal_title` は、安全性のための正規化を行った最新の OSC 0/2 タイトルです。`terminal_title_stripped` は、先頭にある認識済みのアクティビティまたはスピナーのグリフ 1 つと、それに続く空白を除去します。これらはサーバーが所有する値で、コールドリスタートをまたいで保持されず、メタデータの `title` や意味的なエージェント状態から独立しています。
 
-ユーザーフックが Herdr インテグレーションからライフサイクル状態を奪わずに表示をカスタマイズしたいときは `pane.report_metadata` を使ってください。
+ユーザーフックが Shepherd インテグレーションからライフサイクル状態を奪わずに表示をカスタマイズしたいときは `pane.report_metadata` を使ってください。
 
 ```json
 {
@@ -622,7 +622,7 @@ Herdr に保存されたネイティブセッション参照があるとき、`p
 
 workspace の get/list 応答は結果の `tokens` マップを公開し、スペースサイドバー行では `$jj_status` のような値を描画できます。変更と TTL の失効は、最新のワークスペーススナップショットを含む `workspace.metadata_updated` を発行します。このメタデータイベントは API 購読者に届きますが、プラグインイベントフックは実行しません。
 
-表示テキストは保存前に正規化されます。Herdr は前後の空白を取り除き、制御文字を除去し、`title`、`display_agent`、各状態ラベル、トークン値を 80 文字に制限します。正規化後に空になったトークン値は、そのキーをクリアします。
+表示テキストは保存前に正規化されます。Shepherd は前後の空白を取り除き、制御文字を除去し、`title`、`display_agent`、各状態ラベル、トークン値を 80 文字に制限します。正規化後に空になったトークン値は、そのキーをクリアします。
 
 `source` と `applies_to_source` はソース識別子です。80 文字以下で、ASCII の英字、数字、コロン、ドット、アンダースコア、ハイフンのみを含められます。
 
@@ -647,7 +647,7 @@ workspace の get/list 応答は結果の `tokens` マップを公開し、ス�
 ```
 
 最初のレスポンスは購読の確認応答です。以降の行はプッシュされるイベントです。
-すべての項目が有効でなければなりません。参照先ペインが 1 つでも存在しない場合、Herdr はリクエスト全体をエラーで拒否し、接続を閉じます。他の項目が購読されたと仮定せず、ペイン一覧を更新して再試行してください。
+すべての項目が有効でなければなりません。参照先ペインが 1 つでも存在しない場合、Shepherd はリクエスト全体をエラーで拒否し、接続を閉じます。他の項目が購読されたと仮定せず、ペイン一覧を更新して再試行してください。
 ライフサイクルイベントの購読はリクエストが受理された時点から始まり、それ以前に保持されていたイベントは再生しません。
 
 ライフサイクルとエージェント状態のイベントは、各購読内の順序を保った上限付きのバッチで送信されます。イベント履歴は永続ログではありません。購読の初期化中も含め、購読者が保持範囲より遅れた場合、サーバーは元のリクエスト `id` と `error.code: "events_lost"` を含むエラーレスポンスを送り、その購読接続を閉じます。欠落したイベントを通知せずに配信を続けることはありません。他のクライアント接続には影響しません。履歴はイベント種別間で共有されるため、失われたイベントが購読条件に一致しなかった可能性があっても、保持範囲を超えたことを通知します。
@@ -656,9 +656,9 @@ workspace の get/list 応答は結果の `tokens` マップを公開し、ス�
 
 スナップショットとイベントに共通のシーケンス境界はありません。順序が保証されるのは各購読項目内のみで、項目間やスナップショットとの前後関係は保証されません。バッファしたイベントの内容をスナップショットへ無条件に再適用しないでください。復旧できるのは現在の状態であり、失われたイベント履歴ではありません。再び `events_lost` を受け取った場合は、再購読して状態を照合し直します。読み取りが遅いクライアントでは、読み取り速度を上げるかイベントの負荷を減らす必要があります。
 
-ワークスペースのイベント購読には `workspace.created`、`workspace.updated`、`workspace.metadata_updated`、`workspace.renamed`、`workspace.moved`、`workspace.reordered`、`workspace.closed`、`workspace.focused` があります。`workspace.metadata_updated` はプラグインイベントフックを実行せずにトークン変更と TTL 失効を報告します。その他のワークスペースイベントは Herdr の UI/ランタイムのライフサイクルを記述します。ワークスペースが worktree グループに属している場合、`workspace.created` は任意の `workspace.worktree` 出自情報を含みます。`workspace.moved` は、移動した `workspace_id`、要求された `insert_index`、更新済みの順序付き `workspaces` リストを含みます。`workspace.reordered` は、アトミックに移動した `workspace_ids`、省略可能な `before_workspace_id`、サーバーが確定した順序付き `workspaces` リストを含みます。削除前に Herdr がまだ識別できる場合、`workspace.closed` は最終的な `workspace` スナップショットを含みます。
+ワークスペースのイベント購読には `workspace.created`、`workspace.updated`、`workspace.metadata_updated`、`workspace.renamed`、`workspace.moved`、`workspace.reordered`、`workspace.closed`、`workspace.focused` があります。`workspace.metadata_updated` はプラグインイベントフックを実行せずにトークン変更と TTL 失効を報告します。その他のワークスペースイベントは Shepherd の UI/ランタイムのライフサイクルを記述します。ワークスペースが worktree グループに属している場合、`workspace.created` は任意の `workspace.worktree` 出自情報を含みます。`workspace.moved` は、移動した `workspace_id`、要求された `insert_index`、更新済みの順序付き `workspaces` リストを含みます。`workspace.reordered` は、アトミックに移動した `workspace_ids`、省略可能な `before_workspace_id`、サーバーが確定した順序付き `workspaces` リストを含みます。削除前に Shepherd がまだ識別できる場合、`workspace.closed` は最終的な `workspace` スナップショットを含みます。
 タブのイベント購読には `tab.created`、`tab.closed`、`tab.focused`、`tab.renamed`、`tab.moved` があります。`tab.moved` は、移動した `tab_id`、`workspace_id`、要求された `insert_index`、そのワークスペースの更新済みの順序付き `tabs` リストを含みます。
-ペインのイベント購読には `pane.created`、`pane.updated`、`pane.closed`、`pane.focused`、`pane.moved`、`pane.exited`、`pane.agent_detected`、`pane.output_matched`、`pane.agent_status_changed`、`pane.scroll_changed` があります。`pane.focused` は、このサーバーに接続した任意のクライアントでの手動ペイン選択も報告します。他のクライアントの表示は移動させず、ペイロードにクライアントの識別情報は含みません。選択済みのペインを再度選んでも発行しません。ターミナルタイトルの変更は `pane.updated` を発行することがありますが、生のタイトルでスピナーだけが変化し、`terminal_title_stripped` が変わらない場合は発行しません。`pane.scroll_changed` は 1 つの `pane_id` を対象とし、Herdr がスクロールスナップショットの変化を検出するたびに `pane_id`、`workspace_id`、現在の `scroll` 情報を発行します。
+ペインのイベント購読には `pane.created`、`pane.updated`、`pane.closed`、`pane.focused`、`pane.moved`、`pane.exited`、`pane.agent_detected`、`pane.output_matched`、`pane.agent_status_changed`、`pane.scroll_changed` があります。`pane.focused` は、このサーバーに接続した任意のクライアントでの手動ペイン選択も報告します。他のクライアントの表示は移動させず、ペイロードにクライアントの識別情報は含みません。選択済みのペインを再度選んでも発行しません。ターミナルタイトルの変更は `pane.updated` を発行することがありますが、生のタイトルでスピナーだけが変化し、`terminal_title_stripped` が変わらない場合は発行しません。`pane.scroll_changed` は 1 つの `pane_id` を対象とし、Shepherd がスクロールスナップショットの変化を検出するたびに `pane_id`、`workspace_id`、現在の `scroll` 情報を発行します。
 レイアウトのイベント購読には `layout.updated` があります。このイベントは 1 つのタブについて更新済みの `PaneLayoutSnapshot` を運びます。`session.snapshot` でキャッシュを管理するクライアントは、このイベントを契機にサーバーから対象のレイアウトを再取得してください。遅れて届いたペイロードは、最新のスナップショットより古い可能性があります。
 
 worktree のイベント購読には `worktree.created`、`worktree.opened`、`worktree.removed` があります。worktree イベントは Git チェックアウトのライフサイクルを記述します。`worktree.created` は開かれた `workspace` と作成された `worktree` を含みます。`worktree.opened` は対象の `workspace`、開かれた `worktree`、`already_open` を含みます。`worktree.removed` は `workspace_id`、削除された `worktree`、`forced` を含みます。
@@ -670,10 +670,10 @@ worktree のイベント購読には `worktree.created`、`worktree.opened`、`w
 プロトコルクライアントを書いているのでなければ、CLI 経由で `pane.read` を使ってください。
 
 ```bash
-herdr pane read w1:p1 --source visible --lines 80
-herdr pane read w1:p1 --source recent --lines 120
-herdr pane read w1:p1 --source recent-unwrapped --lines 120
-herdr pane read w1:p1 --source detection
+shepherd pane read w1:p1 --source visible --lines 80
+shepherd pane read w1:p1 --source recent --lines 120
+shepherd pane read w1:p1 --source recent-unwrapped --lines 120
+shepherd pane read w1:p1 --source detection
 ```
 
 `recent-unwrapped` はソフト折り返しを無視するのでログに便利です。
@@ -684,8 +684,8 @@ herdr pane read w1:p1 --source detection
 エージェントとスクリプトの協調には wait を使います。
 
 ```bash
-herdr agent wait w1:p1 --until done
-herdr agent wait w1:p1 --until blocked
+shepherd agent wait w1:p1 --until done
+shepherd agent wait w1:p1 --until blocked
 ```
 
 エージェントの wait は、任意のコマンドの完了ではなく意味的な状態を観測します。
@@ -724,7 +724,7 @@ herdr agent wait w1:p1 --until blocked
     "manifests": [
       {
         "agent": "cursor",
-        "source": "/home/me/.config/herdr/agent-detection/cursor.toml",
+        "source": "/home/me/.config/shepherd/agent-detection/cursor.toml",
         "source_kind": "local override",
         "active_version": "2026.06.10.1",
         "cached_remote_version": "2026.06.10.1",
@@ -748,9 +748,9 @@ herdr agent wait w1:p1 --until blocked
 }
 ```
 
-レスポンスには `herdr agent explain --json` が出力するのと同じ explain オブジェクトが含まれます: 最終状態、マニフェストのソースとバージョン、マッチしたルール、評価されたルールの証拠、スキップ状態の理由、idle フォールバックの理由、そして完全なライフサイクルフック権威によってスクリーンルールが権威でなくなったときの `screen_detection_skip_reason` です。
+レスポンスには `shepherd agent explain --json` が出力するのと同じ explain オブジェクトが含まれます: 最終状態、マニフェストのソースとバージョン、マッチしたルール、評価されたルールの証拠、スキップ状態の理由、idle フォールバックの理由、そして完全なライフサイクルフック権威によってスクリーンルールが権威でなくなったときの `screen_detection_skip_reason` です。
 
-クライアントには `agent.explain` をサポートする実行中のサーバーが必要です。Herdr のアップグレード後は、このメソッドに頼る前にサーバーを再起動するかライブハンドオフしてください。
+クライアントには `agent.explain` をサポートする実行中のサーバーが必要です。Shepherd のアップグレード後は、このメソッドに頼る前にサーバーを再起動するかライブハンドオフしてください。
 
 エラーは次のようになります:
 
@@ -766,6 +766,6 @@ herdr agent wait w1:p1 --until blocked
 
 ## プロトコルの安定性
 
-クライアント描画の Herdr UI は、ローカルサーバーと SSH サーバーに安定したエンドポイント世代を使います。クライアントとサーバーのビルドが一致する必要はありません。接続時にコアのスナップショット、画面、入力、blob コーデックを合意し、サーバーが対応 API メソッドと任意の能力を通知します。保存済み SSH マシンには、選択中のマシンだけがペイン画面を送信するための `surface_interest` と、通信のない接続の障害を検知する `health_check` が必要です。未対応のサーバーは明示的に更新するまで Attention になります。詳しくは[マシンへの接続](/ja/docs/connecting-machines/)を参照してください。メソッドがない場合は、そのサーバー上の該当アクションだけを無効にしてクライアント側通知を表示します。拒否やタイムアウトも接続を終了せず通知します。エンドポイント世代 1 より前のサーバーだけは最後の 1 回の更新が必要です。
+クライアント描画の Shepherd UI は、ローカルサーバーと SSH サーバーに安定したエンドポイント世代を使います。クライアントとサーバーのビルドが一致する必要はありません。接続時にコアのスナップショット、画面、入力、blob コーデックを合意し、サーバーが対応 API メソッドと任意の能力を通知します。保存済み SSH マシンには、選択中のマシンだけがペイン画面を送信するための `surface_interest` と、通信のない接続の障害を検知する `health_check` が必要です。未対応のサーバーは明示的に更新するまで Attention になります。詳しくは[マシンへの接続](/ja/docs/connecting-machines/)を参照してください。メソッドがない場合は、そのサーバー上の該当アクションだけを無効にしてクライアント側通知を表示します。拒否やタイムアウトも接続を終了せず通知します。エンドポイント世代 1 より前のサーバーだけは最後の 1 回の更新が必要です。
 
-番号付きバイナリプロトコルは、直接ターミナル接続やライブハンドオフなど、同一インストール内の内部操作に残ります。異なるビルド間でそれらを使う前に `ping` または `herdr status` を確認してください。JSON API クライアントは未知のフィールドを無視し、未対応メソッドを通常のエラーとして扱う必要があります。
+番号付きバイナリプロトコルは、直接ターミナル接続やライブハンドオフなど、同一インストール内の内部操作に残ります。異なるビルド間でそれらを使う前に `ping` または `shepherd status` を確認してください。JSON API クライアントは未知のフィールドを無視し、未対応メソッドを通常のエラーとして扱う必要があります。

@@ -582,6 +582,7 @@ fn pane_cycle_last_and_agent_actions_resolve_to_stable_pane_ids() {
             state_labels: Vec::new(),
             tokens: Vec::new(),
             focused: true,
+            shepherd: None,
         },
         ClientShellAgent {
             pane_id: "pane_2".into(),
@@ -598,6 +599,7 @@ fn pane_cycle_last_and_agent_actions_resolve_to_stable_pane_ids() {
             state_labels: Vec::new(),
             tokens: Vec::new(),
             focused: false,
+            shepherd: None,
         },
     ];
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
@@ -672,6 +674,7 @@ fn agent_sidebar_honors_priority_symbols_tokens_and_stable_hits() {
             state_labels: Vec::new(),
             tokens: vec![("summary".into(), "review complete".into())],
             focused: true,
+            shepherd: None,
         },
         ClientShellAgent {
             pane_id: "pane_2".into(),
@@ -688,6 +691,7 @@ fn agent_sidebar_honors_priority_symbols_tokens_and_stable_hits() {
             state_labels: vec![("blocked".into(), "needs input".into())],
             tokens: vec![("summary".into(), "waiting for Can".into())],
             focused: false,
+            shepherd: None,
         },
     ];
     let mut config = Config::default();
@@ -811,6 +815,7 @@ fn muted_agent_sidebar_rows_do_not_stack_terminal_faint() {
         state_labels: Vec::new(),
         tokens: Vec::new(),
         focused: true,
+        shepherd: None,
     }];
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
     state.set_snapshot(Box::new(projected));
@@ -878,6 +883,7 @@ fn active_agent_view_controls_sidebar_order_and_focus_indices() {
             state_labels: Vec::new(),
             tokens: Vec::new(),
             focused: true,
+            shepherd: None,
         },
         ClientShellAgent {
             pane_id: "pane_2".into(),
@@ -894,6 +900,7 @@ fn active_agent_view_controls_sidebar_order_and_focus_indices() {
             state_labels: Vec::new(),
             tokens: Vec::new(),
             focused: false,
+            shepherd: None,
         },
         ClientShellAgent {
             pane_id: "pane_3".into(),
@@ -910,6 +917,7 @@ fn active_agent_view_controls_sidebar_order_and_focus_indices() {
             state_labels: Vec::new(),
             tokens: Vec::new(),
             focused: false,
+            shepherd: None,
         },
     ];
     projected.agent_view_label = Some("review".into());
@@ -961,7 +969,7 @@ fn active_agent_view_controls_sidebar_order_and_focus_indices() {
 #[test]
 fn agent_sort_toggle_is_client_local_and_persists_per_endpoint() {
     let path = std::env::temp_dir().join(format!(
-        "herdr-shell-agent-sort-{}-{}.json",
+        "shepherd-shell-agent-sort-{}-{}.json",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -984,6 +992,7 @@ fn agent_sort_toggle_is_client_local_and_persists_per_endpoint() {
         state_labels: Vec::new(),
         tokens: Vec::new(),
         focused: true,
+        shepherd: None,
     });
     let config =
         ClientShellConfig::from_config(&Config::default()).with_preferences_path(path.clone());
@@ -1261,7 +1270,7 @@ fn worktree_create_previews_the_endpoint_owned_checkout_path() {
         &state.overlay,
         Some(ClientShellOverlay::WorktreeCreate(create))
             if create.checkout_path
-                == "/tmp/herdr-worktrees/repo/feature-client-shell"
+                == "/tmp/shepherd-worktrees/repo/feature-client-shell"
     ));
     let submit = state.handle_input_bytes(b"\r");
     let [ClientShellAction::Endpoint { request, .. }] = &submit.actions[..] else {
@@ -1318,7 +1327,7 @@ fn worktree_action_errors_expire_without_more_input() {
         crate::input::KeybindMatch::Action(crate::input::KeybindAction::RemoveWorktree),
         &mut guard,
     );
-    let message = "This workspace is not a Herdr-managed worktree checkout.";
+    let message = "This workspace is not a Shepherd-managed worktree checkout.";
     assert_eq!(state.endpoint_error.as_deref(), Some(message));
 
     let deadline = state.endpoint_error_deadline.expect("deadline");
@@ -1357,7 +1366,7 @@ fn worktree_prepare_rejection_notice_expires() {
         &request_id,
         Err(ClientShellEndpointError {
             code: Some("not_git_worktree".into()),
-            message: "Herdr worktree actions require a workspace inside a Git work tree".into(),
+            message: "Shepherd worktree actions require a workspace inside a Git work tree".into(),
         }),
     );
     let notice = state
@@ -1530,7 +1539,7 @@ fn worktree_remove_escalates_recoverable_failure_to_force_confirmation() {
 #[test]
 fn semantic_notifications_use_client_policy_and_stable_navigation_targets() {
     let mut config = ClientShellConfig::from_config(&Config::default());
-    config.toast_delivery = crate::config::ToastDelivery::Herdr;
+    config.toast_delivery = crate::config::ToastDelivery::Shepherd;
     config.toast_delay_seconds = 0;
     let mut state = ClientShellState::new(config);
     let mut projected = snapshot();
@@ -1549,6 +1558,7 @@ fn semantic_notifications_use_client_policy_and_stable_navigation_targets() {
         state_labels: Vec::new(),
         tokens: Vec::new(),
         focused: false,
+        shepherd: None,
     });
     state.set_snapshot(Box::new(projected));
     state.set_pane_surface(surface());
