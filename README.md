@@ -31,6 +31,21 @@ shepherd is a fork of [herdr](https://github.com/herdrdev/herdr) that adds multi
 
 ---
 
+## a look
+
+the native app (`ctrl+shift+s` switches between the terminal and the shepherd panel), shown with a small sample project:
+
+<p align="center">
+  <img src="docs/shepherd/media/overview.png" alt="overview: runs, agents, tasks and the herd pulse" width="900" />
+</p>
+
+<p align="center">
+  <img src="docs/shepherd/media/patterns.png" alt="pattern graph editor with the api-team orchestrator-worker pattern" width="440" />
+  <img src="docs/shepherd/media/agents.png" alt="agents view with role, vendor, model and state" width="440" />
+</p>
+
+more pictures of every view are in [docs/shepherd/native-app.md](docs/shepherd/native-app.md#screenshots).
+
 ## install
 
 shepherd is in beta (0.1.0-beta) and ships no binaries yet; build it from source.

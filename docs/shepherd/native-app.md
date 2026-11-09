@@ -93,6 +93,18 @@ The Shepherd panel groups its views in two sets.
 
 Everything is editable: tasks, skills, patterns, roles and their skills. Changes go through the server, so the terminal UI and the CLI see them at once.
 
+### Screenshots
+
+Taken with `native/dev/media.sh` (see section 6) against a sample project with stand-in agents.
+
+| | |
+|---|---|
+| ![the terminal mode](media/terminal.png) **Terminal** | ![overview](media/overview.png) **Overview** |
+| ![runs](media/runs.png) **Runs** | ![agents](media/agents.png) **Agents** |
+| ![tasks](media/tasks.png) **Tasks** | ![the pattern graph editor](media/patterns.png) **Patterns** |
+| ![activity](media/activity.png) **Activity** | ![skills](media/skills.png) **Skills** |
+| ![events](media/events.png) **Events** | ![models](media/models.png) **Models** |
+
 ## 4. How it relates to the terminal
 
 The native app does not replace the terminal UI; it is another way in. Use whichever fits:
@@ -111,7 +123,19 @@ All three read and write the same server state.
 
 The native app is under active development. It is a view layer: it does not start agents by itself, it asks the server to. If the connection to the server is lost the status line says `disconnected ... reconnecting` and the app reconnects by itself when the server is back.
 
-## 6. Developing it
+## 6. Making pictures and a demo video
+
+`native/dev/media.sh <out-dir>` starts a throwaway server with a sample project (one task, one pattern run, some bus traffic) and stand-in agents, then saves one picture per view and a video that walks through them. Nothing of yours is touched.
+
+```bash
+native/dev/media.sh ~/shepherd-demo      # writes *.png, shepherd-demo.mp4 and shepherd-demo.gif
+SHOTS=0 native/dev/media.sh out          # only the video
+FILM=0 SIZE=1600x1000 native/dev/media.sh out   # only the pictures, at another window size
+```
+
+It needs `ffmpeg` and Python with Pillow. Under the hood the app has two small recording hooks, `SHEPHERD_NATIVE_SHOT` (one picture) and `SHEPHERD_NATIVE_FILM=<dir>` (one picture per animation tick while it walks through the views), plus `SHEPHERD_NATIVE_SIZE=WxH` for the window size.
+
+## 7. Developing it
 
 ```bash
 cd native
