@@ -173,9 +173,7 @@ fn wake_ignores_messages_published_by_the_consumer_itself() {
     service.reconcile_once().unwrap();
     let prompts = terminals.prompts();
     assert_eq!(prompts.len(), before + 1);
-    assert!(prompts[before]
-        .1
-        .contains("Hay 1 mensaje nuevo en 'results'"));
+    assert!(prompts[before].1.contains("1 new message on 'results'"));
 }
 
 #[test]

@@ -176,7 +176,7 @@ pub(crate) fn pattern_run_context(
 }
 
 /// Determine location for pattern runs storage.
-/// The task a run was launched for: its objective starts with "Tarea #N:" (or "Task #N:").
+/// The task a run was launched for: its objective starts with "Task #N:" (or the legacy "Tarea #N:").
 pub(crate) fn task_of_objective(objective: &str) -> Option<u32> {
     let head = objective.trim_start();
     let rest = head
@@ -729,10 +729,9 @@ impl OrchestrationService {
                             if !blocked.is_empty() || published == 0 {
                                 run.state = PatternRunState::Stalled;
                                 run.stalled_reason = Some(if blocked.is_empty() {
-                                    "sin actividad: ningún mensaje publicado en los tópicos del run"
-                                        .to_owned()
+                                    "no activity: no message published on the run topics".to_owned()
                                 } else {
-                                    format!("agente bloqueado: {}", blocked.join(", "))
+                                    format!("agent blocked: {}", blocked.join(", "))
                                 });
                             } else {
                                 run.state = PatternRunState::Done;

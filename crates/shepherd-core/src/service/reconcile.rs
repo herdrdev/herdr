@@ -52,7 +52,7 @@ impl OrchestrationService {
                         Some(_) => {
                             agent.state = "failed".into();
                             agent.error = format!(
-                                "no recibió su primer prompt antes del reinicio; relánzalo con `shepherd shepherd spawn {} --vendor {}`",
+                                "did not receive its first prompt before the restart; relaunch it with `shepherd shepherd spawn {} --vendor {}`",
                                 agent.role, agent.vendor
                             );
                             agent.updated = now.clone();
@@ -194,7 +194,7 @@ impl OrchestrationService {
                             .insert(agent.id.clone());
                         if newly_blocked {
                             let _ = self.terminals.notify(
-                                &format!("Shepherd: agente {} requiere intervención", agent.id),
+                                &format!("Shepherd: agent {} needs attention", agent.id),
                                 Some(BLOCKED_HUMAN_NOTICE),
                             );
                             let _ = bus.send(Message::directed(

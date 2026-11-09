@@ -43,11 +43,11 @@ One implementation agent (coder) per task. Reviewers and researchers stay read-o
 shepherd spawn coder "<goal, files in scope, how to verify>" --task-id <id>
 shepherd agents --json                  # id, role, vendor, state, pane
 shepherd pattern list
-shepherd pattern run <name> --task "Tarea #<id>: <objective>"
+shepherd pattern run <name> --task "Task #<id>: <objective>"
 shepherd pattern runs                   # state of runs (pause/resume/stop <id>)
 ```
 
-Start the pattern objective with `Tarea #<id>:` so the run is linked to the task.
+Start the pattern objective with `Task #<id>:` so the run is linked to the task.
 
 ## 4. Talk to an agent: pick the right channel
 

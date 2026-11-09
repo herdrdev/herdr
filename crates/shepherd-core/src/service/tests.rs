@@ -282,7 +282,7 @@ fn req2_first_prompt_resends_up_to_3_times_when_agent_does_not_react() {
         .deliver_first_prompt(&spawned.id, "do work")
         .unwrap_err();
     assert!(
-        err.contains("no reaccionó al primer prompt tras 3 reenvíos"),
+        err.contains("did not react to the first prompt after 3 resends"),
         "unexpected error: {err}"
     );
     // 1 initial send + 3 resends = 4 prompts sent
@@ -555,7 +555,7 @@ fn req4_resume_on_startup_reconciles_starting_and_preserves_tokens() {
     assert_eq!(r3.state, "failed");
     assert!(r3.notice.is_empty());
     assert!(
-        r3.error.contains("relánzalo"),
+        r3.error.contains("relaunch it"),
         "failed starting agent must explain how to relaunch: {}",
         r3.error
     );
@@ -1915,7 +1915,7 @@ fn test_reproduce_bug1_wake_dormant_consumer_when_done() {
     );
     assert!(prompts[1]
         .1
-        .contains("Hay 1 mensaje nuevo en 'results': usa poll"));
+        .contains("1 new message on 'results': use poll"));
 
     let reg2 = service.load_registry().unwrap();
     assert_eq!(reg2.agents[0].state, "working");
@@ -2709,7 +2709,7 @@ fn members_left_over_from_earlier_runs_do_not_swallow_the_messages_of_live_worke
         .unwrap();
     // one order per partition, so whichever partitions the worker owns, it has something
     for p in 0..4u32 {
-        bus.publish("orders", "haz la tarea", None, Some(p), "brain-1")
+        bus.publish("orders", "do the task", None, Some(p), "brain-1")
             .unwrap();
     }
 
@@ -2732,7 +2732,7 @@ fn members_left_over_from_earlier_runs_do_not_swallow_the_messages_of_live_worke
         terminals
             .prompts()
             .iter()
-            .any(|(_, text)| text.contains("mensaje") && text.contains("orders")),
+            .any(|(_, text)| text.contains("message") && text.contains("orders")),
         "the live worker is told about the order: {:?}",
         terminals.prompts()
     );
@@ -2890,10 +2890,10 @@ fn asking_for_a_worktree_without_commits_explains_what_to_do() {
 #[test]
 fn a_run_that_finishes_closes_the_task_it_was_launched_for() {
     use super::patterns_run::task_of_objective;
-    assert_eq!(task_of_objective("Tarea #7: algo\n\nmás"), Some(7));
+    assert_eq!(task_of_objective("Task #7: something\n\nmore"), Some(7));
     assert_eq!(task_of_objective("Task #12: x"), Some(12));
-    assert_eq!(task_of_objective("Tarea #7 sin dos puntos"), None);
-    assert_eq!(task_of_objective("Una tarea cualquiera"), None);
+    assert_eq!(task_of_objective("Task #7 without colon"), None);
+    assert_eq!(task_of_objective("Any task"), None);
 
     let tmp = TestDir::new("test");
     let (service, terminals, clock) = test_service(tmp.path());

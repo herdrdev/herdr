@@ -137,7 +137,7 @@ impl OrchestrationService {
         let use_worktree = match req.worktree {
             Some(true) if !can_worktree => {
                 return Err(format!(
-                    "worktree_unavailable: {} no es un repositorio git con al menos un commit; haz un commit inicial o lanza el agente sin worktree",
+                    "worktree_unavailable: {} is not a git repository with at least one commit; make an initial commit or launch the agent without a worktree",
                     root_path.display()
                 ));
             }
@@ -431,7 +431,7 @@ impl OrchestrationService {
                         .map_err(|e| e.to_string());
                 } else {
                     return Err(format!(
-                        "el nombre de agente {:?} está ocupado por el panel {:?} (etiqueta {:?}); no es un resto de Shepherd y no se cerrará",
+                        "agent name {:?} is taken by pane {:?} (label {:?}); it is not a Shepherd leftover and will not be closed",
                         open_req.agent_id, existing.pane, existing.title
                     ));
                 }

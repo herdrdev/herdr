@@ -1,122 +1,121 @@
-# Shepherd en Rust: arquitectura recomendada
+# Shepherd in Rust: recommended architecture
 
-Estado a 2026-11-03. Complementa `docs/rust-migration.md` (orden de portabilidad y criterios para retirar Go).
+As of 2026-11-03. Complements `docs/rust-migration.md` (porting order and criteria for retiring Go).
 
-## Qué cambia respecto a la idea del fork
+## What changes compared with the fork idea
 
-Verificado en esta máquina:
+Verified on this machine:
 
-- Hay **dos productos de shepherd** instalados, con APIs distintas:
-  - `shepherd` 0.9.5: TUI y servidor con API de socket NDJSON (el que usa hoy el código Go y `shepherd-core`).
-  - `shepherd-app` + `shepherd-core` (`hc`): la **versión gráfica** (GPUI). Sus terminales y agentes corren en `hc`; la app solo los muestra.
-- `shepherd-app` **se extiende sin fork**: la interfaz entera son archivos en `~/.config/shepherd-app` (layouts, teclas) y *mods* en JavaScript (gpui-kit) que pueden ejecutar `hc` y programas externos (`shepherd.exec`, `shepherd.hc`, ver `shepherd.d.ts`) y lanzar comandos de la app (`tab.new {argv, task}`, `terminal.open`, ...).
-- Por eso **no hace falta un fork** para integrar Shepherd en la app gráfica. Un fork solo se justifica si se necesita algo que ni `hc` ni los mods exponen. Hoy no se ha encontrado ninguna carencia.
+- There are **two shepherd products** installed, with different APIs:
+  - `shepherd` 0.9.5: TUI and server with an NDJSON socket API (the one the Go code and `shepherd-core` use today).
+  - `shepherd-app` + `shepherd-core` (`hc`): the **graphical version** (GPUI). Its terminals and agents run in `hc`; the app only shows them.
+- `shepherd-app` **is extended without a fork**: the whole interface is files in `~/.config/shepherd-app` (layouts, keys) and JavaScript *mods* (gpui-kit) that can run `hc` and external programs (`shepherd.exec`, `shepherd.hc`, see `shepherd.d.ts`) and launch app commands (`tab.new {argv, task}`, `terminal.open`, ...).
+- So **no fork is needed** to integrate Shepherd into the graphical app. A fork is only justified if something is needed that neither `hc` nor the mods expose. No such gap has been found so far.
 
-## Forma recomendada: núcleo + puerto + dos frontends
+## Recommended shape: core + port + two frontends
 
 ```
             ┌──────────────── shepherd-core (lib) ────────────────┐
-            │ tareas · planes · workflow · roles · skills · MCP   │
-            │ bus · registro · reconciliación · límites · gates   │
+            │ tasks · plans · workflow · roles · skills · MCP     │
+            │ bus · registry · reconciliation · limits · gates    │
             └───────────────┬─────────────────────────────────────┘
-                            │ trait Terminals  (el único punto de contacto con shepherd)
+                            │ trait Terminals  (the only point of contact with shepherd)
              ┌──────────────┴───────────────┐
         ShepherdSocket (shepherd 0.9.5)       HcCli (shepherd-core `hc` + `shepherd-app do`)
                             │
       ┌─────────────────────┴──────────────────────┐
-  Frontend 1: CLI + TUI de terminal           Frontend 2: mod de shepherd-app
-  (`shepherd`, ratatui más adelante)          (JS; ejecuta `shepherd … --json`)
+  Frontend 1: CLI + terminal TUI              Frontend 2: shepherd-app mod
+  (`shepherd`, ratatui later)                 (JS; runs `shepherd … --json`)
 ```
 
-1. **`trait Terminals`**: abrir un agente en una terminal/pestaña (con worktree), mandarle un prompt o teclas, leer su pantalla, esperar a que pare, ver su estado, etiquetarlo, cerrarlo, adjuntarse. `ShepherdSocket` es lo que ya existe; `HcCli` ejecuta `hc` (`run --bg`, `send`, `keys`, `read`, `wait`, `ls --json`, `label`, `kill`). El núcleo nunca importa un adaptador concreto, así que los tests usan un falso.
-2. **Salida `--json` estable** en todos los comandos de lectura (`agents`, `task list/show`, `roles list`, `runs`, `skills`). Es el contrato que consumen la TUI y el mod. Documentado en `docs/rust-json-schema.md`.
-3. **Frontend 2 (mod de shepherd-app)**: un panel que lista agentes, tareas y runs con sus acciones (abrir la terminal del agente, matar, aprobar un gate), llamando al binario `shepherd` con `--json`. Sin lógica de negocio en JavaScript. Se valida con `shepherd-app check <carpeta>`.
-4. **Frontend 1**: CLI ya existente y, después, una TUI en ratatui sobre el mismo contrato (árbol, sub-pestañas y formularios como en las M11 a M14 de Go).
-5. **Daemon (`shepherd serve`)**: proceso largo con el registro, el bus, el servidor MCP y la reconciliación contra el adaptador activo. La CLI habla con él por socket unix, igual que `shep`/`shepd`.
+1. **`trait Terminals`**: open an agent in a terminal/tab (with worktree), send it a prompt or keys, read its screen, wait for it to stop, see its status, label it, close it, attach. `ShepherdSocket` is what already exists; `HcCli` runs `hc` (`run --bg`, `send`, `keys`, `read`, `wait`, `ls --json`, `label`, `kill`). The core never imports a concrete adapter, so the tests use a fake.
+2. **Stable `--json` output** on all read commands (`agents`, `task list/show`, `roles list`, `runs`, `skills`). It is the contract consumed by the TUI and the mod. Documented in `docs/rust-json-schema.md`.
+3. **Frontend 2 (shepherd-app mod)**: a panel that lists agents, tasks and runs with their actions (open the agent's terminal, kill, approve a gate), calling the `shepherd` binary with `--json`. No business logic in JavaScript. Validated with `shepherd-app check <folder>`.
+4. **Frontend 1**: the existing CLI and, later, a ratatui TUI over the same contract (tree, sub-tabs and forms as in Go's M11 to M14).
+5. **Daemon (`shepherd serve`)**: a long-running process with the registry, the bus, the MCP server and reconciliation against the active adapter. The CLI talks to it over a unix socket, like `shep`/`shepd`.
 
-## Etapas
+## Stages
 
-| Etapa | Contenido | Quién |
+| Stage | Content | Who |
 |---|---|---|
-| **R1** | `trait Terminals` + `ShepherdSocket` refactorizado + `HcCli` con falsos; `--json`; las 7 herramientas MCP que faltan; skills (catálogo, niveles global/rol/sesión, instalación por vendor) | agente `agy` (`docs/rust-agent-brief.md`) |
-| R2 | `shepherd serve`: registro persistente con contadores que nunca retroceden, reconciliación, reanudación tras reinicio, verificación y reenvío del primer prompt, aviso "needs you", recuperación de nombres ocupados | agente |
-| R3 | Mod de `shepherd-app` (panel de agentes/tareas/runs) y vista de git/ramas/PR | agente |
-| R4 | TUI de terminal (ratatui) | agente |
-| R5 | Importar issues, `doctor`, `init`, configuración editable, instalador; retirar Go según `rust-migration.md` | agente |
+| **R1** | `trait Terminals` + refactored `ShepherdSocket` + `HcCli` with fakes; `--json`; the 7 missing MCP tools; skills (catalog, global/role/session levels, per-vendor installation) | agent `agy` (`docs/rust-agent-brief.md`) |
+| R2 | `shepherd serve`: persistent registry with counters that never go backwards, reconciliation, resume after restart, verification and resend of the first prompt, "needs you" notice, recovery of taken names | agent |
+| R3 | `shepherd-app` mod (agents/tasks/runs panel) and git/branches/PR view | agent |
+| R4 | Terminal TUI (ratatui) | agent |
+| R5 | Import issues, `doctor`, `init`, editable configuration, installer; retire Go according to `rust-migration.md` | agent |
 
-Cada etapa termina con `cargo test --workspace` en verde, sin tocar el comportamiento seguro (push y PR siempre esperan a un humano).
+Each stage ends with `cargo test --workspace` green, without touching the safe behavior (push and PR always wait for a human).
 
-## Lo aprendido que el puerto debe respetar (viene de las pruebas reales con Go)
+## What the port must respect (learned from real tests with Go)
 
-Están en `docs/vendors.md` y `docs/decisions.md`; los imprescindibles:
+They are in `docs/vendors.md` and `docs/decisions.md`; the essentials:
 
-- Un prompt aceptado por shepherd puede perderse si la CLI aún arranca: verificar que el agente reacciona y reenviar hasta 3 veces.
-- Una CLI parada en un diálogo de confianza o login nunca acepta su primer prompt: marcarlo como "necesita al humano" y **nunca contestar el diálogo por el humano**.
-- Los nombres de agente son únicos entre paneles abiertos: un id que se reutiliza choca; los ids y el contador de spawns **no retroceden** aunque se limpien agentes.
-- `done` significa "terminó su turno" y el panel sigue vivo; solo `exited`, `killed` y `failed` son definitivos.
-- Editar el texto de una skill llega al agente sin reiniciar (claude y codex); añadir o quitar una skill exige reiniciarlo.
-- Push y PR siempre esperan una aprobación humana explícita, salvo `--auto-push` de ese run.
-- Nada de lo que escribe Shepherd entra en el repo del usuario (skills e instrucciones se inyectan por sesión).
+- A prompt accepted by shepherd can be lost if the CLI is still starting: verify that the agent reacts and resend up to 3 times.
+- A CLI stuck on a trust or login dialog never accepts its first prompt: mark it as "needs the human" and **never answer the dialog for the human**.
+- Agent names are unique among open panes: a reused id collides; ids and the spawn counter **never go backwards** even if agents are cleaned.
+- `done` means "finished its turn" and the pane stays alive; only `exited`, `killed` and `failed` are final.
+- Editing a skill's text reaches the agent without restarting (claude and codex); adding or removing a skill requires restarting it.
+- Push and PR always wait for explicit human approval, except for that run's `--auto-push`.
+- Nothing Shepherd writes enters the user's repo (skills and instructions are injected per session).
 
-## Preguntas abiertas para el dueño del proyecto
+## Open questions for the project owner
 
-1. ¿Existe ya un fork de herdr con cambios propios? No hay ninguno en este equipo. Si existe, ¿qué capacidad aporta que `hc` no tenga?
-2. ¿La app gráfica es el objetivo principal de adopción, o la TUI de terminal? Cambia el orden de R3 y R4.
-3. ¿Se mantiene el protocolo del socket de `shepherd` 0.9.5, o se deja solo `hc`?
+1. Is there already a herdr fork with its own changes? There is none on this machine. If there is, what capability does it provide that `hc` lacks?
+2. Is the graphical app the main adoption target, or the terminal TUI? It changes the order of R3 and R4.
+3. Is the `shepherd` 0.9.5 socket protocol kept, or is only `hc` left?
 
 ---
 
-## Mapeo `trait Terminals` → `ShepherdSocket` y `HcCli`
+## Mapping `trait Terminals` → `ShepherdSocket` and `HcCli`
 
-El módulo `crates/shepherd-core/src/terminals.rs` define `trait Terminals` y selecciona el adaptador activo mediante la variable de entorno `SHEPHERD_TERMINALS` (`socket` | `hc`) o la clave de configuración `shepherd.backend` (`socket` por defecto):
+The module `crates/shepherd-core/src/terminals.rs` defines `trait Terminals` and selects the active adapter through the `SHEPHERD_TERMINALS` environment variable (`socket` | `hc`) or the `shepherd.backend` configuration key (`socket` by default):
 
-| Método en `trait Terminals` | `ShepherdSocket` (`shepherd` 0.9.5 socket NDJSON) | `HcCli` (`shepherd-core` `hc` CLI) |
+| Method in `trait Terminals` | `ShepherdSocket` (`shepherd` 0.9.5 NDJSON socket) | `HcCli` (`shepherd-core` `hc` CLI) |
 |---|---|---|
-| `open_agent(&OpenAgentRequest)` | `workspace.list` / `workspace.create` o `worktree.create` → `tab.create` (con `env`) → `pane.rename` → `metadata.report` → `agent.start` (o `pane.send_text` si `shepherd_agent` está vacío) | Worktree git (`git worktree add -B <branch> <path> <base>`) si aplica → `hc run --bg --json --outlive-parent --no-notify --name <agent_id> --cwd <cwd> --label role=<role> --label agent=<agent_id> --label vendor=<vendor> --label label=<label> -- <command> <args...>` (con variables `env` en el proceso hijo) |
-| `prompt(target, text)` | `agent.prompt { agent, text }` (`agent_blocked` → `PromptOutcome::Blocked`) | `hc send --json <target> <text>` (código de salida `9` o `error.kind == "blocked"` → `PromptOutcome::Blocked`) |
+| `open_agent(&OpenAgentRequest)` | `workspace.list` / `workspace.create` or `worktree.create` → `tab.create` (with `env`) → `pane.rename` → `metadata.report` → `agent.start` (or `pane.send_text` if `shepherd_agent` is empty) | Git worktree (`git worktree add -B <branch> <path> <base>`) if applicable → `hc run --bg --json --outlive-parent --no-notify --name <agent_id> --cwd <cwd> --label role=<role> --label agent=<agent_id> --label vendor=<vendor> --label label=<label> -- <command> <args...>` (with `env` variables in the child process) |
+| `prompt(target, text)` | `agent.prompt { agent, text }` (`agent_blocked` → `PromptOutcome::Blocked`) | `hc send --json <target> <text>` (exit code `9` or `error.kind == "blocked"` → `PromptOutcome::Blocked`) |
 | `send_text(target, text)` | `pane.send_text { pane_id, text, enter: true }` | `hc send --json <target> <text>` |
 | `send_keys(target, keys)` | `pane.send_keys { pane_id, keys }` | `hc keys --json <target> <keys...>` |
-| `read_screen(target, lines)` | `pane.read { pane_id, lines }` | `hc read --json --lines <lines> <target>` (extrae `.text` de `ReadResult`) |
+| `read_screen(target, lines)` | `pane.read { pane_id, lines }` | `hc read --json --lines <lines> <target>` (extracts `.text` from `ReadResult`) |
 | `wait(target, timeout)` | `agent.wait { agent, timeout_ms }` | `hc wait --json --timeout <secs> <target>` |
-| `agent_status(target)` | `agent.list {}` (filtra por `name` o `pane_id`) | `hc ls --json` (filtra `.terminals` por `name`, `address` o `labels.agent`) |
-| `label(target, labels)` | `pane.rename` (si incluye `label`) + `metadata.report { pane_id, source: "shepherd", status, data }` | `hc label --json <target> <k=v>...` |
+| `agent_status(target)` | `agent.list {}` (filters by `name` or `pane_id`) | `hc ls --json` (filters `.terminals` by `name`, `address` or `labels.agent`) |
+| `label(target, labels)` | `pane.rename` (if it includes `label`) + `metadata.report { pane_id, source: "shepherd", status, data }` | `hc label --json <target> <k=v>...` |
 | `close(target)` | `tab.close { tab_id }` | `hc kill --json <target>` |
-| `attach(target, takeover)` | `shepherd [--session <s>] agent attach <target> [--takeover]` o `shepherd session attach <s>` | `hc attach [target]` |
+| `attach(target, takeover)` | `shepherd [--session <s>] agent attach <target> [--takeover]` or `shepherd session attach <s>` | `hc attach [target]` |
 
 ---
 
-## Estado R1 (completado)
+## R1 status (completed)
 
-### 1. Módulos en `crates/shepherd-core` tras R1
+### 1. Modules in `crates/shepherd-core` after R1
 
-| Archivo | Estado en R1 |
+| File | Status in R1 |
 |---|---|
-| `src/terminals.rs` | **Nuevo en R1**: `trait Terminals`, `ShepherdSocket`, `HcCli`, `InMemoryTerminals`, selección de backend por `SHEPHERD_TERMINALS` y `shepherd.backend` (`socket\|hc`, por defecto `socket`). |
-| `src/shepherd.rs` | Ampliado con `send_keys`, `read_pane` y `wait_agent` sobre el cliente NDJSON de socket, envuelto por `ShepherdSocket`. |
-| `src/spawn.rs` | Refactorizado para depender exclusivamente de `&dyn Terminals` (`spawn_with_terminals`, `spawn_with_options`, `spawn_child`), verificando `can_spawn`, `max_spawn_depth`, `max_concurrent_agents`, `use_worktree`, e instalando skills de sesión mediante `skills::install`. |
-| `src/workflow.rs` | Refactorizado para ejecutar `run_coders_with_terminals`, `review_and_check`, `revise_coder` y `revise_agent` a través de `&dyn Terminals`. |
-| `src/skills.rs` | **Nuevo en R1**: catálogo con prioridad `Repo > User > Default (embebido desde skills/)`, `_global/`, `effective` / `effective_for` con auto-activación `lang-*` y `SkillAdjust` (`Global`, `Role`, `Session`), detección `edited`, validación de frontmatter (`validate`), gestión (`name_ok`, `list_in`, `new_skill`, `override_skill`, `toggle` con reversión automática si otra capa lo sombrea), e instalación por sesión (`claude-plugin`, `codex-developer`, `worktree-file`, `prompt`). |
-| `src/mcp.rs` | Ampliado de 6 a **13 herramientas MCP**: añadidas `spawn_agent`, `wait_for`, `get_result`, `list_agents`, `read_output`, `ask_docs` y `get_workspace_instructions` junto a `submit_result`, `get_task_context`, `read_messages`, `send_message`, `get_diff` y `update_task_context`, respetando los permisos de `internal/daemon/mcp.go`. |
-| `src/lib.rs` y `src/main.rs` | Añadido soporte `--json` en `shepherd agents --json`, `shepherd task list [--archived] --json`, `shepherd task show <id> [section] --json` y `shepherd roles list --json`, con omisión garantizada de tokens (`Agent::public()`). Esquemas documentados en `docs/rust-json-schema.md`. |
+| `src/terminals.rs` | **New in R1**: `trait Terminals`, `ShepherdSocket`, `HcCli`, `InMemoryTerminals`, backend selection by `SHEPHERD_TERMINALS` and `shepherd.backend` (`socket\|hc`, default `socket`). |
+| `src/shepherd.rs` | Extended with `send_keys`, `read_pane` and `wait_agent` over the NDJSON socket client, wrapped by `ShepherdSocket`. |
+| `src/spawn.rs` | Refactored to depend exclusively on `&dyn Terminals` (`spawn_with_terminals`, `spawn_with_options`, `spawn_child`), checking `can_spawn`, `max_spawn_depth`, `max_concurrent_agents`, `use_worktree`, and installing session skills through `skills::install`. |
+| `src/workflow.rs` | Refactored to run `run_coders_with_terminals`, `review_and_check`, `revise_coder` and `revise_agent` through `&dyn Terminals`. |
+| `src/skills.rs` | **New in R1**: catalog with priority `Repo > User > Default (embedded from skills/)`, `_global/`, `effective` / `effective_for` with `lang-*` auto-activation and `SkillAdjust` (`Global`, `Role`, `Session`), `edited` detection, frontmatter validation (`validate`), management (`name_ok`, `list_in`, `new_skill`, `override_skill`, `toggle` with automatic rollback if another layer shadows it), and per-session installation (`claude-plugin`, `codex-developer`, `worktree-file`, `prompt`). |
+| `src/mcp.rs` | Extended from 6 to **13 MCP tools**: added `spawn_agent`, `wait_for`, `get_result`, `list_agents`, `read_output`, `ask_docs` and `get_workspace_instructions` next to `submit_result`, `get_task_context`, `read_messages`, `send_message`, `get_diff` and `update_task_context`, respecting the permissions of `internal/daemon/mcp.go`. |
+| `src/lib.rs` and `src/main.rs` | Added `--json` support in `shepherd agents --json`, `shepherd task list [--archived] --json`, `shepherd task show <id> [section] --json` and `shepherd roles list --json`, with guaranteed omission of tokens (`Agent::public()`). Schemas documented in `docs/rust-json-schema.md`. |
 
-### 2. Verificado vs. No verificado en vivo
+### 2. Verified vs. not verified live
 
-- **Verificado con `cargo test --workspace` (52 tests en verde, 0 warnings)**:
-  - Selección de adaptador (`SHEPHERD_TERMINALS` > `shepherd.backend` > `"socket"`), validación de configuración.
-  - `InMemoryTerminals` en tests unitarios de `terminals`, `spawn`, `workflow` y `mcp`.
-  - `HcCli` contra un script `hc` falso en directorio temporal que verifica los argumentos exactos y parseo JSON de `run`, `send` (incluyendo bloqueo con código 9), `keys`, `read`, `wait`, `ls`, `label`, `kill` y `attach`.
-  - `ShepherdSocket` / `ShepherdClient` contra un `UnixListener` temporal verificando el protocolo NDJSON.
-  - No divergencia entre las 13 skills embebidas en Rust (`include_str!`) y los archivos de `skills/` en el árbol del repositorio.
-  - Prioridad `Repo > User > Default`, niveles `Global / Role / Session`, `edited`, `toggle` con rollback ante sombreo, e instalación de sesión en los 4 estilos (`claude-plugin`, `codex-developer`, `worktree-file`, `prompt`).
-  - Esquemas `--json` y ausencia total del campo `token` en `agents --json` y `list_agents`.
-  - Las 13 herramientas MCP, permisos `can_spawn`, límites `max_spawn_depth` y `max_concurrent_agents`, restricción de `update_task_context` a `brain`/`docs`, `read_output`, `ask_docs` y `get_workspace_instructions`.
-- **No verificado contra procesos reales en vivo**:
-  - Por las reglas de seguridad de la sesión, no se ejecutaron comandos destructivos ni spawns reales contra el demonio `hc` ni `shepherd-app` de la máquina anfitriona (`hc run`, `hc kill`, `shepherd-app do`).
+- **Verified with `cargo test --workspace` (52 tests green, 0 warnings)**:
+  - Adapter selection (`SHEPHERD_TERMINALS` > `shepherd.backend` > `"socket"`), configuration validation.
+  - `InMemoryTerminals` in unit tests of `terminals`, `spawn`, `workflow` and `mcp`.
+  - `HcCli` against a fake `hc` script in a temporary directory that checks the exact arguments and JSON parsing of `run`, `send` (including the block with code 9), `keys`, `read`, `wait`, `ls`, `label`, `kill` and `attach`.
+  - `ShepherdSocket` / `ShepherdClient` against a temporary `UnixListener` checking the NDJSON protocol.
+  - No divergence between the 13 skills embedded in Rust (`include_str!`) and the files in `skills/` in the repository tree.
+  - Priority `Repo > User > Default`, levels `Global / Role / Session`, `edited`, `toggle` with rollback on shadowing, and session installation in the 4 styles (`claude-plugin`, `codex-developer`, `worktree-file`, `prompt`).
+  - `--json` schemas and total absence of the `token` field in `agents --json` and `list_agents`.
+  - The 13 MCP tools, `can_spawn` permissions, `max_spawn_depth` and `max_concurrent_agents` limits, restriction of `update_task_context` to `brain`/`docs`, `read_output`, `ask_docs` and `get_workspace_instructions`.
+- **Not verified against real live processes**:
+  - Because of the session's safety rules, no destructive commands or real spawns were run against the host machine's `hc` daemon or `shepherd-app` (`hc run`, `hc kill`, `shepherd-app do`).
 
-### 3. Qué queda para R2+
+### 3. What remains for R2+
 
-- **R2 (`shepherd serve`)**: demonio persistente con bucle de reconciliación contra `Terminals`, verificación y reenvío hasta 3 veces del primer prompt si la CLI tarda en arrancar, detección de aviso `"needs you"` cuando un agente queda bloqueado, y recuperación ante nombres ocupados.
-- **R3**: Mod de `shepherd-app` consumiendo `shepherd ... --json`.
-- **R4**: TUI de terminal en `ratatui`.
-- **R5**: Importación de issues de GitHub, `doctor`, `init`, instalador y retirada del árbol Go según `docs/rust-migration.md`.
-
+- **R2 (`shepherd serve`)**: persistent daemon with a reconciliation loop against `Terminals`, verification and resend (up to 3 times) of the first prompt if the CLI is slow to start, detection of the `"needs you"` notice when an agent gets blocked, and recovery from taken names.
+- **R3**: `shepherd-app` mod consuming `shepherd ... --json`.
+- **R4**: terminal TUI in `ratatui`.
+- **R5**: GitHub issue import, `doctor`, `init`, installer and retirement of the Go tree according to `docs/rust-migration.md`.

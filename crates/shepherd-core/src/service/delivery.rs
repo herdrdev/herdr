@@ -53,7 +53,8 @@ impl OrchestrationService {
             let status_res = self.terminals.agent_status(&target);
             match status_res {
                 Ok(st) if st.state == "finished" => {
-                    let err_msg = "el panel se cerró antes de entregar el primer prompt".to_owned();
+                    let err_msg =
+                        "the pane closed before the first prompt was delivered".to_owned();
                     agent.state = "exited".into();
                     agent.notice.clear();
                     agent.error = err_msg.clone();
@@ -84,7 +85,7 @@ impl OrchestrationService {
                                 .insert(agent_id.to_string());
                             if newly_announced {
                                 let _ = self.terminals.notify(
-                                    &format!("Shepherd: agente {} requiere intervención", agent_id),
+                                    &format!("Shepherd: agent {} needs attention", agent_id),
                                     Some(BLOCKED_HUMAN_NOTICE),
                                 );
                             }
@@ -111,7 +112,7 @@ impl OrchestrationService {
                 }
                 Err(err) if is_missing_terminal_error(&err) => {
                     let err_msg =
-                        "el panel desapareció antes de entregar el primer prompt".to_owned();
+                        "the pane disappeared before the first prompt was delivered".to_owned();
                     agent.state = "exited".into();
                     agent.notice.clear();
                     agent.error = err_msg.clone();
@@ -205,12 +206,12 @@ impl OrchestrationService {
                     Err(err) => {
                         if attempt + 1 == total_sends {
                             let msg = format!(
-                                "el agente {agent_id} no reaccionó al primer prompt tras {} reenvíos: {err}",
+                                "agent {agent_id} did not react to the first prompt after {} resends: {err}",
                                 self.service_config.max_prompt_resends
                             );
                             self.mark_prompt_failed(agent_id, &msg)?;
                             return Err(format!(
-                                "el agente {agent_id} no reaccionó al primer prompt tras {} reenvíos",
+                                "agent {agent_id} did not react to the first prompt after {} resends",
                                 self.service_config.max_prompt_resends
                             ));
                         }
@@ -240,11 +241,11 @@ impl OrchestrationService {
                             self.mark_prompt_failed(
                                 agent_id,
                                 &format!(
-                                    "no se pudo enviar el primer prompt tras {} reenvíos: {err}",
+                                    "could not send the first prompt after {} resends: {err}",
                                     self.service_config.max_prompt_resends
                                 ),
                             )?;
-                            return Err(format!("no se pudo enviar el primer prompt: {err}"));
+                            return Err(format!("could not send the first prompt: {err}"));
                         }
                     }
                 }
@@ -280,7 +281,7 @@ impl OrchestrationService {
         }
 
         let msg = format!(
-            "el agente {agent_id} no reaccionó al primer prompt tras {} reenvíos",
+            "agent {agent_id} did not react to the first prompt after {} resends",
             self.service_config.max_prompt_resends
         );
         self.mark_prompt_failed(agent_id, &msg)?;
@@ -322,7 +323,7 @@ impl OrchestrationService {
                     .insert(agent_id.to_string());
                 if newly_announced {
                     let _ = self.terminals.notify(
-                        &format!("Shepherd: agente {} requiere intervención", agent_id),
+                        &format!("Shepherd: agent {} needs attention", agent_id),
                         Some(BLOCKED_HUMAN_NOTICE),
                     );
                 }
@@ -704,9 +705,9 @@ impl OrchestrationService {
                 }
 
                 let prompt_text = if count == 1 {
-                    format!("Hay 1 mensaje nuevo en '{}': usa poll", grp.topic)
+                    format!("1 new message on '{}': use poll", grp.topic)
                 } else {
-                    format!("Hay {} mensajes nuevos en '{}': usa poll", count, grp.topic)
+                    format!("{} new messages on '{}': use poll", count, grp.topic)
                 };
 
                 let prompt_target = if !agent.pane.is_empty() {

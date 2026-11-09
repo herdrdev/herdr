@@ -69,10 +69,10 @@ fn pattern_prompt_replaces_the_role_script_and_names_the_pattern() {
     let manager = run.agents.iter().find(|a| a.role == "reviewer").unwrap();
     let p = prompt_of(&terminals, &manager.id);
     assert!(
-        p.contains("Estás en el patrón `hierarchical` (`hierarchical`)"),
+        p.contains("You are in the pattern `hierarchical` (`hierarchical`)"),
         "{p}"
     );
-    assert!(p.contains(&format!("tu id es `{}`", manager.id)), "{p}");
+    assert!(p.contains(&format!("your id is `{}`", manager.id)), "{p}");
     assert!(p.contains("engineering manager"), "persona missing: {p}");
     assert!(p.contains("build X"), "objective missing: {p}");
     // The reviewer role script (diff review, get_task_context) must not leak in.
@@ -98,8 +98,8 @@ fn only_starters_get_the_kickoff_order() {
         for a in &run.agents {
             let def = pat.agents.iter().find(|d| d.prompt == a.prompt).unwrap();
             let p = prompt_of(&terminals, &a.id);
-            let starts = p.contains("Empieza ahora");
-            let waits = p.contains("Espera mensajes en");
+            let starts = p.contains("Start now");
+            let waits = p.contains("Wait for messages on");
             assert!(starts != waits, "{name}/{}: {p}", a.id);
             assert_eq!(starts, starters.contains(&def.id), "{name}/{}: {p}", a.id);
             assert_eq!(a.start, starts, "{name}/{}", a.id);
@@ -169,11 +169,7 @@ fn run_without_any_message_stalls_instead_of_done_and_revives_on_publish() {
     settle(&service, &terminals, &clock);
     let r = service.get_pattern_run(tmp.path(), &run.id).unwrap();
     assert_eq!(r.state, PatternRunState::Stalled);
-    assert!(r
-        .stalled_reason
-        .as_deref()
-        .unwrap()
-        .contains("sin actividad"));
+    assert!(r.stalled_reason.as_deref().unwrap().contains("no activity"));
     service
         .publish_topic("orders", "go", None, Some(0), "human")
         .unwrap();
@@ -210,7 +206,7 @@ fn blocked_agent_makes_the_run_stalled_not_done() {
     service.reconcile_once().unwrap();
     let r = service.get_pattern_run(tmp.path(), &run.id).unwrap();
     assert_eq!(r.state, PatternRunState::Stalled);
-    assert!(r.stalled_reason.as_deref().unwrap().contains("bloqueado"));
+    assert!(r.stalled_reason.as_deref().unwrap().contains("blocked"));
 }
 
 #[test]

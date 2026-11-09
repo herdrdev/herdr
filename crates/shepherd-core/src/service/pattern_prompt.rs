@@ -24,7 +24,9 @@ fn topics(list: &[String]) -> String {
 fn persona(prompt: Option<&str>, role: &str) -> String {
     match prompt.map(str::trim).filter(|p| !p.is_empty()) {
         Some(p) => p.to_owned(),
-        None => format!("(sin persona definida; actúa según el rol `{role}` dentro del patrón)"),
+        None => {
+            format!("(no persona defined; act according to the `{role}` role within the pattern)")
+        }
     }
 }
 
@@ -36,20 +38,20 @@ pub(crate) fn startup_prompt(
     starter: bool,
 ) -> String {
     let order = if starter {
-        "Empieza ahora: el objetivo del run es tu orden de arranque; haz tu parte y publica el resultado en tus tópicos de salida.".to_owned()
+        "Start now: the run objective is your starting order; do your part and publish the result to your output topics.".to_owned()
     } else {
         format!(
-            "Espera mensajes en {}; actúa cuando te avisen. No empieces por tu cuenta: el objetivo del run es solo contexto.",
+            "Wait for messages on {}; act when notified. Do not start on your own: the run objective is context only.",
             topics(&def.consumes)
         )
     };
     format!(
-        "Estás en el patrón `{name}` (`{kind}`), tu id es `{AGENT_ID_PLACEHOLDER}` (definición `{def_id}`, rol `{role}`) y tu persona es: {persona}\n\n\
-         Tus tópicos: publicas en {publishes}; consumes de {consumes}.\n\
-         Cómo colaborar: skill `shepherd-events` o herramientas MCP (publish, poll, subscribe, ack). Ya estás suscrito a tus tópicos: no pases `group` en `subscribe` salvo necesidad (cambiaría tu grupo de consumo). Al publicar no pases `key` ni `partition` salvo necesidad real de orden: sin clave el bus reparte los mensajes entre particiones y, con ellos, entre los miembros de un grupo (con la misma clave todo cae en una partición y un solo worker lo recibe).\n\n\
-         Objetivo del run: {task}\n\n\
+        "You are in the pattern `{name}` (`{kind}`), your id is `{AGENT_ID_PLACEHOLDER}` (definition `{def_id}`, role `{role}`) and your persona is: {persona}\n\n\
+         Your topics: you publish to {publishes}; you consume from {consumes}.\n\
+         How to collaborate: skill `shepherd-events` or MCP tools (publish, poll, subscribe, ack). You are already subscribed to your topics: do not pass `group` to `subscribe` unless needed (it would change your consumer group). When publishing, do not pass `key` or `partition` unless ordering really matters: without a key the bus spreads messages across partitions and therefore across the members of a group (with the same key everything lands in one partition and a single worker receives it).\n\n\
+         Run objective: {task}\n\n\
          {order}\n\n\
-         Reglas: actúa solo según tu persona; no pidas contexto de tarea ni diff (no hay tarea ni coder: `get_task_context` solo devuelve este objetivo y la topología); publica tu resultado en tus tópicos y termina tu turno; recibirás avisos cuando lleguen mensajes.\n",
+         Rules: act only according to your persona; do not ask for task context or a diff (there is no task or coder: `get_task_context` only returns this objective and the topology); publish your result to your topics and end your turn; you will be notified when messages arrive.\n",
         name = pattern.name,
         kind = pattern.kind,
         def_id = def.id,
@@ -62,12 +64,12 @@ pub(crate) fn startup_prompt(
 }
 
 fn line(a: &PatternRunAgent) -> String {
-    let level = a.level.map(|l| format!(" nivel {l}")).unwrap_or_default();
+    let level = a.level.map(|l| format!(" level {l}")).unwrap_or_default();
     format!(
-        "- `{}` (rol {}{level}{}): publica en {}; consume de {}",
+        "- `{}` (role {}{level}{}): publishes to {}; consumes from {}",
         a.id,
         a.role,
-        if a.start { ", inicia el patrón" } else { "" },
+        if a.start { ", starts the pattern" } else { "" },
         topics(&a.publishes),
         topics(&a.consumes),
     )
@@ -78,7 +80,7 @@ fn line(a: &PatternRunAgent) -> String {
 pub(crate) fn run_context(run: &PatternRun, agent_id: &str) -> String {
     let me = run.agents.iter().find(|a| a.id == agent_id);
     let mut out = format!(
-        "# Run de patrón {}\n\nPatrón: `{}` (`{}`)\nObjetivo del run: {}\n\n## Topología\n",
+        "# Pattern run {}\n\nPattern: `{}` (`{}`)\nRun objective: {}\n\n## Topology\n",
         run.id, run.pattern, run.kind, run.task
     );
     for a in &run.agents {
@@ -86,18 +88,18 @@ pub(crate) fn run_context(run: &PatternRun, agent_id: &str) -> String {
         out.push('\n');
     }
     if !run.topics.is_empty() {
-        out.push_str(&format!("\nTópicos: {}\n", topics(&run.topics)));
+        out.push_str(&format!("\nTopics: {}\n", topics(&run.topics)));
     }
     if let Some(me) = me {
         out.push_str(&format!(
-            "\n## Tú\n\nid `{}`, rol {}. Persona: {}\n{}\n",
+            "\n## You\n\nid `{}`, role {}. Persona: {}\n{}\n",
             me.id,
             me.role,
             persona(me.prompt.as_deref(), &me.role),
             if me.start {
-                "Eres iniciador: empieza con el objetivo."
+                "You are the starter: begin with the objective."
             } else {
-                "No eres iniciador: espera mensajes en tus tópicos de entrada."
+                "You are not the starter: wait for messages on your input topics."
             }
         ));
     }

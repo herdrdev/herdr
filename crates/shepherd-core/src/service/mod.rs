@@ -32,9 +32,8 @@ use crate::{
 /// `not found` for panes it has just created while it is busy, and reconcile ticks can arrive in bursts.
 pub(crate) const MISSING_GRACE_MS: u64 = 5_000;
 
-pub const BLOCKED_HUMAN_NOTICE: &str =
-    "esperando al humano: diálogo de confianza o login; abre su pestaña";
-pub const NEVER_READY_ERROR: &str = "nunca estuvo listo, probablemente esperaba al humano";
+pub const BLOCKED_HUMAN_NOTICE: &str = "waiting for the human: trust dialog or login; open its tab";
+pub const NEVER_READY_ERROR: &str = "never became ready, probably waiting for the human";
 
 /// Injectable clock for deterministic testing of timeouts, retries, and quiet periods.
 pub trait Clock: Send + Sync {
@@ -388,7 +387,7 @@ impl OrchestrationService {
         let live = self.load_registry()?.live().len();
         if live > 0 && !force {
             return Err(format!(
-                "confirmation_required: {live} agente(s) vivo(s) usan el bus; limpiarlo corta su comunicación"
+                "confirmation_required: {live} live agent(s) use the bus; clearing it cuts their communication"
             ));
         }
         let removed = self.bus()?.since(0).map_err(|e| e.to_string())?.len();
@@ -429,7 +428,7 @@ impl OrchestrationService {
             .collect();
         self.record_failure(
             "agent_exited",
-            &format!("{id} marcado exited por: {}", frames.join(" <- ")),
+            &format!("{id} marked exited by: {}", frames.join(" <- ")),
         );
     }
 
