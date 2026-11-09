@@ -61,7 +61,7 @@ const MIN_HEIGHT: u16 = 8;
 
 fn render_too_small(buffer: &mut Buffer, area: Rect, palette: &Palette) {
     let msg = format!(
-        "Amplía la terminal para usar Shepherd (mínimo {MIN_WIDTH}x{MIN_HEIGHT}, ahora {}x{}). Esc: salir",
+        "Enlarge the terminal to use Shepherd (minimum {MIN_WIDTH}x{MIN_HEIGHT}, now {}x{}). Esc: quit",
         area.width, area.height
     );
     for (i, line) in components::list_view::wrap_text(&msg, area.width)
@@ -113,7 +113,7 @@ pub fn render_shepherd_section(
 
     // Close button (right-aligned), shortened when the bar is tight
     let close_text = if area.width >= 60 {
-        "[ × Cerrar (Esc) ]"
+        "[ × Close (Esc) ]"
     } else {
         "[×]"
     };
@@ -253,29 +253,29 @@ pub fn render_shepherd_section(
             let total = state.agents.agents.len();
             let needs_you = state.agents.needs_you_count();
             let sum = if needs_you > 0 {
-                format!("{total} agentes ({needs_you} REQUIERE ATENCIÓN)")
+                format!("{total} agents ({needs_you} NEED ATTENTION)")
             } else {
-                format!("{total} agentes registrados")
+                format!("{total} agents registered")
             };
             if state.agents.snapshots.open {
                 let snaps = &state.agents.snapshots;
                 let sum = match snaps.source {
                     snapshots::SnapshotSource::Agent => format!(
-                        "Snapshots de {} ({})",
+                        "Snapshots of {} ({})",
                         snaps.agent_id,
                         snaps.agent_snaps.len()
                     ),
                     snapshots::SnapshotSource::Finished => {
                         format!(
-                            "Snapshots de agentes finalizados ({})",
+                            "Snapshots of finished agents ({})",
                             snaps.finished_snaps.len()
                         )
                     }
                 };
-                let help = "↑/↓: lista | c: capturar | d/D: diff | f: archivo | R: todo | x: borrar | p: podar | Tab: finalizados | Esc: volver";
+                let help = "↑/↓: list | c: capture | d/D: diff | f: file | R: all | x: delete | p: prune | Tab: finished | Esc: back";
                 (sum, help)
             } else {
-                let help = "↑/↓: lista | Enter: terminal | s: nuevo | t: snapshots | K: matar | x: limpiar | r: refrescar | Esc: salir";
+                let help = "↑/↓: list | Enter: terminal | s: new | t: snapshots | K: kill | x: clean | r: refresh | Esc: quit";
                 (sum, help)
             }
         }
@@ -288,36 +288,38 @@ pub fn render_shepherd_section(
                 .filter(|t| t.state.to_lowercase() == "open" || t.state.to_lowercase() == "active")
                 .count();
             let sum = format!("{total} tareas ({open_count} abiertas)");
-            let help = "↑/↓: lista | n: nueva | i: importar | a: archivar | e: editar | Esc: salir";
+            let help = "↑/↓: list | n: new | i: import | a: archive | e: edit | Esc: quit";
             (sum, help)
         }
         ShepherdSectionTab::Runs => {
             let total = state.runs.runs.len();
-            let sum = format!("{total} ejecuciones");
-            let help = "↑/↓: lista | l: iniciar run | c: cancelar | a: aprobar gate | d: rechazar | Esc: salir";
+            let sum = format!("{total} runs");
+            let help =
+                "↑/↓: list | l: start run | c: cancel | a: approve gate | d: reject | Esc: quit";
             (sum, help)
         }
         ShepherdSectionTab::Patterns => {
             let total = state.patterns.patterns.len();
             let sum = format!("{total} patrones disponibles");
-            let help = "↑/↓: lista | n: nuevo | e: editar | c: duplicar | v: validar | d: eliminar | Esc: salir";
+            let help =
+                "↑/↓: list | n: new | e: edit | c: duplicate | v: validate | d: delete | Esc: quit";
             (sum, help)
         }
         ShepherdSectionTab::Skills => {
             let sum = match state.skills.mode {
                 skills::SkillsViewMode::AgentView => {
-                    format!("Skills de agente ({})", state.skills.agent_skills.len())
+                    format!("Agent skills ({})", state.skills.agent_skills.len())
                 }
                 skills::SkillsViewMode::CatalogView => {
-                    format!("Catálogo de skills ({})", state.skills.catalog_skills.len())
+                    format!("Skill catalog ({})", state.skills.catalog_skills.len())
                 }
             };
             let help = match state.skills.mode {
                 skills::SkillsViewMode::AgentView => {
-                    "c: catálogo | Space: activar/desactivar | r: restaurar | Esc: salir"
+                    "c: catalog | Space: enable/disable | r: restore | Esc: quit"
                 }
                 skills::SkillsViewMode::CatalogView => {
-                    "c: por agente | n: nueva | g: global | d: eliminar | Esc: salir"
+                    "c: by agent | n: new | g: global | d: delete | Esc: quit"
                 }
             };
             (sum, help)
@@ -326,7 +328,7 @@ pub fn render_shepherd_section(
             let total = state.git.rows.len();
             let dirty = state.git.rows.iter().filter(|r| !r.is_clean).count();
             let sum = format!("{total} worktrees ({dirty} modificados)");
-            let help = "↑/↓: lista | w: nuevo worktree | b: nueva rama | p: publicar | t: snapshots | x: eliminar | c: copiar ruta | Esc: salir";
+            let help = "↑/↓: list | w: new worktree | b: new branch | p: publish | t: snapshots | x: delete | c: copy path | Esc: quit";
             (sum, help)
         }
         ShepherdSectionTab::Events => {
@@ -338,20 +340,20 @@ pub fn render_shepherd_section(
                         ""
                     };
                     format!(
-                        "Tópicos y Streaming{paused_str} ({} msgs)",
+                        "Topics and Streaming{paused_str} ({} msgs)",
                         state.events.messages.len()
                     )
                 }
                 events::ShepherdEventsSubTab::PatternRuns => {
-                    format!("Ejecuciones de patrones ({})", state.events.runs.len())
+                    format!("Pattern runs ({})", state.events.runs.len())
                 }
             };
             let help = match state.events.active_subtab {
                 events::ShepherdEventsSubTab::Topics => {
-                    "Tab: alternar vista | Space: pausa/reanudar | r: replay | /: filtrar | Esc: salir"
+                    "Tab: switch view | Space: pause/resume | r: replay | /: filter | Esc: quit"
                 }
                 events::ShepherdEventsSubTab::PatternRuns => {
-                    "Tab: alternar vista | p: pausar/reanudar | K: detener | ↑/↓: lista | Esc: salir"
+                    "Tab: switch view | p: pause/resume | K: stop | ↑/↓: list | Esc: quit"
                 }
             };
             (sum, help)
@@ -359,7 +361,7 @@ pub fn render_shepherd_section(
     };
 
     let help_text = if state.has_active_sub_modal_or_stripe() {
-        "Tab: campo | Enter: confirmar | Esc: cancelar"
+        "Tab: field | Enter: confirm | Esc: cancel"
     } else {
         help_text
     };

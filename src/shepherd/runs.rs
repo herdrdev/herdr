@@ -81,7 +81,7 @@ impl LaunchOptionsFormState {
                     self.error = None;
                 } else {
                     self.error =
-                        Some("Replanificar solo está disponible si existe un plan guardado".into());
+                        Some("Replanning is only available when a saved plan exists".into());
                 }
             }
             _ => {}
@@ -320,7 +320,7 @@ impl ShepherdRunsState {
         if let Some(run) = self.selected_run() {
             let task_id = run.task_id;
             let message = format!(
-                "¿Cancelar el run de la tarea '#{task_id}'? Aviso: los agentes ya lanzados seguirán vivos en sus terminales nativas de shepherd."
+                "Cancel the run for task '#{task_id}'? Notice: already launched agents will stay alive in their native shepherd terminals."
             );
             self.sub_modal = RunsSubModal::ConfirmCancelRun { task_id, message };
         }
@@ -335,10 +335,10 @@ impl ShepherdRunsState {
                 let task_id = run.task_id;
                 let message = match gate {
                     GateKind::PlanApproval => {
-                        format!("¿Aprobar plan de la tarea '#{task_id}'? Se iniciará la fase de implementación de código.")
+                        format!("Approve the plan for task '#{task_id}'? The code implementation phase will start.")
                     }
                     GateKind::PushAndPr { subtask } => {
-                        format!("¿Aprobar gate de la subtarea {subtask}? Esta acción realizará git push a la rama remota y abrirá el Pull Request en GitHub.")
+                        format!("Approve the gate for subtask {subtask}? This will git push to the remote branch and open the Pull Request on GitHub.")
                     }
                 };
                 self.sub_modal = RunsSubModal::ConfirmApproveGate {
@@ -359,10 +359,10 @@ impl ShepherdRunsState {
                 let task_id = run.task_id;
                 let message = match gate {
                     GateKind::PlanApproval => {
-                        format!("¿Rechazar plan de la tarea '#{task_id}'? Se solicitará una reformulación del plan.")
+                        format!("Reject the plan for task '#{task_id}'? A reformulation of the plan will be requested.")
                     }
                     GateKind::PushAndPr { subtask } => {
-                        format!("¿Rechazar gate de la subtarea {subtask}? No se realizará push ni PR; se solicitará revisión adicional al coder.")
+                        format!("Reject the gate for subtask {subtask}? No push or PR will be made; additional review will be requested from the coder.")
                     }
                 };
                 self.sub_modal = RunsSubModal::ConfirmRejectGate {
@@ -384,7 +384,7 @@ impl ShepherdRunsState {
             RunsSubModal::LaunchOptions(form) => {
                 if form.options.replan && !form.has_saved_plan {
                     let mut form = form;
-                    form.error = Some("No se puede replanificar sin un plan guardado".into());
+                    form.error = Some("Cannot replan without a saved plan".into());
                     self.sub_modal = RunsSubModal::LaunchOptions(form);
                     None
                 } else {
@@ -597,7 +597,7 @@ mod tests {
         {
             assert_eq!(task_id, 5);
             assert!(
-                message.contains("agentes ya lanzados seguirán vivos"),
+                message.contains("already launched agents will stay alive"),
                 "Cancel run must warn that running agents remain alive"
             );
         } else {

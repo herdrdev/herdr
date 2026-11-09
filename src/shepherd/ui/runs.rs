@@ -322,7 +322,7 @@ pub fn render_runs_section(
         state.selected,
         state.list_scroll,
         None,
-        Some(("+ Iniciar", "l")),
+        Some(("+ Start", "l")),
         palette,
     );
 
@@ -339,50 +339,49 @@ pub fn render_runs_section(
         // 1. If launch options form is active
         if let Some(ref form) = state.launch_form {
             let inline_form = InlineFormState {
-                title: format!("OPCIONES DE LANZAMIENTO - RUN #{}", form.task_id),
+                title: format!("LAUNCH OPTIONS - RUN #{}", form.task_id),
                 fields: vec![
                     FormField {
-                        label: "Pausar para aprobación humana del plan:".into(),
+                        label: "Pause for human approval of the plan:".into(),
                         value: if form.options.wait_plan_approval {
                             "[✓] Activado".into()
                         } else {
                             "[ ] Desactivado".into()
                         },
-                        placeholder: "Espacio para alternar".into(),
+                        placeholder: "Space to toggle".into(),
                     },
                     FormField {
-                        label: "Publicación automática (auto_push - SIEMPRE false al abrir):"
-                            .into(),
+                        label: "Automatic publishing (auto_push - ALWAYS false on open):".into(),
                         value: if form.options.auto_push {
                             "[✓] Activado".into()
                         } else {
                             "[ ] Desactivado (seguro)".into()
                         },
-                        placeholder: "Espacio para alternar".into(),
+                        placeholder: "Space to toggle".into(),
                     },
                     FormField {
-                        label: "Replanificar desde cero (replan):".into(),
+                        label: "Replan from scratch (replan):".into(),
                         value: if form.options.replan {
-                            "[✓] Sí (forzar nuevo plan)".into()
+                            "[✓] Yes (force a new plan)".into()
                         } else if form.has_saved_plan {
                             "[ ] No (usar plan existente)".into()
                         } else {
-                            "[!] No disponible (sin plan guardado)".into()
+                            "[!] Unavailable (no saved plan)".into()
                         },
-                        placeholder: "Espacio para alternar".into(),
+                        placeholder: "Space to toggle".into(),
                     },
                 ],
                 active_field: form.active_option,
                 error: form.error.clone(),
-                success: Some("Parámetros validados correctamente.".into()),
+                success: Some("Parameters validated.".into()),
             };
 
             hits.launch_form_hits = Some(render_inline_form(
                 buffer,
                 detail_area,
                 &inline_form,
-                "Iniciar Run (Enter)",
-                "Cancelar (Esc)",
+                "Start Run (Enter)",
+                "Cancel (Esc)",
                 true,
                 palette,
             ));
@@ -416,12 +415,12 @@ pub fn render_runs_section(
             }
 
             let meta = format!(
-                "Fase actual: {}  |  Subtareas: {}/{}  |  Agentes activos: {}",
+                "Current phase: {}  |  Subtasks: {}/{}  |  Active agents: {}",
                 run.current_stage,
                 run.subtasks_progress.0,
                 run.subtasks_progress.1,
                 if run.active_agents.is_empty() {
-                    "ninguno".to_string()
+                    "none".to_string()
                 } else {
                     run.active_agents.join(", ")
                 }
@@ -439,8 +438,8 @@ pub fn render_runs_section(
             // If gate pending, notice block
             if let Some(ref gate) = run.pending_gate {
                 let gate_msg = match gate {
-                    GateKind::PlanApproval => "El planificador ha generado el plan y espera tu aprobación para comenzar a codificar.".to_string(),
-                    GateKind::PushAndPr { subtask } => format!("Subtarea #{subtask} completada. Se requiere autorización explícita para publicar rama y crear PR en GitHub."),
+                    GateKind::PlanApproval => "The planner has generated the plan and awaits your approval to start coding.".to_string(),
+                    GateKind::PushAndPr { subtask } => format!("Subtask #{subtask} completed. Explicit authorization is required to publish the branch and create a PR on GitHub."),
                 };
                 content.push(DetailContentBlock::Notice {
                     text: gate_msg,
@@ -448,11 +447,11 @@ pub fn render_runs_section(
                 });
             }
 
-            content.push(DetailContentBlock::Heading("ESTADO DE EJECUCIÓN:".into()));
+            content.push(DetailContentBlock::Heading("RUN STATUS:".into()));
             content.push(DetailContentBlock::Paragraph(format!(
-                "Fase en curso: {}\nPlan guardado disponible: {}\nSubtareas completadas: {} de {}",
+                "Current phase: {}\nSaved plan available: {}\nSubtasks completed: {} of {}",
                 run.current_stage,
-                if run.has_saved_plan { "Sí" } else { "No" },
+                if run.has_saved_plan { "Yes" } else { "No" },
                 run.subtasks_progress.0,
                 run.subtasks_progress.1,
             )));
@@ -475,10 +474,7 @@ pub fn render_runs_section(
                 detail_area
             };
 
-            let bottom_actions = [
-                ("Iniciar/Reanudar", "l", true),
-                ("Cancelar Run", "c", false),
-            ];
+            let bottom_actions = [("Start/Resume", "l", true), ("Cancel Run", "c", false)];
 
             hits.detail_hits = Some(render_detail_view(
                 buffer,
@@ -501,14 +497,14 @@ pub fn render_runs_section(
             if let Some(ref gate) = run.pending_gate {
                 let (warn, conf_label, can_label) = match gate {
                     GateKind::PlanApproval => (
-                        "¿Aprobar el plan propuesto para arrancar los agentes?",
-                        "✓ Aprobar Plan (a)",
-                        "✗ Rechazar Plan (d)",
+                        "Approve the proposed plan to start the agents?",
+                        "✓ Approve Plan (a)",
+                        "✗ Reject Plan (d)",
                     ),
                     GateKind::PushAndPr { .. } => (
-                        "🔒 AVISO: Aprobar publicará la rama en el repositorio remoto y creará un PR.",
-                        "✓ Aprobar Push & Crear PR (a)",
-                        "✗ Rechazar Gate (d)",
+                        "🔒 NOTICE: Approving will publish the branch to the remote repository and create a PR.",
+                        "✓ Approve Push & Create PR (a)",
+                        "✗ Reject Gate (d)",
                     ),
                 };
                 hits.gate_stripe_hits = Some(render_confirm_stripe(
@@ -525,21 +521,21 @@ pub fn render_runs_section(
                 hits.cancel_stripe_hits = Some(render_confirm_stripe(
                     buffer,
                     stripe_area,
-                    &format!("¿Cancelar Run #{cancel_id}? Los agentes que ya hayan arrancado permanecerán en sus panes."),
-                    "Confirmar Cancelar (Enter)",
-                    "Volver (Esc)",
+                    &format!("Cancel Run #{cancel_id}? Agents that have already started will stay in their panes."),
+                    "Confirm Cancel (Enter)",
+                    "Back (Esc)",
                     true,
                     palette,
                 ));
             }
         } else {
             // Empty state
-            let actions = [("+ Iniciar Primer Run", Some("l"))];
+            let actions = [("+ Start First Run", Some("l"))];
             hits.empty_hits = Some(render_empty_state(
                 buffer,
                 detail_area,
-                "NO HAY EJECUCIONES REGISTRADAS",
-                "No hay runs activos ni recientes en este proyecto.\nInicia un run para coordinar agentes sobre tus tareas.",
+                "NO RUNS REGISTERED",
+                "No active or recent runs in this project.\nStart a run to coordinate agents on your tasks.",
                 &actions,
                 palette,
             ));

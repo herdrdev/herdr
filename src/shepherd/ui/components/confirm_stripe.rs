@@ -36,7 +36,7 @@ pub fn render_confirm_stripe(
 
     // Draw top separator/border
     let top_border = format!(
-        "┌─ CONFIRMACIÓN ─{}",
+        "┌─ CONFIRMATION ─{}",
         "─".repeat(area.width.saturating_sub(18) as usize)
     );
     put_str(
@@ -182,9 +182,9 @@ mod tests {
         let hits = render_confirm_stripe(
             &mut buffer,
             area,
-            "¿Archivar la tarea #12?",
+            "Archive task #12?",
             "Confirmar (Enter)",
-            "Cancelar (Esc)",
+            "Cancel (Esc)",
             true,
             &palette,
         );

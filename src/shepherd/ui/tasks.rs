@@ -388,7 +388,7 @@ pub fn render_tasks_section(
         state.selected,
         state.list_scroll,
         Some((&filter_tabs, state.filter_index)),
-        Some(("+ Nueva", "n")),
+        Some(("+ New", "n")),
         palette,
     );
 
@@ -406,25 +406,25 @@ pub fn render_tasks_section(
         // 1. If Create Task Form is open
         if let Some(ref form) = state.form {
             let inline_form = InlineFormState {
-                title: "CREAR TAREA (Formulario en línea)".into(),
+                title: "CREATE TASK (inline form)".into(),
                 fields: vec![
                     FormField {
-                        label: "Título de la tarea:".into(),
+                        label: "Task title:".into(),
                         value: form.title.clone(),
-                        placeholder: "Ej. Refactorizar bucle de eventos del bus".into(),
+                        placeholder: "e.g. Refactor the bus event loop".into(),
                     },
                     FormField {
-                        label: "Descripción / Especificación:".into(),
+                        label: "Description / Specification:".into(),
                         value: form.description.clone(),
-                        placeholder: "Objetivos y diseño técnico...".into(),
+                        placeholder: "Goals and technical design...".into(),
                     },
                     FormField {
-                        label: "Criterios de aceptación (separados por ';'):".into(),
+                        label: "Acceptance criteria (separated by ';'):".into(),
                         value: form.criteria.clone(),
-                        placeholder: "1. Tests sin regresión; 2. Verificación CLI".into(),
+                        placeholder: "1. Tests without regressions; 2. CLI verification".into(),
                     },
                     FormField {
-                        label: "Archivos adjuntos (rutas separadas por espacio):".into(),
+                        label: "Attachments (paths separated by space):".into(),
                         value: form.attachments.clone(),
                         placeholder: "src/bus.rs tests/bus.rs".into(),
                     },
@@ -432,7 +432,7 @@ pub fn render_tasks_section(
                 active_field: form.active_field,
                 error: form.error.clone(),
                 success: if form.validate().is_ok() {
-                    Some("Parámetros validados correctamente.".into())
+                    Some("Parameters validated.".into())
                 } else {
                     None
                 },
@@ -442,8 +442,8 @@ pub fn render_tasks_section(
                 buffer,
                 detail_area,
                 &inline_form,
-                "Guardar Tarea (Enter)",
-                "Cancelar (Esc)",
+                "Save Task (Enter)",
+                "Cancel (Esc)",
                 is_valid,
                 palette,
             ));
@@ -453,16 +453,16 @@ pub fn render_tasks_section(
         // 2. If Import GitHub Form is open
         if let Some(ref import_form) = state.import_gh {
             let inline_form = InlineFormState {
-                title: "IMPORTAR ISSUE DE GITHUB (Formulario en línea)".into(),
+                title: "IMPORT GITHUB ISSUE (inline form)".into(),
                 fields: vec![FormField {
-                    label: "Número (#123) o URL del issue de GitHub:".into(),
+                    label: "GitHub issue number (#123) or URL:".into(),
                     value: import_form.issue_ref.clone(),
-                    placeholder: "Ej. #42 o https://github.com/herdrdev/herdr/issues/42".into(),
+                    placeholder: "e.g. #42 or https://github.com/herdrdev/herdr/issues/42".into(),
                 }],
                 active_field: 0,
                 error: import_form.error.clone(),
                 success: if import_form.validate().is_ok() {
-                    Some("Referencia válida.".into())
+                    Some("Valid reference.".into())
                 } else {
                     None
                 },
@@ -473,7 +473,7 @@ pub fn render_tasks_section(
                 detail_area,
                 &inline_form,
                 "Importar Issue (Enter)",
-                "Cancelar (Esc)",
+                "Cancel (Esc)",
                 is_valid,
                 palette,
             ));
@@ -494,7 +494,7 @@ pub fn render_tasks_section(
             ));
 
             let meta = format!(
-                "Estado: {}  |  Rama: {}  |  PR: #{}",
+                "Status: {}  |  Branch: {}  |  PR: #{}",
                 task.state,
                 if task.branch.is_empty() {
                     "ninguna"
@@ -505,22 +505,20 @@ pub fn render_tasks_section(
             );
 
             let header = DetailHeader {
-                title: format!("TAREA #{}: {}", task.id, task.title),
+                title: format!("TASK #{}: {}", task.id, task.title),
                 badges,
                 metadata_line: Some(meta),
-                actions: vec![("Editar en Pane".to_string(), Some("e".into()))],
+                actions: vec![("Edit in Pane".to_string(), Some("e".into()))],
             };
 
             let mut content = vec![];
             if !task.description.is_empty() {
-                content.push(DetailContentBlock::Heading("ESPECIFICACIÓN:".into()));
+                content.push(DetailContentBlock::Heading("SPECIFICATION:".into()));
                 content.push(DetailContentBlock::Paragraph(task.description.clone()));
             }
 
             if !task.criteria.is_empty() {
-                content.push(DetailContentBlock::Heading(
-                    "CRITERIOS DE ACEPTACIÓN:".into(),
-                ));
+                content.push(DetailContentBlock::Heading("ACCEPTANCE CRITERIA:".into()));
                 let checklist = task
                     .criteria
                     .iter()
@@ -556,8 +554,8 @@ pub fn render_tasks_section(
             };
 
             let bottom_actions = [
-                ("Iniciar Run", "r", true),
-                ("Archivar Tarea", "a", false),
+                ("Start Run", "r", true),
+                ("Archive Task", "a", false),
                 ("Importar GitHub", "i", false),
             ];
 
@@ -581,9 +579,9 @@ pub fn render_tasks_section(
                 hits.stripe_hits = Some(render_confirm_stripe(
                     buffer,
                     stripe_area,
-                    &format!("¿Archivar la tarea #{archive_id}? Esta acción la ocultará de la lista activa."),
-                    "Confirmar Archivar (Enter)",
-                    "Cancelar (Esc)",
+                    &format!("Archive task #{archive_id}? It will be hidden from the active list."),
+                    "Confirm Archive (Enter)",
+                    "Cancel (Esc)",
                     true,
                     palette,
                 ));
@@ -591,14 +589,14 @@ pub fn render_tasks_section(
         } else {
             // Empty state
             let actions = [
-                ("+ Crear Primera Tarea", Some("n")),
-                ("Importar de GitHub", Some("i")),
+                ("+ Create First Task", Some("n")),
+                ("Import from GitHub", Some("i")),
             ];
             hits.empty_hits = Some(render_empty_state(
                 buffer,
                 detail_area,
-                "NO HAY TAREAS REGISTRADAS",
-                "No se encontraron tareas que coincidan con el filtro actual.\nPuedes registrar una tarea manualmente o importar un issue de GitHub.",
+                "NO TASKS REGISTERED",
+                "No tasks match the current filter.\nYou can add a task manually or import a GitHub issue.",
                 &actions,
                 palette,
             ));

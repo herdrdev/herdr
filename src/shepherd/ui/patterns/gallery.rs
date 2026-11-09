@@ -55,7 +55,7 @@ pub fn render_patterns_section(
         })
         .collect();
 
-    let filter_tabs = ["Todos", "Proyecto", "Global", "Plantillas"];
+    let filter_tabs = ["All", "Proyecto", "Global", "Plantillas"];
     let split = split_panes(
         area,
         list_width,
@@ -69,7 +69,7 @@ pub fn render_patterns_section(
         state.selected,
         state.list_scroll,
         Some((&filter_tabs, state.filter_index)),
-        Some(("+ Nuevo", "n")),
+        Some(("+ New", "n")),
         palette,
     );
 
@@ -88,15 +88,16 @@ pub fn render_patterns_section(
             match sub {
                 PatternSubAction::ConfirmDelete { name, source } => {
                     let warn = format!(
-                        "¿Eliminar permanentemente el patrón '{}' de ámbito {}? Esta acción no se puede deshacer.",
-                        name, source.as_str()
+                        "Permanently delete pattern '{}' with scope {}? This cannot be undone.",
+                        name,
+                        source.as_str()
                     );
                     hits.stripe_hits = Some(render_confirm_stripe(
                         buffer,
                         detail_area,
                         &warn,
-                        "Confirmar eliminación (d)",
-                        "Cancelar (Esc)",
+                        "Confirm deletion (d)",
+                        "Cancel (Esc)",
                         true,
                         palette,
                     ));
@@ -104,24 +105,24 @@ pub fn render_patterns_section(
                 }
                 PatternSubAction::NewFromTemplate(st) => {
                     let inline_form = InlineFormState {
-                        title: "NUEVO PATRÓN DESDE PLANTILLA".into(),
+                        title: "NEW PATTERN FROM TEMPLATE".into(),
                         fields: vec![
                             FormField {
                                 label: format!(
-                                    "Plantilla base (Espacio para cambiar): [{}]",
+                                    "Base template (Space to change): [{}]",
                                     st.selected_kind().as_str()
                                 ),
                                 value: st.selected_kind().as_str().into(),
                                 placeholder: "".into(),
                             },
                             FormField {
-                                label: "Nombre del nuevo patrón:".into(),
+                                label: "New pattern name:".into(),
                                 value: st.name.clone(),
                                 placeholder: "mi-patron".into(),
                             },
                             FormField {
                                 label: format!(
-                                    "Ámbito de guardado (Espacio para alternar): [{}]",
+                                    "Save scope (Space to toggle): [{}]",
                                     if st.is_global {
                                         "Global (~/.config)"
                                     } else {
@@ -140,8 +141,8 @@ pub fn render_patterns_section(
                         buffer,
                         detail_area,
                         &inline_form,
-                        "Crear y Editar (Enter)",
-                        "Cancelar (Esc)",
+                        "Create and Edit (Enter)",
+                        "Cancel (Esc)",
                         !st.name.trim().is_empty(),
                         palette,
                     ));
@@ -149,16 +150,16 @@ pub fn render_patterns_section(
                 }
                 PatternSubAction::Duplicate(st) => {
                     let inline_form = InlineFormState {
-                        title: format!("DUPLICAR PATRÓN: {}", st.source_name),
+                        title: format!("DUPLICATE PATTERN: {}", st.source_name),
                         fields: vec![
                             FormField {
-                                label: "Nombre del nuevo patrón:".into(),
+                                label: "New pattern name:".into(),
                                 value: st.name.clone(),
-                                placeholder: "nombre-copia".into(),
+                                placeholder: "copy-name".into(),
                             },
                             FormField {
                                 label: format!(
-                                    "Ámbito de guardado (Espacio para alternar): [{}]",
+                                    "Save scope (Space to toggle): [{}]",
                                     if st.is_global {
                                         "Global (~/.config)"
                                     } else {
@@ -177,8 +178,8 @@ pub fn render_patterns_section(
                         buffer,
                         detail_area,
                         &inline_form,
-                        "Duplicar y Editar (Enter)",
-                        "Cancelar (Esc)",
+                        "Duplicate and Edit (Enter)",
+                        "Cancel (Esc)",
                         !st.name.trim().is_empty(),
                         palette,
                     ));
@@ -191,15 +192,15 @@ pub fn render_patterns_section(
                 }
                 PatternSubAction::Run(st) => {
                     let inline_form = InlineFormState {
-                        title: format!("EJECUTAR PATRÓN: {}", st.pattern_name),
+                        title: format!("RUN PATTERN: {}", st.pattern_name),
                         fields: vec![
                             FormField {
-                                label: "Objetivo o tarea (opcional):".into(),
+                                label: "Objective or task (optional):".into(),
                                 value: st.task.clone(),
-                                placeholder: "p.ej. Implementar endpoint de métricas".into(),
+                                placeholder: "e.g. Implement a metrics endpoint".into(),
                             },
                             FormField {
-                                label: "Worktree aislado (opcional):".into(),
+                                label: "Isolated worktree (optional):".into(),
                                 value: st.worktree.clone(),
                                 placeholder: "p.ej. /tmp/worktree-f8d".into(),
                             },
@@ -212,8 +213,8 @@ pub fn render_patterns_section(
                         buffer,
                         detail_area,
                         &inline_form,
-                        "Iniciar Ejecución (Enter)",
-                        "Cancelar (Esc)",
+                        "Start Run (Enter)",
+                        "Cancel (Esc)",
                         true,
                         palette,
                     ));
@@ -226,7 +227,7 @@ pub fn render_patterns_section(
             let error_count = detail.problems.iter().filter(|p| p.is_error()).count();
             let _warn_count = detail.problems.iter().filter(|p| !p.is_error()).count();
             let validity_badge = if error_count == 0 {
-                ("[✓ Válido]".to_string(), Style::default().fg(palette.green))
+                ("[✓ Valid]".to_string(), Style::default().fg(palette.green))
             } else {
                 (
                     format!("[✗ {} errores]", error_count),
@@ -249,7 +250,7 @@ pub fn render_patterns_section(
             );
 
             let meta = format!(
-                "Topología: {} | Agentes: {} | Tópicos: {}{}",
+                "Topology: {} | Agents: {} | Topics: {}{}",
                 detail.pattern.kind.as_str(),
                 detail.pattern.agents.len(),
                 detail.pattern.topics.len(),
@@ -262,27 +263,27 @@ pub fn render_patterns_section(
 
             let is_valid = error_count == 0;
             let header = DetailHeader {
-                title: format!("PATRÓN: {}", detail.pattern.name),
+                title: format!("PATTERN: {}", detail.pattern.name),
                 badges: vec![src_badge, kind_badge, validity_badge],
                 metadata_line: Some(meta),
                 actions: vec![
-                    ("Editar".into(), Some("e".into())),
+                    ("Edit".into(), Some("e".into())),
                     ("Duplicar".into(), Some("c".into())),
                     ("Validar".into(), Some("v".into())),
-                    ("Eliminar".into(), Some("d".into())),
+                    ("Delete".into(), Some("d".into())),
                     ("Ejecutar".into(), Some("r".into())),
                 ],
             };
 
             let mut blocks = Vec::new();
 
-            blocks.push(DetailContentBlock::Heading("DESCRIPCIÓN".into()));
+            blocks.push(DetailContentBlock::Heading("DESCRIPTION".into()));
             blocks.push(DetailContentBlock::Paragraph(
                 detail.pattern.description.clone(),
             ));
 
             blocks.push(DetailContentBlock::Heading(
-                "DIAGRAMA DE TOPOLOGÍA (ASCII)".into(),
+                "TOPOLOGY DIAGRAM (ASCII)".into(),
             ));
             let diag_lines =
                 generate_topology_diagram(&detail.pattern, detail_w.saturating_sub(4) as usize);
@@ -294,7 +295,7 @@ pub fn render_patterns_section(
             )));
             let mut agent_entries = Vec::new();
             for a in &detail.pattern.agents {
-                let mut desc = format!("ID: {} | Rol: {}", a.id, a.role);
+                let mut desc = format!("ID: {} | Role: {}", a.id, a.role);
                 if a.count > 1 {
                     desc.push_str(&format!(" (x{})", a.count));
                 }
@@ -325,12 +326,12 @@ pub fn render_patterns_section(
             blocks.push(DetailContentBlock::BulletList(agent_entries));
 
             blocks.push(DetailContentBlock::Heading(format!(
-                "TÓPICOS ({})",
+                "TOPICS ({})",
                 detail.pattern.topics.len()
             )));
             let mut topic_entries = Vec::new();
             for t in &detail.pattern.topics {
-                let mut desc = format!("{}: {} partición(es)", t.name, t.partitions);
+                let mut desc = format!("{}: {} partition(s)", t.name, t.partitions);
                 if let Some(ref k) = t.key {
                     desc.push_str(&format!(" | clave: {}", k));
                 }
@@ -342,9 +343,7 @@ pub fn render_patterns_section(
             blocks.push(DetailContentBlock::BulletList(topic_entries));
 
             if !detail.problems.is_empty() {
-                blocks.push(DetailContentBlock::Heading(
-                    "DIAGNÓSTICOS DE VALIDACIÓN".into(),
-                ));
+                blocks.push(DetailContentBlock::Heading("VALIDATION DIAGNOSTICS".into()));
                 for p in &detail.problems {
                     blocks.push(DetailContentBlock::Notice {
                         text: format!("[{}] {}: {}", p.severity, p.path, p.message),
@@ -358,10 +357,10 @@ pub fn render_patterns_section(
             }
 
             let bottom_actions = [
-                ("Editar", "e", true),
+                ("Edit", "e", true),
                 ("Duplicar", "c", false),
                 ("Validar", "v", false),
-                ("Eliminar", "d", false),
+                ("Delete", "d", false),
                 ("Ejecutar", "r", is_valid),
             ];
 
@@ -378,9 +377,9 @@ pub fn render_patterns_section(
             hits.empty_hits = Some(render_empty_state(
                 buffer,
                 detail_area,
-                "SIN PATRONES",
-                "No hay patrones disponibles en este filtro.\nCrea tu primer patrón multi-agente a partir de una plantilla.",
-                &[("+ Nuevo desde Plantilla", Some("n"))],
+                "NO PATTERNS",
+                "No patterns available with this filter.\nCreate your first multi-agent pattern from a template.",
+                &[("+ New from Template", Some("n"))],
                 palette,
             ));
         }

@@ -906,7 +906,7 @@ impl ClientShellState {
             }
             ShepherdGitAction::CopyOrShowPath { path } => {
                 if let Some(ref mut sec) = self.shepherd_section {
-                    sec.status_message = Some(format!("Ruta: {}", path.display()));
+                    sec.status_message = Some(format!("Path: {}", path.display()));
                 }
             }
             ShepherdGitAction::CreateWorktree { path, branch } => {
@@ -1376,7 +1376,7 @@ impl ClientShellState {
                 outcome.repaint = true;
             }
             Ok(crate::api::schema::ResponseResult::ShepherdPatternRunStarted { run }) => {
-                let msg = format!("Ejecución de patrón iniciada: {}", run.id);
+                let msg = format!("Pattern run started: {}", run.id);
                 if let Some(ref mut section) = self.shepherd_section {
                     section.status_message = Some(msg);
                 }
@@ -1384,7 +1384,7 @@ impl ClientShellState {
                 outcome.repaint = true;
             }
             Ok(crate::api::schema::ResponseResult::ShepherdPatternRunPaused { run }) => {
-                let msg = format!("Ejecución de patrón pausada: {}", run.id);
+                let msg = format!("Pattern run paused: {}", run.id);
                 if let Some(ref mut section) = self.shepherd_section {
                     section.status_message = Some(msg);
                 }
@@ -1392,7 +1392,7 @@ impl ClientShellState {
                 outcome.repaint = true;
             }
             Ok(crate::api::schema::ResponseResult::ShepherdPatternRunResumed { run }) => {
-                let msg = format!("Ejecución de patrón reanudada: {}", run.id);
+                let msg = format!("Pattern run resumed: {}", run.id);
                 if let Some(ref mut section) = self.shepherd_section {
                     section.status_message = Some(msg);
                 }
@@ -1400,7 +1400,7 @@ impl ClientShellState {
                 outcome.repaint = true;
             }
             Ok(crate::api::schema::ResponseResult::ShepherdPatternRunStopped { run }) => {
-                let msg = format!("Ejecución de patrón detenida: {}", run.id);
+                let msg = format!("Pattern run stopped: {}", run.id);
                 if let Some(ref mut section) = self.shepherd_section {
                     section.status_message = Some(msg);
                 }
@@ -1409,7 +1409,7 @@ impl ClientShellState {
             }
             Ok(crate::api::schema::ResponseResult::ShepherdTaskCreated { .. })
             | Ok(crate::api::schema::ResponseResult::ShepherdTaskArchived { .. }) => {
-                let msg = format!("Tarea actualizada exitosamente ({op})");
+                let msg = format!("Task updated ({op})");
                 if let Some(ref mut section) = self.shepherd_section {
                     section.status_message = Some(msg);
                 }
@@ -1423,7 +1423,7 @@ impl ClientShellState {
             | Ok(crate::api::schema::ResponseResult::ShepherdPatternValidated { .. })
             | Ok(crate::api::schema::ResponseResult::ShepherdTopicCreated { .. })
             | Ok(crate::api::schema::ResponseResult::ShepherdMessagePublished { .. }) => {
-                let msg = format!("Operación completada ({op})");
+                let msg = format!("Operation completed ({op})");
                 if let Some(ref mut section) = self.shepherd_section {
                     section.status_message = Some(msg);
                 }
@@ -1431,7 +1431,7 @@ impl ClientShellState {
                 outcome.repaint = true;
             }
             Ok(crate::api::schema::ResponseResult::ShepherdPatternSaved { ref name, .. }) => {
-                let msg = format!("Patrón '{name}' guardado exitosamente");
+                let msg = format!("Pattern '{name}' saved");
                 if let Some(ref mut section) = self.shepherd_section {
                     section.status_message = Some(msg);
                 }
@@ -1456,7 +1456,7 @@ impl ClientShellState {
             | Ok(crate::api::schema::ResponseResult::ShepherdAgentFocused { .. })
             | Ok(crate::api::schema::ResponseResult::ShepherdAgentReconciled { .. })
             | Ok(crate::api::schema::ResponseResult::ShepherdAgentResumed { .. }) => {
-                let msg = format!("Operación de agente completada ({op})");
+                let msg = format!("Agent operation completed ({op})");
                 if let Some(ref mut section) = self.shepherd_section {
                     section.status_message = Some(msg);
                 }
@@ -1523,14 +1523,14 @@ impl ClientShellState {
                     }
                     "archive_task" | "create_task" | "import_task" | "task_create"
                     | "task_archive" => {
-                        let msg = format!("Tarea actualizada exitosamente ({op})");
+                        let msg = format!("Task updated ({op})");
                         if let Some(ref mut section) = self.shepherd_section {
                             section.status_message = Some(msg);
                         }
                         self.refresh_shepherd_views(outcome);
                     }
                     "run" | "approve" | "cancel_run" | "reject_gate" => {
-                        let msg = format!("Operación completada ({op})");
+                        let msg = format!("Operation completed ({op})");
                         if let Some(ref mut section) = self.shepherd_section {
                             section.status_message = Some(msg);
                         }
@@ -1538,7 +1538,7 @@ impl ClientShellState {
                     }
                     "skills_toggle" | "skills_restore" | "skills_create" | "skills_delete"
                     | "skills_global" => {
-                        let msg = format!("Configuración de skills actualizada ({op})");
+                        let msg = format!("Skills configuration updated ({op})");
                         if let Some(ref mut section) = self.shepherd_section {
                             section.status_message = Some(msg);
                         }
@@ -1567,7 +1567,7 @@ impl ClientShellState {
                         }
                     }
                     "pattern_save" | "pattern_delete" | "pattern_validate" => {
-                        let msg = format!("Operación de patrón completada ({op})");
+                        let msg = format!("Pattern operation completed ({op})");
                         if let Some(ref mut section) = self.shepherd_section {
                             section.status_message = Some(msg);
                         }
@@ -1575,7 +1575,7 @@ impl ClientShellState {
                     }
                     "pattern_run_start" | "pattern_run_pause" | "pattern_run_resume"
                     | "pattern_run_stop" => {
-                        let msg = format!("Operación de ejecución completada ({op})");
+                        let msg = format!("Run operation completed ({op})");
                         if let Some(ref mut section) = self.shepherd_section {
                             section.status_message = Some(msg);
                         }
@@ -1636,7 +1636,7 @@ impl ClientShellState {
                     }
                     _ => {
                         if let Some(ref mut section) = self.shepherd_section {
-                            section.status_message = Some("Operación completada".to_string());
+                            section.status_message = Some("Operation completed".to_string());
                         }
                     }
                 }
@@ -1644,7 +1644,7 @@ impl ClientShellState {
             }
             Ok(_) => {
                 if let Some(ref mut section) = self.shepherd_section {
-                    section.status_message = Some("Respuesta inesperada del servidor".to_string());
+                    section.status_message = Some("Unexpected server response".to_string());
                 }
                 outcome.repaint = true;
             }

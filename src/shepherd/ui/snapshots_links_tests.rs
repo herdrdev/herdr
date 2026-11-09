@@ -184,7 +184,7 @@ fn stripe_form_and_selector_buttons_are_clickable() {
         let (buf, hits) = render(&mut st, w, h);
         let sh = hits.agents_hits.clone().unwrap().snapshots.unwrap();
         assert!(
-            text(&buf).contains("RESTAURAR ARCHIVOS DE coder-1/3"),
+            text(&buf).contains("RESTORE FILES FROM coder-1/3"),
             "{w}x{h}"
         );
         assert_eq!(sh.file_buttons.len(), 3, "{w}x{h}");
@@ -273,7 +273,7 @@ fn agent_detail_shows_snapshot_summary_and_button_opens_timeline() {
     st.agents.agents = vec![agent_row("coder-1")];
     let (buf, hits) = render(&mut st, 120, 40);
     let t = text(&buf);
-    assert!(t.contains("3 snapshot(s); último: coder-1/3"), "{t}");
+    assert!(t.contains("3 snapshot(s); latest: coder-1/3"), "{t}");
     let d = hits.agents_hits.clone().unwrap().detail_hits.unwrap();
     let (rect, _) = *d.bottom_actions.iter().find(|(_, i)| *i == 3).unwrap();
     let o = handle_shepherd_section_mouse(&mut st, &hits, click(rect));
@@ -289,7 +289,7 @@ fn agent_detail_shows_snapshot_summary_and_button_opens_timeline() {
     a.last_snapshot.clear();
     st.agents.agents = vec![a];
     let (buf, _) = render(&mut st, 120, 40);
-    assert!(text(&buf).contains("Aún no hay snapshots"));
+    assert!(text(&buf).contains("No snapshots yet"));
 }
 
 #[test]
@@ -326,7 +326,7 @@ fn git_tab_summarises_snapshots_and_links_to_the_timeline() {
         let (buf, hits) = render(&mut st, 120, 40);
         let t = text(&buf);
         assert!(
-            t.contains("Agente coder-1: 3 snapshot(s); último coder-1/3"),
+            t.contains("Agent coder-1: 3 snapshot(s); latest coder-1/3"),
             "{t}"
         );
         let o = if key_instead_of_click {
@@ -350,7 +350,7 @@ fn git_tab_without_agent_opens_finished_timeline_for_that_worktree() {
     st.git.rows = vec![git_row("/tmp/lonely", None)];
     st.select_tab(ShepherdSectionTab::Git);
     let (buf, hits) = render(&mut st, 120, 40);
-    assert!(text(&buf).contains("Sin agente activo aquí"));
+    assert!(text(&buf).contains("No active agent here"));
     let rect = hits.git_hits.clone().unwrap().timeline_button.unwrap();
     let o = handle_shepherd_section_mouse(&mut st, &hits, click(rect));
     assert_eq!(
@@ -384,7 +384,7 @@ fn status_bar_and_summary_follow_the_timeline() {
     let mut st = timeline(2);
     let (buf, _) = render(&mut st, 160, 40);
     let t = text(&buf);
-    assert!(t.contains("Snapshots de coder-1 (2)"), "{t}");
+    assert!(t.contains("Snapshots of coder-1 (2)"), "{t}");
     assert!(t.contains("Esc: volver"));
 }
 

@@ -459,7 +459,7 @@ pub fn handle_shepherd_section_mouse(
             }
             ShepherdSectionTab::Skills => {
                 if let Some(ref skill_hits) = hits.skills_hits {
-                    // Filter / mode tabs ([Por Agente], [Catálogo])
+                    // Filter / mode tabs ([By Agent], [Catalog])
                     for &(tab_rect, idx) in &skill_hits.list_hits.filter_tabs {
                         if contains_point(tab_rect, point) {
                             let new_mode = if idx == 0 {

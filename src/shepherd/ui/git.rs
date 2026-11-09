@@ -125,10 +125,10 @@ impl ShepherdGitSectionState {
 
     pub fn start_create_worktree(&mut self) {
         self.worktree_form = Some(InlineFormState::new(
-            "NUEVO WORKTREE (Formulario en línea)",
+            "NEW WORKTREE (inline form)",
             vec![
-                FormField::new("Ruta del nuevo worktree", "ej. .shepherd/worktrees/task-12"),
-                FormField::new("Rama o commit base", "ej. master o HEAD"),
+                FormField::new("New worktree path", "e.g. .shepherd/worktrees/task-12"),
+                FormField::new("Base branch or commit", "e.g. master or HEAD"),
             ],
         ));
         self.branch_form = None;
@@ -139,10 +139,10 @@ impl ShepherdGitSectionState {
 
     pub fn start_create_branch(&mut self) {
         self.branch_form = Some(InlineFormState::new(
-            "NUEVA RAMA (Formulario en línea)",
+            "NEW BRANCH (inline form)",
             vec![
-                FormField::new("Nombre de la nueva rama", "ej. feature/parser-flags"),
-                FormField::new("Punto de partida (base)", "ej. master"),
+                FormField::new("New branch name", "e.g. feature/parser-flags"),
+                FormField::new("Starting point (base)", "ej. master"),
             ],
         ));
         self.worktree_form = None;
@@ -164,7 +164,7 @@ impl ShepherdGitSectionState {
     pub fn start_remove_worktree(&mut self) {
         if let Some(row) = self.selected_row() {
             if row.is_main {
-                self.error = Some("El worktree principal no se puede eliminar".into());
+                self.error = Some("The main worktree cannot be deleted".into());
             } else {
                 self.confirm_remove = Some(row.path.clone());
                 self.confirm_publish = None;
@@ -182,7 +182,7 @@ impl ShepherdGitSectionState {
         let path = form.fields[0].value.trim().to_string();
         let branch = form.fields[1].value.trim().to_string();
         if path.is_empty() {
-            return Err("La ruta del worktree es obligatoria".into());
+            return Err("The worktree path is required".into());
         }
         let action = ShepherdGitAction::CreateWorktree { path, branch };
         self.last_action = Some(action.clone());
@@ -197,7 +197,7 @@ impl ShepherdGitSectionState {
         let branch = form.fields[0].value.trim().to_string();
         let base = form.fields[1].value.trim().to_string();
         if branch.is_empty() {
-            return Err("El nombre de la rama es obligatorio".into());
+            return Err("The branch name is required".into());
         }
         let action = ShepherdGitAction::CreateBranch { branch, base };
         self.last_action = Some(action.clone());
@@ -510,7 +510,7 @@ pub fn render_git_section_with_agents(
             buffer,
             detail_area,
             form,
-            "Crear Worktree",
+            "Create Worktree",
             "Cancelar",
             true,
             palette,
@@ -524,7 +524,7 @@ pub fn render_git_section_with_agents(
             buffer,
             detail_area,
             form,
-            "Crear Rama",
+            "Create Branch",
             "Cancelar",
             true,
             palette,
@@ -534,12 +534,12 @@ pub fn render_git_section_with_agents(
 
     // 3. Confirm publish stripe
     if let Some(ref branch) = state.confirm_publish {
-        let msg = format!("¿Publicar la rama '{branch}' en el repositorio remoto?");
+        let msg = format!("Publish branch '{branch}' to the remote repository?");
         hits.stripe_hits = Some(render_confirm_stripe(
             buffer,
             detail_area,
             &msg,
-            "Publicar Rama",
+            "Publish Branch",
             "Cancelar",
             false,
             palette,
@@ -549,13 +549,12 @@ pub fn render_git_section_with_agents(
 
     // 4. Confirm remove stripe
     if let Some(ref path) = state.confirm_remove {
-        let msg =
-            format!("¿Eliminar el worktree '{path}' del disco? Se perderán cambios no guardados.");
+        let msg = format!("Delete worktree '{path}' from disk? Unsaved changes will be lost.");
         hits.stripe_hits = Some(render_confirm_stripe(
             buffer,
             detail_area,
             &msg,
-            "Eliminar Worktree",
+            "Delete Worktree",
             "Cancelar",
             true,
             palette,
@@ -568,9 +567,9 @@ pub fn render_git_section_with_agents(
         hits.empty_hits = Some(render_empty_state(
             buffer,
             detail_area,
-            "NO HAY WORKTREES REGISTRADOS",
-            "No se encontraron worktrees ni ramas activas en el repositorio.\nPuedes registrar un nuevo worktree para un agente.",
-            &[("+ Nuevo Worktree", Some("w"))],
+            "NO WORKTREES REGISTERED",
+            "No worktrees or active branches found in the repository.\nYou can register a new worktree for an agent.",
+            &[("+ New Worktree", Some("w"))],
             palette,
         ));
         return hits;
@@ -592,11 +591,11 @@ pub fn render_git_section_with_agents(
         }
 
         let meta_line = format!(
-            "Rama: {} | Ahead: {} | Behind: {} | Agente: {}",
+            "Branch: {} | Ahead: {} | Behind: {} | Agent: {}",
             row.branch,
             row.ahead,
             row.behind,
-            row.agent_id.as_deref().unwrap_or("ninguno")
+            row.agent_id.as_deref().unwrap_or("none")
         );
 
         let header = DetailHeader {
@@ -605,17 +604,17 @@ pub fn render_git_section_with_agents(
             metadata_line: Some(meta_line),
             actions: vec![
                 ("+ Worktree".to_string(), Some("w".into())),
-                ("+ Rama".to_string(), Some("b".into())),
+                ("+ Branch".to_string(), Some("b".into())),
             ],
         };
 
         let mut blocks = vec![
-            DetailContentBlock::Heading("ESTADO DEL WORKTREE:".into()),
+            DetailContentBlock::Heading("WORKTREE STATUS:".into()),
             DetailContentBlock::Paragraph(format!(
-                "Directorio: {}\nRama activa: {}\nUpstream: {}",
+                "Directory: {}\nActive branch: {}\nUpstream: {}",
                 row.path,
                 row.branch,
-                row.upstream.as_deref().unwrap_or("ninguno configurado")
+                row.upstream.as_deref().unwrap_or("none configured")
             )),
         ];
 
@@ -624,7 +623,7 @@ pub fn render_git_section_with_agents(
                 text: format!(
                     "PULL REQUEST ASOCIADO:\n{} ({})",
                     row.pr_display,
-                    row.pr_url.as_deref().unwrap_or("sin url")
+                    row.pr_url.as_deref().unwrap_or("no url")
                 ),
                 level: AlertLevel::Info,
             });
@@ -644,27 +643,27 @@ pub fn render_git_section_with_agents(
         blocks.push(DetailContentBlock::Paragraph(
             match agent_for_worktree(agents, row) {
                 Some(a) if a.snapshots > 0 => format!(
-                    "Agente {}: {} snapshot(s); último {}. Pulsa Snapshots (t) para abrir su línea de tiempo.",
+                    "Agent {}: {} snapshot(s); latest {}. Press Snapshots (t) to open its timeline.",
                     a.id, a.snapshots, a.last_snapshot
                 ),
                 Some(a) => format!(
-                    "Agente {}: aún no hay snapshots. Pulsa Snapshots (t) para abrir su línea de tiempo.",
+                    "Agent {}: no snapshots yet. Press Snapshots (t) to open its timeline.",
                     a.id
                 ),
-                None => "Sin agente activo aquí. Pulsa Snapshots (t) para ver los de agentes finalizados."
+                None => "No active agent here. Press Snapshots (t) to see those of finished agents."
                     .to_string(),
             },
         ));
 
         let mut bottom_actions = vec![
-            ("Nueva Rama", "b", true),
-            ("Publicar Rama", "p", false),
-            ("Copiar Ruta", "c", false),
-            ("Refrescar", "r", false),
+            ("New Branch", "b", true),
+            ("Publish Branch", "p", false),
+            ("Copy Path", "c", false),
+            ("Refresh", "r", false),
         ];
 
         if !row.is_main {
-            bottom_actions.push(("Eliminar Worktree", "x", false));
+            bottom_actions.push(("Delete Worktree", "x", false));
         }
         bottom_actions.push(("Snapshots", "t", false));
         let timeline_idx = bottom_actions.len() - 1;

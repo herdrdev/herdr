@@ -127,7 +127,7 @@ fn too_small_terminal_explains_instead_of_blank() {
         .flat_map(|y| (0..24).map(move |x| (x, y)))
         .map(|(x, y)| buf[(x, y)].symbol().to_string())
         .collect();
-    assert!(text.contains("Amplía"), "{text}");
+    assert!(text.contains("Enlarge"), "{text}");
     // never panics on absurd sizes either
     for (w, h) in [(0, 0), (1, 1), (5, 2), (29, 100), (200, 7)] {
         let mut st = ShepherdSectionState::default();
@@ -420,7 +420,7 @@ fn events_wheel_over_messages_scrolls_the_stream_and_tail_follows() {
             partition: 0,
             offset: i,
             key: "k".into(),
-            content: format!("mensaje {i} 日本語 con\nsalto de línea"),
+            content: format!("message {i} 日本語 with\nline break"),
         })
         .collect();
     let (buf, hits) = render(&mut state, 160, 40);
@@ -429,11 +429,11 @@ fn events_wheel_over_messages_scrolls_the_stream_and_tail_follows() {
         .map(|(x, y)| buf[(x, y)].symbol().to_string())
         .collect();
     assert!(
-        screen.contains("mensaje 599"),
+        screen.contains("message 599"),
         "live tail must show the newest message"
     );
     assert!(
-        !screen.contains("mensaje 0 "),
+        !screen.contains("message 0 "),
         "oldest message must not be pinned on screen"
     );
     let r = hits.events_hits.as_ref().unwrap().messages_rect.unwrap();

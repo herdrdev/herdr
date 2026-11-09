@@ -34,13 +34,13 @@ impl ShepherdSectionTab {
 
     pub fn label(self) -> &'static str {
         match self {
-            Self::Agents => "Agentes",
-            Self::Tasks => "Tareas",
+            Self::Agents => "Agents",
+            Self::Tasks => "Tasks",
             Self::Runs => "Runs",
-            Self::Patterns => "Patrones",
+            Self::Patterns => "Patterns",
             Self::Skills => "Skills",
             Self::Git => "Git",
-            Self::Events => "Eventos",
+            Self::Events => "Events",
         }
     }
 
@@ -208,7 +208,7 @@ impl ShepherdSectionState {
     /// (or the finished agents' timeline when none is).
     pub fn open_timeline_from_git(&mut self) -> ShepherdSectionOutcome {
         let Some(row) = self.git.selected_row().cloned() else {
-            self.status_message = Some("No hay worktree seleccionado".into());
+            self.status_message = Some("No worktree selected".into());
             return ShepherdSectionOutcome::Handled;
         };
         let linked = super::git::agent_for_worktree(&self.agents.agents, &row)

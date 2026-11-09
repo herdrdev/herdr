@@ -329,10 +329,8 @@ impl ShepherdPatternsSectionState {
     pub fn start_delete(&mut self) {
         if let Some(sum) = self.selected_summary() {
             if sum.source == PatternSource::Builtin {
-                self.error = Some(
-                    "Las plantillas integradas del sistema son protegidas y no se pueden eliminar."
-                        .into(),
-                );
+                self.error =
+                    Some("Built-in system templates are protected and cannot be deleted.".into());
                 return;
             }
             self.sub_action = Some(PatternSubAction::ConfirmDelete {
@@ -641,9 +639,7 @@ impl ShepherdPatternsSectionState {
                             self.sub_action = None;
                             return (true, Some(act));
                         } else {
-                            self.error = Some(
-                                "No se puede guardar: corrija los errores de validación.".into(),
-                            );
+                            self.error = Some("Cannot save: fix the validation errors.".into());
                             return (true, None);
                         }
                     }

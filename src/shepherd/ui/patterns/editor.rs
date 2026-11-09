@@ -105,7 +105,7 @@ impl PatternEditorState {
         let base = get_builtin_pattern(kind.as_str()).unwrap_or_else(|| Pattern {
             name: name.to_string(),
             kind,
-            description: format!("Patrón multi-agente de tipo {kind}"),
+            description: format!("Multi-agent pattern of type {kind}"),
             topics: vec![Topic {
                 name: "events".into(),
                 partitions: 1,
@@ -557,7 +557,7 @@ pub fn render_pattern_editor(
     let mut current_y = area.y;
 
     // 1. Editor Title
-    let title = format!("EDITOR DE PATRÓN: {}", editor.name);
+    let title = format!("PATTERN EDITOR: {}", editor.name);
     put_str(
         buffer,
         area.x,
@@ -571,7 +571,7 @@ pub fn render_pattern_editor(
     current_y += 1;
 
     // 2. Section navigation tabs
-    let tabs = ["1. Metadatos", "2. Agentes", "3. Tópicos", "4. Topología"];
+    let tabs = ["1. Metadata", "2. Agents", "3. Topics", "4. Topology"];
     let mut tab_x = area.x;
     for (i, t_label) in tabs.iter().enumerate() {
         let is_active = editor.active_section.index() == i;
@@ -608,17 +608,17 @@ pub fn render_pattern_editor(
     match editor.active_section {
         EditorSection::Metadata => {
             let fields_meta = [
-                ("Nombre del patrón:", editor.name.as_str()),
-                ("Tipo de topología (Espacio cambia):", editor.kind.as_str()),
+                ("Pattern name:", editor.name.as_str()),
+                ("Topology type (Space changes):", editor.kind.as_str()),
                 (
-                    "Ámbito de guardado (Espacio cambia):",
+                    "Save scope (Space changes):",
                     if editor.is_global {
                         "Global (~/.config)"
                     } else {
                         "Proyecto (.shepherd)"
                     },
                 ),
-                ("Descripción:", editor.description.as_str()),
+                ("Description:", editor.description.as_str()),
             ];
 
             for (i, (label, val)) in fields_meta.iter().enumerate() {
@@ -667,7 +667,7 @@ pub fn render_pattern_editor(
                 let display_val = if is_active {
                     format!("{}█", val)
                 } else if val.is_empty() {
-                    "(vacío)".into()
+                    "(empty)".into()
                 } else {
                     val.to_string()
                 };
@@ -750,34 +750,34 @@ pub fn render_pattern_editor(
                 let sub_str = agent.consumes.join(", ");
 
                 let fields_agent = [
-                    ("ID del agente:", agent.id.as_str()),
+                    ("Agent ID:", agent.id.as_str()),
                     (
-                        "Rol (brain, coder, reviewer, tester, docs):",
+                        "Role (brain, coder, reviewer, tester, docs):",
                         agent.role.as_str(),
                     ),
                     (
-                        "Vendor (opcional: claude, codex, gemini):",
+                        "Vendor (optional: claude, codex, gemini):",
                         agent.vendor.as_deref().unwrap_or(""),
                     ),
-                    ("Modelo (opcional):", agent.model.as_deref().unwrap_or("")),
+                    ("Model (optional):", agent.model.as_deref().unwrap_or("")),
                     ("Instancias (count):", count_str.as_str()),
                     (
-                        "Nivel jerárquico (level, solo jerárquico):",
+                        "Hierarchy level (level, hierarchical only):",
                         lvl_str.as_str(),
                     ),
                     (
-                        "Grupo de consumidores (group):",
+                        "Consumer group (group):",
                         agent.group.as_deref().unwrap_or(""),
                     ),
-                    ("Tópicos que publica (coma):", pub_str.as_str()),
-                    ("Tópicos a los que se suscribe (coma):", sub_str.as_str()),
+                    ("Topics it publishes (comma):", pub_str.as_str()),
+                    ("Topics it subscribes to (comma):", sub_str.as_str()),
                     (
-                        "Prompt / Persona (personalidad en lenguaje natural):",
+                        "Prompt / Persona (personality in natural language):",
                         agent.prompt.as_deref().unwrap_or(""),
                     ),
                     (
-                        "Inicia el patrón (start; Espacio alterna):",
-                        if agent.start { "sí" } else { "no" },
+                        "Starts the pattern (start; Space toggles):",
+                        if agent.start { "yes" } else { "no" },
                     ),
                 ];
 
@@ -841,7 +841,7 @@ pub fn render_pattern_editor(
                     let display_val = if is_active {
                         format!("{}█", val)
                     } else if val.is_empty() {
-                        "(vacío / por defecto)".into()
+                        "(empty / default)".into()
                     } else {
                         val.to_string()
                     };
@@ -899,14 +899,14 @@ pub fn render_pattern_editor(
             if let Some(topic) = editor.topics.get(editor.selected_topic) {
                 let p_str = topic.partitions.to_string();
                 let fields_topic = [
-                    ("Nombre del tópico:", topic.name.as_str()),
-                    ("Número de particiones (1..256):", p_str.as_str()),
+                    ("Topic name:", topic.name.as_str()),
+                    ("Number of partitions (1..256):", p_str.as_str()),
                     (
-                        "Campo clave de partición (opcional):",
+                        "Partition key field (optional):",
                         topic.key.as_deref().unwrap_or(""),
                     ),
                     (
-                        "Filtro de tópico (opcional):",
+                        "Topic filter (optional):",
                         topic.filter.as_deref().unwrap_or(""),
                     ),
                 ];
@@ -964,7 +964,7 @@ pub fn render_pattern_editor(
                     let display_val = if is_active {
                         format!("{}█", val)
                     } else if val.is_empty() {
-                        "(vacío)".into()
+                        "(empty)".into()
                     } else {
                         val.to_string()
                     };
@@ -999,7 +999,7 @@ pub fn render_pattern_editor(
     let warn_count = editor.problems.iter().filter(|p| !p.is_error()).count();
 
     if error_count == 0 && warn_count == 0 {
-        let ok_msg = "✓ Patrón válido (0 errores, 0 avisos) - listo para guardar";
+        let ok_msg = "✓ Valid pattern (0 errors, 0 warnings) - ready to save";
         put_str(
             buffer,
             area.x,
@@ -1015,7 +1015,7 @@ pub fn render_pattern_editor(
             .find(|p| p.is_error())
             .map(|p| p.message.as_str())
             .unwrap_or("");
-        let err_msg = format!("✗ Hay {} error(es): {}", error_count, first_err);
+        let err_msg = format!("✗ {} error(s): {}", error_count, first_err);
         put_str(
             buffer,
             area.x,
@@ -1047,9 +1047,9 @@ pub fn render_pattern_editor(
     // Buttons
     let btn_y = area.bottom().saturating_sub(1);
     let submit_label = if editor.is_valid() {
-        "[ Guardar (Enter) ]"
+        "[ Save (Enter) ]"
     } else {
-        "[ Guardar bloqueado ]"
+        "[ Save blocked ]"
     };
     let submit_len = text_width(&submit_label);
     let submit_rect = Rect::new(area.x, btn_y, submit_len, 1);
@@ -1071,7 +1071,7 @@ pub fn render_pattern_editor(
     );
     hits.submit_button = Some(submit_rect);
 
-    let cancel_label = "[ Cancelar (Esc) ]";
+    let cancel_label = "[ Cancel (Esc) ]";
     let cancel_len = text_width(&cancel_label);
     let cancel_rect = Rect::new(submit_rect.right() + 2, btn_y, cancel_len, 1);
     put_str(

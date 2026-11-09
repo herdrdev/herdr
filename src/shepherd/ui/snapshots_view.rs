@@ -24,7 +24,7 @@ use super::snapshots::{
 use crate::app::state::Palette;
 use shepherd_core::snapshot::{format_utc, SnapshotInfo, SnapshotReason};
 
-/// Files listed in the summary of a snapshot before collapsing into "… y N más".
+/// Files listed in the summary of a snapshot before collapsing into "… and N more".
 const MAX_LISTED_FILES: usize = 200;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -44,21 +44,21 @@ pub struct ShepherdSnapshotsHits {
     pub empty_hits: Option<EmptyStateHits>,
     pub file_rows: Vec<(Rect, usize)>,
     pub file_buttons: Vec<(Rect, FileButton)>,
-    /// `[ Capturar ahora (c) ]` in the detail header.
+    /// `[ Capture now (c) ]` in the detail header.
     pub header_capture: Option<Rect>,
     /// Whole detail pane (wheel scrolls it).
     pub detail_rect: Option<Rect>,
 }
 
-/// "hace 5 min" style age; `now < created` (clock skew) reads as "ahora".
+/// "hace 5 min" style age; `now < created` (clock skew) reads as "now".
 pub fn rel_time(now: u64, created: u64) -> String {
     let d = now.saturating_sub(created);
     match d {
-        0..=4 => "ahora".into(),
-        5..=59 => format!("hace {d}s"),
-        60..=3599 => format!("hace {}m", d / 60),
-        3600..=86_399 => format!("hace {}h", d / 3600),
-        _ => format!("hace {}d", d / 86_400),
+        0..=4 => "now".into(),
+        5..=59 => format!("{d}s ago"),
+        60..=3599 => format!("{}m ago", d / 60),
+        3600..=86_399 => format!("{}h ago", d / 3600),
+        _ => format!("{}d ago", d / 86_400),
     }
 }
 
@@ -144,7 +144,7 @@ fn render_file_selector(
         area.x,
         area.y,
         area.width,
-        &format!("RESTAURAR ARCHIVOS DE {}", sel.id),
+        &format!("RESTORE FILES FROM {}", sel.id),
         Style::default()
             .fg(palette.accent)
             .add_modifier(Modifier::BOLD),
@@ -162,17 +162,17 @@ fn render_file_selector(
     let checked = sel.files.iter().filter(|f| f.checked).count();
     let labels = [
         (
-            format!("[ Restaurar {checked} seleccionado(s) (Enter) ]"),
+            format!("[ Restore {checked} selected (Enter) ]"),
             Style::default()
                 .fg(palette.accent)
                 .add_modifier(Modifier::BOLD),
         ),
         (
-            "[ Marcar/Desmarcar todos (a) ]".to_string(),
+            "[ Select/Deselect all (a) ]".to_string(),
             Style::default().fg(palette.overlay0),
         ),
         (
-            "[ Cancelar (Esc) ]".to_string(),
+            "[ Cancel (Esc) ]".to_string(),
             Style::default().fg(palette.overlay0),
         ),
     ];
@@ -185,13 +185,13 @@ fn render_file_selector(
         Some(e) => (e.to_string(), Style::default().fg(palette.red)),
         None if sel.not_restorable > 0 => (
             format!(
-                "Espacio: marcar | ↑/↓: mover | {} archivo(s) nuevo(s) no se restauran",
+                "Space: mark | ↑/↓: move | {} new file(s) are not restored",
                 sel.not_restorable
             ),
             Style::default().fg(palette.overlay0),
         ),
         None => (
-            "Espacio: marcar | ↑/↓: mover | a: todos".to_string(),
+            "Space: mark | ↑/↓: move | a: all".to_string(),
             Style::default().fg(palette.overlay0),
         ),
     };
@@ -286,13 +286,13 @@ fn detail_blocks(state: &ShepherdSnapshotsState, snap: &SnapshotInfo) -> Vec<Det
     }
 
     blocks.push(DetailContentBlock::Heading(
-        "RESUMEN (cambios sobre el snapshot anterior):".into(),
+        "SUMMARY (changes over the previous snapshot):".into(),
     ));
     match state.summary_for_selected() {
-        None => blocks.push(DetailContentBlock::Paragraph("Cargando resumen…".into())),
+        None => blocks.push(DetailContentBlock::Paragraph("Loading summary…".into())),
         Some(sum) => {
             blocks.push(DetailContentBlock::Paragraph(format!(
-                "{} archivo(s) cambiado(s): +{} −{}",
+                "{} file(s) changed: +{} −{}",
                 sum.files.len(),
                 sum.added,
                 sum.removed
@@ -316,7 +316,7 @@ fn detail_blocks(state: &ShepherdSnapshotsState, snap: &SnapshotInfo) -> Vec<Det
                 })
                 .collect();
             if sum.files.len() > MAX_LISTED_FILES {
-                items.push(format!("… y {} más", sum.files.len() - MAX_LISTED_FILES));
+                items.push(format!("… and {} more", sum.files.len() - MAX_LISTED_FILES));
             }
             if !items.is_empty() {
                 blocks.push(DetailContentBlock::BulletList(items));
@@ -339,8 +339,7 @@ fn detail_blocks(state: &ShepherdSnapshotsState, snap: &SnapshotInfo) -> Vec<Det
         None => {
             blocks.push(DetailContentBlock::Heading("DIFF:".into()));
             blocks.push(DetailContentBlock::Paragraph(
-                "Pulsa «Ver diff vs anterior» (d) o «Ver diff vs actual» (D) para ver el patch."
-                    .into(),
+                "Press «Diff vs previous» (d) or «Diff vs current» (D) to see the patch.".into(),
             ));
         }
         Some(d) => {
@@ -349,13 +348,13 @@ fn detail_blocks(state: &ShepherdSnapshotsState, snap: &SnapshotInfo) -> Vec<Det
                 DiffMode::Current => "estado actual",
             };
             blocks.push(DetailContentBlock::Heading(format!(
-                "DIFF vs {what}: {} archivo(s), +{} −{}",
+                "DIFF vs {what}: {} file(s), +{} −{}",
                 d.files, d.added, d.removed
             )));
             if d.hidden > 0 {
                 blocks.push(DetailContentBlock::Notice {
                     text: format!(
-                        "Diff truncado: se muestran {} líneas, faltan {}. Usa `shepherd snapshot diff {} --full` para verlo entero.",
+                        "Diff truncated: showing {} lines, {} missing. Use `shepherd snapshot diff {} --full` to see it whole.",
                         d.lines.len(),
                         d.hidden,
                         d.id
@@ -364,7 +363,7 @@ fn detail_blocks(state: &ShepherdSnapshotsState, snap: &SnapshotInfo) -> Vec<Det
                 });
             }
             if d.lines.is_empty() {
-                blocks.push(DetailContentBlock::Paragraph("(sin diferencias)".into()));
+                blocks.push(DetailContentBlock::Paragraph("(no differences)".into()));
             } else {
                 blocks.push(DetailContentBlock::Diff(d.lines.clone()));
             }
@@ -391,9 +390,9 @@ pub fn render_snapshots_section(
         .collect();
     let tab_labels: Vec<String> = vec![
         if state.agent_id.is_empty() {
-            "Del agente".to_string()
+            "From agent".to_string()
         } else {
-            format!("De {}", state.agent_id)
+            format!("From {}", state.agent_id)
         },
         "Finalizados".to_string(),
     ];
@@ -418,7 +417,7 @@ pub fn render_snapshots_section(
         state.selected,
         state.list_scroll,
         Some((&tab_refs, active_tab)),
-        Some(("Capturar ahora", "c")),
+        Some(("Capture now", "c")),
         palette,
     );
     let Some(detail_area) = split.detail else {
@@ -435,7 +434,7 @@ pub fn render_snapshots_section(
                 buffer,
                 detail_area,
                 form,
-                "Podar",
+                "Prune",
                 "Cancelar",
                 true,
                 palette,
@@ -455,14 +454,14 @@ pub fn render_snapshots_section(
         }
         SnapSub::ConfirmFiles { id, paths } => {
             let msg = format!(
-                "¿Restaurar {} archivo(s) desde {id}? Antes se guardará el estado actual como snapshot «pre-restore».",
+                "Restore {} file(s) from {id}? The current state will first be saved as a «pre-restore» snapshot.",
                 paths.len()
             );
             hits.stripe_hits = Some(render_confirm_stripe(
                 buffer,
                 detail_area,
                 &msg,
-                "Confirmar Restaurar",
+                "Confirm Restore",
                 "Cancelar",
                 true,
                 palette,
@@ -471,13 +470,13 @@ pub fn render_snapshots_section(
         }
         SnapSub::ConfirmAll(id) => {
             let msg = format!(
-                "¿Restaurar TODO el worktree desde {id}? Se sobrescriben los cambios locales; los archivos que no están en el snapshot se conservan. Antes se guardará el estado actual como «pre-restore»."
+                "Restore the WHOLE worktree from {id}? Local changes are overwritten; files not in the snapshot are kept. The current state will first be saved as «pre-restore»."
             );
             hits.stripe_hits = Some(render_confirm_stripe(
                 buffer,
                 detail_area,
                 &msg,
-                "Confirmar Restaurar Todo",
+                "Confirm Restore All",
                 "Cancelar",
                 true,
                 palette,
@@ -486,13 +485,13 @@ pub fn render_snapshots_section(
         }
         SnapSub::ConfirmDelete(id) => {
             let msg = format!(
-                "¿Borrar el snapshot {id}? No se puede deshacer (los demás snapshots no cambian)."
+                "Delete snapshot {id}? This cannot be undone (other snapshots are unchanged)."
             );
             hits.stripe_hits = Some(render_confirm_stripe(
                 buffer,
                 detail_area,
                 &msg,
-                "Confirmar Borrar",
+                "Confirm Delete",
                 "Cancelar",
                 true,
                 palette,
@@ -507,15 +506,15 @@ pub fn render_snapshots_section(
             .source
         {
             SnapshotSource::Agent => (
-                "AÚN NO HAY SNAPSHOTS",
-                "Aún no hay snapshots — se toman solos al quedar inactivo, o pulsa Capturar ahora."
+                "NO SNAPSHOTS YET",
+                "No snapshots yet — they are taken automatically when idle, or press Capture now."
                     .into(),
-                vec![("Capturar ahora", Some("c")), ("Volver", Some("Esc"))],
+                vec![("Capture now", Some("c")), ("Back", Some("Esc"))],
             ),
             SnapshotSource::Finished => (
-                "NO HAY SNAPSHOTS DE AGENTES FINALIZADOS",
-                "Cuando un agente termina o se limpia, sus snapshots siguen aquí hasta que los podes.".into(),
-                vec![("Volver", Some("Esc"))],
+                "NO SNAPSHOTS OF FINISHED AGENTS",
+                "When an agent finishes or is cleaned, its snapshots stay here until you prune them.".into(),
+                vec![("Back", Some("Esc"))],
             ),
         };
         let mut msg = message;
@@ -547,7 +546,7 @@ pub fn render_snapshots_section(
             Style::default().fg(color),
         )],
         metadata_line: Some(format!(
-            "{} UTC ({}) | Anterior: {} | {} arch. +{} −{}",
+            "{} UTC ({}) | Previous: {} | {} files +{} −{}",
             format_utc(snap.created),
             rel_time(state.now, snap.created),
             snap.prev.as_deref().unwrap_or("—"),
@@ -558,7 +557,7 @@ pub fn render_snapshots_section(
         actions: if state.agent_id.is_empty() {
             Vec::new()
         } else {
-            vec![("Capturar ahora".to_string(), Some("c".to_string()))]
+            vec![("Capture now".to_string(), Some("c".to_string()))]
         },
     };
     let blocks = detail_blocks(state, snap);

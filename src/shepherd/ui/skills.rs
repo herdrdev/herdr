@@ -180,7 +180,7 @@ impl ShepherdSkillsSectionState {
             if let Some(skill) = self.selected_catalog_skill() {
                 if skill.scope == Scope::Default {
                     self.error = Some(
-                        "Las skills empaquetadas por defecto están protegidas y no se pueden eliminar".to_string(),
+                        "Skills bundled by default are protected and cannot be deleted".to_string(),
                     );
                 } else {
                     self.confirm_delete = Some((skill.name.clone(), skill.scope));
@@ -199,7 +199,7 @@ impl ShepherdSkillsSectionState {
         let skill = self.selected_agent_skill()?.clone();
         if let Some(ref blocker) = skill.shadowed_by {
             self.error = Some(format!(
-                "No se puede alternar '{}': está ensombrecida por '{}'",
+                "Cannot toggle '{}': it is shadowed by '{}'",
                 skill.name, blocker
             ));
             return None;
@@ -411,14 +411,14 @@ pub fn render_skills_section(
     let wide_list_w = (area.width * 34 / 100).max(24);
 
     // Filter tabs for mode
-    let mode_tabs: [&str; 2] = ["Por Agente", "Catálogo"];
+    let mode_tabs: [&str; 2] = ["By Agent", "Catalog"];
     let active_mode_idx = match state.mode {
         SkillsViewMode::AgentView => 0,
         SkillsViewMode::CatalogView => 1,
     };
 
     let action_button = if state.mode == SkillsViewMode::CatalogView {
-        Some(("+ Nueva", "n"))
+        Some(("+ New", "n"))
     } else {
         None
     };
@@ -505,27 +505,27 @@ pub fn render_skills_section(
     // 1. Inline form for creating catalog skill
     if let Some(ref form) = state.form {
         let inline_state = InlineFormState {
-            title: "NUEVA SKILL (Formulario en línea)".to_string(),
+            title: "NEW SKILL (inline form)".to_string(),
             fields: vec![
                 FormField {
-                    label: "Nombre de la skill".to_string(),
+                    label: "Skill name".to_string(),
                     value: form.name.clone(),
                     placeholder: "ej. rust-tools".to_string(),
                 },
                 FormField {
-                    label: "Descripción".to_string(),
+                    label: "Description".to_string(),
                     value: form.description.clone(),
-                    placeholder: "Instrucciones operativas para el agente...".to_string(),
+                    placeholder: "Operating instructions for the agent...".to_string(),
                 },
                 FormField {
-                    label: "Ámbito".to_string(),
+                    label: "Scope".to_string(),
                     value: format!("{:?}", form.scope).to_lowercase(),
-                    placeholder: "user o repo".to_string(),
+                    placeholder: "user or repo".to_string(),
                 },
                 FormField {
-                    label: "Global (s/n)".to_string(),
-                    value: if form.is_global { "s" } else { "n" }.to_string(),
-                    placeholder: "s = activa para todos los agentes".to_string(),
+                    label: "Global (y/n)".to_string(),
+                    value: if form.is_global { "y" } else { "n" }.to_string(),
+                    placeholder: "y = active for all agents".to_string(),
                 },
             ],
             active_field: 0,
@@ -536,8 +536,8 @@ pub fn render_skills_section(
             buffer,
             detail_area,
             &inline_state,
-            "Guardar Skill",
-            "Cancelar",
+            "Save Skill",
+            "Cancel",
             true,
             palette,
         ));
@@ -547,14 +547,14 @@ pub fn render_skills_section(
     // 2. Confirm restore stripe
     if let Some(ref skill_name) = state.confirm_restore {
         let msg = format!(
-            "¿Restaurar la skill '{skill_name}' a su contenido original? Se perderán las modificaciones locales."
+            "Restore skill '{skill_name}' to its original content? Local changes will be lost."
         );
         hits.stripe_hits = Some(render_confirm_stripe(
             buffer,
             detail_area,
             &msg,
-            "Restaurar",
-            "Cancelar",
+            "Restore",
+            "Cancel",
             false,
             palette,
         ));
@@ -564,15 +564,15 @@ pub fn render_skills_section(
     // 3. Confirm delete stripe
     if let Some((ref skill_name, scope)) = state.confirm_delete {
         let msg = format!(
-            "¿Eliminar la skill '{skill_name}' de ámbito {:?} del catálogo? Esta acción no se puede deshacer.",
+            "Delete skill '{skill_name}' with scope {:?} from the catalog? This cannot be undone.",
             scope
         );
         hits.stripe_hits = Some(render_confirm_stripe(
             buffer,
             detail_area,
             &msg,
-            "Eliminar",
-            "Cancelar",
+            "Delete",
+            "Cancel",
             true,
             palette,
         ));
@@ -588,14 +588,14 @@ pub fn render_skills_section(
     if is_empty {
         let (title, desc, actions): (&str, &str, &[(&str, Option<&str>)]) = match state.mode {
             SkillsViewMode::AgentView => (
-                "SIN SKILLS ASIGNADAS",
-                "El agente seleccionado no tiene skills específicas asignadas.\nPuedes conmutar al Catálogo para explorar o crear skills.",
-                &[("Ver Catálogo", Some("c"))],
+                "NO SKILLS ASSIGNED",
+                "The selected agent has no specific skills assigned.\nSwitch to the Catalog to browse or create skills.",
+                &[("View Catalog", Some("c"))],
             ),
             SkillsViewMode::CatalogView => (
-                "CATÁLOGO DE SKILLS VACÍO",
-                "No se encontraron skills registradas en el catálogo.\nPuedes crear una nueva skill personalizada.",
-                &[("+ Nueva Skill", Some("n"))],
+                "SKILL CATALOG EMPTY",
+                "No skills registered in the catalog.\nYou can create a new custom skill.",
+                &[("+ New Skill", Some("n"))],
             ),
         };
         hits.empty_hits = Some(render_empty_state(
@@ -629,7 +629,7 @@ pub fn render_skills_section(
                     (format!("[{:?}]", skill.scope).to_lowercase(), scope_style),
                     (
                         if skill.active {
-                            "[activa]".to_string()
+                            "[active]".to_string()
                         } else {
                             "[inactiva]".to_string()
                         },
@@ -644,9 +644,9 @@ pub fn render_skills_section(
                 }
 
                 let meta_line = format!(
-                    "Agente: {} ({}) | Ámbito: {:?} | Modificada: {}",
+                    "Agent: {} ({}) | Scope: {:?} | Modified: {}",
                     if state.selected_agent_id.is_empty() {
-                        "todos"
+                        "all"
                     } else {
                         &state.selected_agent_id
                     },
@@ -656,7 +656,7 @@ pub fn render_skills_section(
                         &state.agent_role
                     },
                     skill.scope,
-                    if skill.edited { "Sí" } else { "No" }
+                    if skill.edited { "Yes" } else { "No" }
                 );
 
                 let header = DetailHeader {
@@ -667,24 +667,24 @@ pub fn render_skills_section(
                 };
 
                 let mut blocks = vec![
-                    DetailContentBlock::Heading("DESCRIPCIÓN:".into()),
+                    DetailContentBlock::Heading("DESCRIPTION:".into()),
                     DetailContentBlock::Paragraph(skill.description.clone()),
                     DetailContentBlock::Notice {
-                        text: "AVISO DE APLICACIÓN:\n• Añadir o quitar skills surte efecto al REINICIAR el agente.\n• Editar el texto de la skill se propaga EN VIVO inmediatamente.".into(),
+                        text: "NOTICE:\n• Adding or removing skills takes effect when the agent is RESTARTED.\n• Editing a skill's text propagates LIVE immediately.".into(),
                         level: AlertLevel::Info,
                     },
                 ];
 
                 if let Some(ref blocker) = skill.shadowed_by {
                     blocks.push(DetailContentBlock::Notice {
-                        text: format!("AVISO DE ENSOMBRECIMIENTO:\nEsta configuración está ensombrecida por la capa superior: '{blocker}'."),
+                        text: format!("SHADOWING NOTICE:\nThis setting is shadowed by the upper layer: '{blocker}'."),
                         level: AlertLevel::Warning,
                     });
                 }
 
-                let mut bottom_actions = vec![("Alternar Activación", "Space", true)];
+                let mut bottom_actions = vec![("Toggle Activation", "Space", true)];
                 if skill.edited {
-                    bottom_actions.push(("Restaurar Copia Original", "r", false));
+                    bottom_actions.push(("Restore Original Copy", "r", false));
                 }
 
                 hits.detail_hits = Some(render_detail_view(
@@ -711,27 +711,27 @@ pub fn render_skills_section(
                 }
                 if !skill.enabled {
                     badges.push((
-                        "[con errores]".to_string(),
+                        "[with errors]".to_string(),
                         Style::default().fg(palette.red),
                     ));
                 }
 
                 let meta_line = format!(
-                    "Ámbito: {:?} | Global: {} | Habilitada: {}",
+                    "Scope: {:?} | Global: {} | Enabled: {}",
                     skill.scope,
-                    if skill.is_global { "Sí" } else { "No" },
-                    if skill.enabled { "Sí" } else { "No" }
+                    if skill.is_global { "Yes" } else { "No" },
+                    if skill.enabled { "Yes" } else { "No" }
                 );
 
                 let header = DetailHeader {
                     title: format!("SKILL: {}", skill.name),
                     badges,
                     metadata_line: Some(meta_line),
-                    actions: vec![("+ Nueva".to_string(), Some("n".into()))],
+                    actions: vec![("+ New".to_string(), Some("n".into()))],
                 };
 
                 let mut blocks = vec![
-                    DetailContentBlock::Heading("DESCRIPCIÓN:".into()),
+                    DetailContentBlock::Heading("DESCRIPTION:".into()),
                     DetailContentBlock::Paragraph(skill.description.clone()),
                 ];
 
@@ -744,7 +744,7 @@ pub fn render_skills_section(
 
                 let mut bottom_actions = vec![("Alternar Global", "g", true)];
                 if skill.scope != Scope::Default {
-                    bottom_actions.push(("Eliminar de Catálogo", "d", false));
+                    bottom_actions.push(("Delete from Catalog", "d", false));
                 }
 
                 hits.detail_hits = Some(render_detail_view(

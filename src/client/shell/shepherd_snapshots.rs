@@ -404,7 +404,7 @@ mod tests {
             .notice
             .as_deref()
             .unwrap()
-            .contains("Sin cambios"));
+            .contains("No changes"));
         std::fs::write(rig.dir.join("f.txt"), "v2\n").unwrap();
         let a = rig.snaps().start_capture().unwrap();
         rig.drive(a);
@@ -425,7 +425,7 @@ mod tests {
         assert_eq!(sum.files.len(), 1);
         assert_eq!(sum.files[0].path, "f.txt");
         let a = rig.snaps().start_diff(DiffMode::Previous).unwrap();
-        assert_eq!(rig.snaps().busy.as_deref(), Some("cargando diff…"));
+        assert_eq!(rig.snaps().busy.as_deref(), Some("loading diff…"));
         rig.drive(a);
         let d = rig.snaps().diff_for_selected().unwrap().clone();
         assert!(d.lines.iter().any(|l| l == "+v2"), "{:?}", d.lines);
@@ -513,7 +513,7 @@ mod tests {
         rig.drive(a);
         rig.list();
         assert_eq!(rig.ids().len(), 1);
-        assert!(rig.snaps().notice.as_deref().unwrap().contains("Podados"));
+        assert!(rig.snaps().notice.as_deref().unwrap().contains("Pruned"));
 
         // finished-agents view: list the whole repo, the live agent is excluded, others appear
         std::fs::write(rig.dir.join("f.txt"), "old\n").unwrap();

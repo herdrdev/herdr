@@ -172,18 +172,18 @@ fn list_and_detail_render_in_all_sizes() {
         assert_eq!(sh.list_hits.rows.len(), 5, "{w}x{h}");
         assert!(sh.list_hits.action_button.is_some(), "{w}x{h}");
         assert_eq!(sh.list_hits.filter_tabs.len(), 2, "{w}x{h}");
-        assert!(t.contains("Capturar ahora"), "{w}x{h}");
+        assert!(t.contains("Capture now"), "{w}x{h}");
         assert!(t.contains("Finalizados"), "{w}x{h}");
         // newest first, relative time and reason badge
         assert!(t.contains("#5"), "{w}x{h}");
-        assert!(t.contains("hace "), "{w}x{h}");
+        assert!(t.contains(" ago"), "{w}x{h}");
         if w >= 70 {
             let d = sh.detail_hits.as_ref().unwrap();
             assert_eq!(d.bottom_actions.len(), SnapshotButton::ALL.len(), "{w}x{h}");
             assert!(t.contains("SNAPSHOT: coder-1/5"), "{w}x{h}");
             assert!(t.contains("src/a.rs"), "{w}x{h}");
-            assert!(t.contains("Restaurar archivo"), "{w}x{h}");
-            assert!(t.contains("Podar"), "{w}x{h}");
+            assert!(t.contains("Restore file"), "{w}x{h}");
+            assert!(t.contains("Prune"), "{w}x{h}");
         } else {
             assert!(sh.detail_hits.is_none(), "compact shows the list only");
         }
@@ -222,7 +222,7 @@ fn empty_state_explains_what_to_do_and_80x24_fits() {
         let t = text(&buf);
         let sh = hits.agents_hits.clone().unwrap().snapshots.unwrap();
         assert!(
-            t.contains("Aún no hay snapshots") || t.contains("AÚN NO HAY SNAPSHOTS"),
+            t.contains("No snapshots yet") || t.contains("NO SNAPSHOTS YET"),
             "{w}x{h}\n{t}"
         );
         assert!(sh.empty_hits.is_some(), "{w}x{h}");
@@ -232,16 +232,16 @@ fn empty_state_explains_what_to_do_and_80x24_fits() {
     let mut st = timeline(0);
     let _ = st.agents.snapshots.set_source(SnapshotSource::Finished);
     let (buf, _) = render(&mut st, 120, 40);
-    assert!(text(&buf).contains("NO HAY SNAPSHOTS DE AGENTES FINALIZADOS"));
+    assert!(text(&buf).contains("NO SNAPSHOTS OF FINISHED AGENTS"));
 }
 
 #[test]
 fn busy_error_and_notice_are_shown_inside_the_panel() {
     let mut st = timeline(3);
     load_summary(&mut st);
-    st.agents.snapshots.busy = Some("cargando diff…".into());
+    st.agents.snapshots.busy = Some("loading diff…".into());
     let (buf, _) = render(&mut st, 120, 40);
-    assert!(text(&buf).contains("Trabajando… (cargando diff…)"));
+    assert!(text(&buf).contains("Working… (loading diff…)"));
     st.agents.snapshots.ingest_error("git exploded");
     let (buf, _) = render(&mut st, 120, 40);
     let t = text(&buf);
@@ -253,15 +253,12 @@ fn busy_error_and_notice_are_shown_inside_the_panel() {
 fn confirmation_stripes_and_prune_form_render_with_buttons() {
     let mut st = timeline(3);
     load_summary(&mut st);
-    for (setup, expect) in [
-        (b'R', "pre-restore"),
-        (b'x', "¿Borrar el snapshot coder-1/3?"),
-    ] {
+    for (setup, expect) in [(b'R', "pre-restore"), (b'x', "Delete snapshot coder-1/3?")] {
         st.agents.snapshots.sub = SnapSub::None;
         press(&mut st, KeyCode::Char(setup as char));
         let (buf, hits) = render(&mut st, 100, 30);
         let t = text(&buf);
-        assert!(t.contains("CONFIRMACIÓN"), "{t}");
+        assert!(t.contains("CONFIRMATION"), "{t}");
         assert!(t.contains(expect), "{expect}\n{t}");
         let stripe = hits
             .agents_hits
@@ -276,7 +273,7 @@ fn confirmation_stripes_and_prune_form_render_with_buttons() {
     st.agents.snapshots.sub = SnapSub::None;
     press(&mut st, KeyCode::Char('p'));
     let (buf, hits) = render(&mut st, 100, 30);
-    assert!(text(&buf).contains("PODAR SNAPSHOTS DE coder-1"));
+    assert!(text(&buf).contains("PRUNE SNAPSHOTS OF coder-1"));
     let f = hits
         .agents_hits
         .clone()
@@ -379,12 +376,12 @@ fn extreme_data_never_panics_and_keeps_selection_visible() {
 
 #[test]
 fn rel_time_formats() {
-    assert_eq!(rel_time(100, 100), "ahora");
-    assert_eq!(rel_time(100, 500), "ahora"); // clock skew
-    assert_eq!(rel_time(100, 70), "hace 30s");
-    assert_eq!(rel_time(1000, 100), "hace 15m");
-    assert_eq!(rel_time(50_000, 100), "hace 13h");
-    assert_eq!(rel_time(1_000_000, 100), "hace 11d");
+    assert_eq!(rel_time(100, 100), "now");
+    assert_eq!(rel_time(100, 500), "now"); // clock skew
+    assert_eq!(rel_time(100, 70), "30s ago");
+    assert_eq!(rel_time(1000, 100), "15m ago");
+    assert_eq!(rel_time(50_000, 100), "13h ago");
+    assert_eq!(rel_time(1_000_000, 100), "11d ago");
 }
 
 // ---------- state machine ----------
@@ -463,7 +460,7 @@ fn confirm_and_cancel_have_no_effect_until_confirmed() {
             paths: vec![]
         }
     );
-    assert_eq!(st.agents.snapshots.busy.as_deref(), Some("restaurando…"));
+    assert_eq!(st.agents.snapshots.busy.as_deref(), Some("restoring…"));
     // delete
     st.agents.snapshots.busy = None;
     st.handle_key(&ch('x'));
@@ -510,7 +507,7 @@ fn file_selector_toggle_all_none_and_confirmation() {
         .error
         .as_deref()
         .unwrap()
-        .contains("al menos un archivo"));
+        .contains("at least one file"));
     assert!(matches!(st.agents.snapshots.sub, SnapSub::Files(_)));
     // space toggles under the cursor, j moves
     st.handle_key(&ch(' '));
@@ -553,7 +550,7 @@ fn file_restore_sends_only_checked_paths_and_empty_diff_reports() {
         .notice
         .as_deref()
         .unwrap()
-        .contains("nada que restaurar"));
+        .contains("nothing to restore"));
     assert_eq!(st.agents.snapshots.sub, SnapSub::None);
 
     st.handle_key(&ch('f'));

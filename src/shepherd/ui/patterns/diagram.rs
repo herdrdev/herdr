@@ -95,13 +95,13 @@ fn render_orchestrator_worker_diagram(
         lines.push(format!("[Orquestador] {orch_role} (x{orch_count})"));
         lines.push(format!("  │ publica: {orch_pub}"));
         lines.push("  ▼".into());
-        lines.push(format!("[Tópico: {orch_pub} (p:{orders_p})]"));
+        lines.push(format!("[Topic: {orch_pub} (p:{orders_p})]"));
         lines.push(format!("  │ consume: {worker_group}"));
         lines.push("  ▼".into());
         lines.push(format!("[Workers] {worker_role} (x{worker_count})"));
         lines.push(format!("  │ publica: {orch_sub}"));
         lines.push("  ▼".into());
-        lines.push(format!("[Tópico: {orch_sub} (p:{results_p})]"));
+        lines.push(format!("[Topic: {orch_sub} (p:{results_p})]"));
         lines.push("  │ consume".into());
         lines.push("  ▼".into());
         lines.push(format!("[Orquestador: {orch_role}] (cierra bucle)"));
@@ -117,7 +117,7 @@ fn render_orchestrator_worker_diagram(
         lines.push(format!("{}│ publica: {}", indent, orch_pub));
         lines.push(format!("{}▼", indent));
 
-        let top_txt = format!("[Tópico: {} (p:{})]", orch_pub, orders_p);
+        let top_txt = format!("[Topic: {} (p:{})]", orch_pub, orders_p);
         let top_pad = " ".repeat(center.saturating_sub(top_txt.chars().count() / 2));
         lines.push(format!("{}{}", top_pad, top_txt));
         lines.push(format!("{}│ consume: {}", indent, worker_group));
@@ -134,7 +134,7 @@ fn render_orchestrator_worker_diagram(
         lines.push(format!("{}│ publica: {}", indent, orch_sub));
         lines.push(format!("{}▼", indent));
 
-        let res_txt = format!("[Tópico: {} (p:{})]", orch_sub, results_p);
+        let res_txt = format!("[Topic: {} (p:{})]", orch_sub, results_p);
         let res_pad = " ".repeat(center.saturating_sub(res_txt.chars().count() / 2));
         lines.push(format!("{}{}", res_pad, res_txt));
         lines.push(format!("{}│ consume", indent));
@@ -167,7 +167,7 @@ fn render_hierarchical_diagram(pattern: &Pattern, narrow: bool, max_w: usize) ->
     levels.sort_by_key(|(l, _)| *l);
 
     if levels.is_empty() {
-        lines.push("[Jerárquico sin agentes]".into());
+        lines.push("[Hierarchical with no agents]".into());
         return lines;
     }
 
@@ -179,7 +179,7 @@ fn render_hierarchical_diagram(pattern: &Pattern, narrow: bool, max_w: usize) ->
                 .collect::<Vec<_>>()
                 .join(", ");
             let label = match lvl {
-                0 => "Raíz / Director",
+                0 => "Root / Director",
                 1 => "Managers",
                 _ => "Especialistas",
             };
@@ -192,12 +192,12 @@ fn render_hierarchical_diagram(pattern: &Pattern, narrow: bool, max_w: usize) ->
                     .unwrap_or_else(|| "orders".into());
                 lines.push(format!("  │ publica: {pub_topic}"));
                 lines.push("  ▼".into());
-                lines.push(format!("[Tópico: {pub_topic}]"));
+                lines.push(format!("[Topic: {pub_topic}]"));
                 lines.push("  │ consume".into());
                 lines.push("  ▼".into());
             }
         }
-        lines.push("  ◄── retornos vía tópicos de resultados".into());
+        lines.push("  ◄── returns via result topics".into());
     } else {
         let box_w = max_w.min(52).max(36);
         for (idx, (lvl, ags)) in levels.iter().enumerate() {
@@ -228,7 +228,7 @@ fn render_hierarchical_diagram(pattern: &Pattern, narrow: bool, max_w: usize) ->
                 lines.push(format!("{}│ publica: {}", indent, pub_topic));
                 lines.push(format!("{}▼", indent));
 
-                let top_txt = format!("[Tópico: {}]", pub_topic);
+                let top_txt = format!("[Topic: {}]", pub_topic);
                 let top_pad = " ".repeat(center.saturating_sub(top_txt.chars().count() / 2));
                 lines.push(format!("{}{}", top_pad, top_txt));
                 lines.push(format!("{}│ consume", indent));
@@ -236,8 +236,7 @@ fn render_hierarchical_diagram(pattern: &Pattern, narrow: bool, max_w: usize) ->
             }
         }
         lines.push(
-            "  ▲── Resultados en cascada inversa (team-results ──► root-results) ──► Director"
-                .into(),
+            "  ▲── Results cascading back up (team-results ──► root-results) ──► Director".into(),
         );
     }
 
@@ -319,22 +318,22 @@ fn render_market_diagram(pattern: &Pattern, narrow: bool, max_w: usize) -> Vec<S
         lines.push(format!("[Requesters: {req}]"));
         lines.push("  │ publica demanda".into());
         lines.push("  ▼".into());
-        lines.push("[Tópico: ask (p:1)]".into());
+        lines.push("[Topic: ask (p:1)]".into());
         lines.push("  │ consume".into());
         lines.push("  ▼".into());
         lines.push(format!("[Solvers: {sol}]"));
         lines.push("  │ oferta competitiva".into());
         lines.push("  ▼".into());
-        lines.push("[Tópico: bid (p:1)]".into());
+        lines.push("[Topic: bid (p:1)]".into());
         lines.push("  │ consume".into());
         lines.push("  ▼".into());
         lines.push(format!("[Market-Maker: {mm}]"));
         lines.push("  │ adjudica (transaction)".into());
         lines.push("  ▼".into());
-        lines.push("[Tópico: transaction] ──► [Solvers / Requesters]".into());
+        lines.push("[Topic: transaction] ──► [Solvers / Requesters]".into());
     } else {
         lines.push(format!(
-            "[Requesters: {req}] ──────► [Tópico: ask] ──────► [Solvers: {sol}]"
+            "[Requesters: {req}] ──────► [Topic: ask] ──────► [Solvers: {sol}]"
         ));
         lines.push(
             "                                                          │ ofertas competitivas"
@@ -342,11 +341,11 @@ fn render_market_diagram(pattern: &Pattern, narrow: bool, max_w: usize) -> Vec<S
         );
         lines.push("                                                          ▼".into());
         lines.push(format!(
-            "[Market-Maker: {mm}] ◄────────── [Tópico: bid] ───────────┘"
+            "[Market-Maker: {mm}] ◄────────── [Topic: bid] ───────────┘"
         ));
-        lines.push("         │ empareja y adjudica transacciones".into());
+        lines.push("         │ matches and awards transactions".into());
         lines.push("         ▼".into());
-        lines.push("[Tópico: transaction] ──────► [Ejecución en Solvers y Requesters]".into());
+        lines.push("[Topic: transaction] ──────► [Execution on Solvers and Requesters]".into());
     }
 
     lines

@@ -61,10 +61,10 @@ pub struct CreateTaskFormState {
 impl CreateTaskFormState {
     pub fn validate(&self) -> Result<(Vec<String>, Vec<PathBuf>), String> {
         if self.title.trim().is_empty() {
-            return Err("El título de la tarea es obligatorio".into());
+            return Err("The task title is required".into());
         }
         if self.description.trim().is_empty() {
-            return Err("La descripción o spec es obligatoria".into());
+            return Err("The description or spec is required".into());
         }
 
         let criteria: Vec<String> = self
@@ -83,7 +83,7 @@ impl CreateTaskFormState {
                 let p = PathBuf::from(raw_path.trim().trim_matches(','));
                 if !p.exists() {
                     return Err(format!(
-                        "Ruta de archivo adjunto no existe: '{}'",
+                        "Attachment file path does not exist: '{}'",
                         p.display()
                     ));
                 }
@@ -146,7 +146,7 @@ impl ImportGhFormState {
     pub fn validate(&self) -> Result<String, String> {
         let r = self.issue_ref.trim();
         if r.is_empty() {
-            return Err("El número o URL del issue de GitHub es obligatorio".into());
+            return Err("The GitHub issue number or URL is required".into());
         }
         Ok(r.to_string())
     }
@@ -365,7 +365,7 @@ impl ShepherdTasksState {
             let id = task.id;
             let title = task.title.clone();
             let message = format!(
-                "¿Archivar la tarea '#{id} {title}'? La tarea pasará a la carpeta '_archive' y dejará de mostrarse en la lista activa."
+                "Archive task '#{id} {title}'? It will move to the '_archive' folder and stop showing in the active list."
             );
             self.sub_modal = TasksSubModal::ConfirmArchive {
                 task_id: id,
@@ -579,7 +579,7 @@ mod tests {
         let act = state.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()));
         assert_eq!(act, None);
         if let TasksSubModal::Create(ref form) = state.sub_modal {
-            assert!(form.error.as_ref().unwrap().contains("título"));
+            assert!(form.error.as_ref().unwrap().contains("title"));
         } else {
             panic!("Expected create modal");
         }
@@ -593,7 +593,7 @@ mod tests {
         // Try enter with empty description -> fails
         state.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()));
         if let TasksSubModal::Create(ref form) = state.sub_modal {
-            assert!(form.error.as_ref().unwrap().contains("descripción"));
+            assert!(form.error.as_ref().unwrap().contains("description"));
         }
 
         // Fill description
@@ -616,7 +616,7 @@ mod tests {
         // Submit -> fails with broken attachment path error
         state.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()));
         if let TasksSubModal::Create(ref form) = state.sub_modal {
-            assert!(form.error.as_ref().unwrap().contains("no existe"));
+            assert!(form.error.as_ref().unwrap().contains("does not exist"));
         }
 
         // Fix attachment to point to a real file (Cargo.toml)
@@ -664,7 +664,7 @@ mod tests {
         } = state.sub_modal
         {
             assert_eq!(task_id, 42);
-            assert!(message.contains("Archivar la tarea '#42"));
+            assert!(message.contains("Archive task '#42"));
         } else {
             panic!("Expected ConfirmArchive modal");
         }

@@ -79,10 +79,10 @@ pub struct SpawnFormState {
 impl SpawnFormState {
     pub fn validate(&self) -> Result<(), String> {
         if self.role.trim().is_empty() {
-            return Err("El rol es obligatorio".into());
+            return Err("The role is required".into());
         }
         if self.task.trim().is_empty() {
-            return Err("La descripción de la tarea es obligatoria".into());
+            return Err("The task description is required".into());
         }
         Ok(())
     }
@@ -286,9 +286,9 @@ impl ShepherdAgentsPanelState {
             let id = agent.id.clone();
             let state = agent.state.clone();
             let message = if state == "done" {
-                format!("¿Matar al agente '{id}'? El agente está 'done'; cerrará su pestaña.")
+                format!("Kill agent '{id}'? The agent is 'done'; its tab will be closed.")
             } else {
-                format!("¿Matar al agente '{id}'? Estado: {state}. Se terminará su proceso y se marcará como killed.")
+                format!("Kill agent '{id}'? Status: {state}. Its process will be terminated and it will be marked as killed.")
             };
             self.sub_modal = AgentsSubModal::ConfirmKill {
                 agent_id: id,
@@ -306,9 +306,9 @@ impl ShepherdAgentsPanelState {
             let id = agent.id.clone();
             let state = agent.state.clone();
             let message = if state == "done" {
-                format!("¿Quitar al agente '{id}' de la lista? Estado: done; cerrará su pestaña y eliminará su sesión.")
+                format!("Remove agent '{id}' from the list? Status: done; its tab will be closed and its session removed.")
             } else {
-                format!("¿Quitar al agente '{id}' de la lista? Estado: {state}. Se eliminará su registro de sesión y worktree.")
+                format!("Remove agent '{id}' from the list? Status: {state}. Its session record and worktree will be removed.")
             };
             self.sub_modal = AgentsSubModal::ConfirmClean {
                 agent_id: id,
@@ -324,7 +324,7 @@ impl ShepherdAgentsPanelState {
         }
         let count = self.definitive_count();
         let message = format!(
-            "¿Limpiar los {count} agentes definitivos del workspace (exited, killed, failed)? Se cerrarán sus paneles residuales."
+            "Clean the {count} final agents of the workspace (exited, killed, failed)? Their leftover panes will be closed."
         );
         self.sub_modal = AgentsSubModal::ConfirmCleanAll {
             count,
@@ -557,7 +557,7 @@ mod tests {
         // Try enter with empty task
         panel.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()));
         if let AgentsSubModal::Spawn(ref form) = panel.sub_modal {
-            assert!(form.error.as_ref().unwrap().contains("tarea"));
+            assert!(form.error.as_ref().unwrap().contains("task"));
         }
 
         // Fill task: 'fix issue'
@@ -636,7 +636,7 @@ mod tests {
             assert_eq!(agent_id, "coder-1");
             assert_eq!(state, "done");
             assert!(
-                message.contains("cerrará su pestaña"),
+                message.contains("its tab will be closed"),
                 "Expected explanation of tab closing"
             );
         } else {
@@ -694,7 +694,7 @@ mod tests {
         } = panel.sub_modal
         {
             assert_eq!(agent_id, "brain-1");
-            assert!(message.contains("cerrará su pestaña"));
+            assert!(message.contains("its tab will be closed"));
         } else {
             panic!("Expected ConfirmClean submodal");
         }
@@ -774,7 +774,7 @@ mod tests {
         } = panel.sub_modal
         {
             assert_eq!(count, 3);
-            assert!(message.contains("3 agentes definitivos"));
+            assert!(message.contains("3 final agents"));
         } else {
             panic!("Expected ConfirmCleanAll submodal");
         }

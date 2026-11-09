@@ -32,15 +32,15 @@ pub enum ShepherdEventsSubTab {
 impl ShepherdEventsSubTab {
     pub fn label(self) -> &'static str {
         match self {
-            Self::Topics => "1. Tópicos y Flujo",
-            Self::PatternRuns => "2. Ejecuciones de Patrones",
+            Self::Topics => "1. Topics and Flow",
+            Self::PatternRuns => "2. Pattern Runs",
         }
     }
 
     pub fn short_label(self) -> &'static str {
         match self {
-            Self::Topics => "1. Tópicos",
-            Self::PatternRuns => "2. Ejecuciones",
+            Self::Topics => "1. Topics",
+            Self::PatternRuns => "2. Runs",
         }
     }
 }
@@ -472,7 +472,7 @@ pub fn render_events_section(
         let run_summary = state.runs.iter().find(|r| &r.id == run_id);
         let agents_count = run_summary.map(|r| r.agents_count).unwrap_or(0);
         let prompt = format!(
-            "¿Detener ejecución '{run_id}' y matar sus {agents_count} agentes? Esta acción no se puede deshacer."
+            "Stop run '{run_id}' and kill its {agents_count} agents? This cannot be undone."
         );
         let parts = Layout::default()
             .direction(Direction::Vertical)
@@ -483,8 +483,8 @@ pub fn render_events_section(
             buffer,
             parts[1],
             &prompt,
-            "Confirmar detención (Enter/d)",
-            "Cancelar (Esc)",
+            "Confirm stop (Enter/d)",
+            "Cancel (Esc)",
             true,
             palette,
         );
@@ -567,9 +567,9 @@ fn render_topics_view(
         hits.empty_hits = Some(render_empty_state(
             buffer,
             area,
-            "SIN TÓPICOS ACTIVOS",
-            "No se han creado tópicos en el bus de eventos aún.\nInicia un patrón de agentes o usa 'shepherd topic create' para comenzar.",
-            &[("+ Ver Patrones", Some("4"))],
+            "NO ACTIVE TOPICS",
+            "No topics have been created on the event bus yet.\nStart an agent pattern or use 'shepherd topic create' to begin.",
+            &[("+ View Patterns", Some("4"))],
             palette,
         ));
         return;
@@ -641,9 +641,9 @@ fn render_topics_view(
     };
 
     let pause_label = if state.view_paused {
-        "[ ⏸ Pausada (p) ]"
+        "[ ⏸ Paused (p) ]"
     } else {
-        "[ ▶ En vivo (p) ]"
+        "[ ▶ Live (p) ]"
     };
     let pause_w = text_width(pause_label);
     let pause_style = Style::default()
@@ -709,9 +709,9 @@ fn render_topics_view(
     }
 
     let filter_str = if state.agent_filter_input.is_empty() {
-        "Filtro: [ / ]".to_string()
+        "Filter: [ / ]".to_string()
     } else {
-        format!("Filtro: [{}]", state.agent_filter_input)
+        format!("Filter: [{}]", state.agent_filter_input)
     };
     let filter_w = text_width(&filter_str);
     let filter_style = if state.editing_agent_filter {
@@ -806,9 +806,9 @@ fn render_pattern_runs_view(
         hits.empty_hits = Some(render_empty_state(
             buffer,
             area,
-            "SIN EJECUCIONES DE PATRONES",
-            "No hay ejecuciones de patrones en curso ni archivadas.\nVe a la pestaña Patrones (4) y presiona [ Ejecutar (r) ] para instanciar uno.",
-            &[("+ Ver Patrones", Some("4"))],
+            "NO PATTERN RUNS",
+            "No pattern runs in progress or archived.\nGo to the Patterns tab (4) and press [ Run (r) ] to start one.",
+            &[("+ View Patterns", Some("4"))],
             palette,
         ));
         return;
@@ -858,38 +858,34 @@ fn render_pattern_runs_view(
     // Right: Detail view
     if let Some(ref detail) = state.selected_run_detail {
         let (status_color, status_label) = match detail.state {
-            PatternRunState::Running => (palette.green, "✓ EN EJECUCIÓN"),
+            PatternRunState::Running => (palette.green, "✓ RUNNING"),
             PatternRunState::Paused => (palette.yellow, "⏸ PAUSADA"),
             PatternRunState::Stopped => (palette.red, "⏹ DETENIDA"),
-            PatternRunState::Failed => (palette.red, "✗ ERROR EN EJECUCIÓN"),
-            PatternRunState::Done if detail.quiesced => (
-                palette.blue,
-                "✓ COMPLETADA (en reposo; despierta con mensaje nuevo)",
-            ),
+            PatternRunState::Failed => (palette.red, "✗ RUN FAILED"),
+            PatternRunState::Done if detail.quiesced => {
+                (palette.blue, "✓ COMPLETED (idle; wakes on a new message)")
+            }
             PatternRunState::Done => (palette.blue, "✓ COMPLETADA"),
             PatternRunState::Degraded => (palette.yellow, "⚠ DEGRADADA"),
-            PatternRunState::Stalled => (
-                palette.yellow,
-                "⚠ ATASCADA (stalled; despierta con mensaje nuevo)",
-            ),
+            PatternRunState::Stalled => (palette.yellow, "⚠ STALLED (wakes on a new message)"),
         };
 
         let header = DetailHeader {
-            title: format!("EJECUCIÓN: {}", detail.id),
+            title: format!("RUN: {}", detail.id),
             badges: vec![
                 (status_label.to_string(), Style::default().fg(status_color)),
                 (
-                    format!("Topología: {}", detail.kind),
+                    format!("Topology: {}", detail.kind),
                     Style::default().fg(palette.accent),
                 ),
             ],
             metadata_line: Some(format!(
-                "Patrón: {} | Iniciada: {}",
+                "Pattern: {} | Started: {}",
                 detail.pattern, detail.created_at
             )),
             actions: vec![
-                ("Pausar/Reanudar".into(), Some("p".into())),
-                ("Detener".into(), Some("x".into())),
+                ("Pause/Resume".into(), Some("p".into())),
+                ("Stop".into(), Some("x".into())),
             ],
         };
 
@@ -899,9 +895,9 @@ fn render_pattern_runs_view(
             &detail.task
         };
         let mut blocks = vec![
-            DetailContentBlock::Heading("INFORMACIÓN".into()),
+            DetailContentBlock::Heading("INFORMATION".into()),
             DetailContentBlock::Paragraph(format!(
-                "Tarea / Objetivo: {}\nTópicos: {}",
+                "Task / Objective: {}\nTopics: {}",
                 task_desc,
                 detail.topics.join(", ")
             )),
@@ -949,15 +945,15 @@ fn render_pattern_runs_view(
         let is_paused = detail.state == PatternRunState::Paused;
 
         let pause_resume_action = if is_running {
-            ("Pausar", "p", true)
+            ("Pause", "p", true)
         } else if is_paused {
-            ("Reanudar", "p", true)
+            ("Resume", "p", true)
         } else {
-            ("Pausar", "", false)
+            ("Pause", "", false)
         };
 
         let can_stop = is_running || is_paused;
-        let stop_action = ("Detener", "x", can_stop);
+        let stop_action = ("Stop", "x", can_stop);
 
         let bottom_actions = [pause_resume_action, stop_action];
 

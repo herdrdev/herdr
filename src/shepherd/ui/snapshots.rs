@@ -112,10 +112,10 @@ impl SnapshotButton {
         match self {
             Self::DiffPrevious => ("Ver diff vs anterior", "d"),
             Self::DiffCurrent => ("Ver diff vs actual", "D"),
-            Self::RestoreFile => ("Restaurar archivo…", "f"),
-            Self::RestoreAll => ("Restaurar todo", "R"),
-            Self::Delete => ("Borrar", "x"),
-            Self::Prune => ("Podar…", "p"),
+            Self::RestoreFile => ("Restore file…", "f"),
+            Self::RestoreAll => ("Restore all", "R"),
+            Self::Delete => ("Delete", "x"),
+            Self::Prune => ("Prune…", "p"),
             Self::Back => ("Volver", "Esc"),
         }
     }
@@ -394,7 +394,7 @@ impl ShepherdSnapshotsState {
             return None;
         }
         if self.agent_id.is_empty() {
-            self.error = Some("Elige un agente activo para capturar".into());
+            self.error = Some("Pick an active agent to capture".into());
             return None;
         }
         let a = ShepherdSnapshotsAction::Capture {
@@ -412,11 +412,11 @@ impl ShepherdSnapshotsState {
         let (root, id) = (self.root_of(&snap), snap.id);
         match mode {
             DiffMode::Previous => self.slow(
-                "cargando diff…",
+                "loading diff…",
                 ShepherdSnapshotsAction::DiffPrevious { root, id },
             ),
             DiffMode::Current => self.slow(
-                "cargando diff…",
+                "loading diff…",
                 ShepherdSnapshotsAction::DiffCurrent { root, id },
             ),
         }
@@ -432,7 +432,7 @@ impl ShepherdSnapshotsState {
             root: self.root_of(&snap),
             id: snap.id,
         };
-        self.slow("leyendo archivos…", a)
+        self.slow("reading files…", a)
     }
 
     pub fn start_restore_all(&mut self) {
@@ -460,13 +460,13 @@ impl ShepherdSnapshotsState {
             return;
         }
         if self.agent_id.is_empty() || self.source != SnapshotSource::Agent {
-            self.error = Some("Para podar elige un agente (pestaña «Del agente»)".into());
+            self.error = Some("To prune, pick an agent («From agent» tab)".into());
             return;
         }
-        let mut field = FormField::new("Conservar los últimos N snapshots (keep)", "ej. 10");
+        let mut field = FormField::new("Keep the latest N snapshots (keep)", "e.g. 10");
         field.value = DEFAULT_PRUNE_KEEP.to_string();
         self.sub = SnapSub::Prune(InlineFormState::new(
-            &format!("PODAR SNAPSHOTS DE {}", self.agent_id),
+            &format!("PRUNE SNAPSHOTS OF {}", self.agent_id),
             vec![field],
         ));
         self.error = None;
@@ -479,7 +479,7 @@ impl ShepherdSnapshotsState {
         };
         let paths = sel.checked_paths();
         if paths.is_empty() {
-            self.error = Some("Marca al menos un archivo (Espacio)".into());
+            self.error = Some("Mark at least one file (Space)".into());
             return;
         }
         self.sub = SnapSub::ConfirmFiles {
@@ -497,7 +497,7 @@ impl ShepherdSnapshotsState {
         let keep: usize = match raw.parse() {
             Ok(n) if n >= 1 => n,
             _ => {
-                form.error = Some("keep debe ser un número entero ≥ 1".into());
+                form.error = Some("keep must be an integer ≥ 1".into());
                 return None;
             }
         };
@@ -516,14 +516,14 @@ impl ShepherdSnapshotsState {
             SnapSub::ConfirmFiles { id, paths } => {
                 let root = self.root_for_id(&id);
                 self.slow(
-                    "restaurando…",
+                    "restoring…",
                     ShepherdSnapshotsAction::Restore { root, id, paths },
                 )
             }
             SnapSub::ConfirmAll(id) => {
                 let root = self.root_for_id(&id);
                 self.slow(
-                    "restaurando…",
+                    "restoring…",
                     ShepherdSnapshotsAction::Restore {
                         root,
                         id,
@@ -687,7 +687,7 @@ impl ShepherdSnapshotsState {
         self.error = None;
         self.notice = Some(if r.created {
             format!(
-                "Capturado {} ({}, {} archivo(s), +{} −{})",
+                "Captured {} ({}, {} file(s), +{} −{})",
                 r.snapshot.id,
                 r.snapshot.reason.as_str(),
                 r.snapshot.files,
@@ -695,7 +695,7 @@ impl ShepherdSnapshotsState {
                 r.snapshot.removed
             )
         } else {
-            format!("Sin cambios desde {}: no se creó snapshot", r.snapshot.id)
+            format!("No changes since {}: no snapshot created", r.snapshot.id)
         });
         if r.created {
             self.pending_select = Some(r.snapshot.id.clone());
@@ -728,10 +728,10 @@ impl ShepherdSnapshotsState {
             d.files.iter().partition(|f| f.status != "added");
         if restorable.is_empty() {
             self.notice = Some(if extra.is_empty() {
-                format!("{id} coincide con el estado actual: nada que restaurar")
+                format!("{id} matches the current state: nothing to restore")
             } else {
                 format!(
-                    "{id}: solo hay archivos nuevos desde entonces ({}); no hay nada que restaurar",
+                    "{id}: there are only new files since then ({}); nothing to restore",
                     extra.len()
                 )
             });
@@ -759,27 +759,21 @@ impl ShepherdSnapshotsState {
         self.busy = None;
         self.error = None;
         let mut msg = format!(
-            "Restaurado {} ({} archivo(s))",
+            "Restored {} ({} file(s))",
             r.restored.id,
             r.restored_files.len()
         );
         if r.pre_restore_created {
-            msg.push_str(&format!(
-                "; estado anterior guardado como {}",
-                r.pre_restore.id
-            ));
+            msg.push_str(&format!("; previous state saved as {}", r.pre_restore.id));
             self.pending_select = Some(r.pre_restore.id.clone());
         } else {
             msg.push_str(&format!(
-                "; el estado anterior ya estaba guardado como {}",
+                "; the previous state was already saved as {}",
                 r.pre_restore.id
             ));
         }
         if !r.extra_files.is_empty() {
-            msg.push_str(&format!(
-                "; se conservan {} archivo(s) extra",
-                r.extra_files.len()
-            ));
+            msg.push_str(&format!("; {} extra file(s) kept", r.extra_files.len()));
         }
         self.notice = Some(msg);
         self.diff = None;
@@ -788,7 +782,7 @@ impl ShepherdSnapshotsState {
     pub fn ingest_delete(&mut self, r: &DeleteResult) {
         self.busy = None;
         self.error = None;
-        self.notice = Some(format!("Borrado {}", r.deleted));
+        self.notice = Some(format!("Deleted {}", r.deleted));
         self.summaries.remove(&r.deleted);
         self.diff = None;
     }
@@ -797,7 +791,7 @@ impl ShepherdSnapshotsState {
         self.busy = None;
         self.error = None;
         self.notice = Some(format!(
-            "Podados {} snapshot(s); quedan {}",
+            "Pruned {} snapshot(s); {} left",
             r.pruned.len(),
             r.kept
         ));

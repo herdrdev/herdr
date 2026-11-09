@@ -164,23 +164,23 @@ impl ShepherdAgentsSectionState {
 
     pub fn start_spawn(&mut self) {
         self.spawn_form = Some(InlineFormState::new(
-            "NUEVO AGENTE (Formulario en línea)",
+            "NEW AGENT (inline form)",
             vec![
-                FormField::new("Rol obligatorio", "ej. coder"),
+                FormField::new("Role (required)", "e.g. coder"),
                 FormField::new(
-                    "Tarea asignada (ID o descripción)",
-                    "ej. 12 - Soporte para banderas booleanas",
+                    "Assigned task (ID or description)",
+                    "e.g. 12 - Support for boolean flags",
                 ),
                 FormField::new(
-                    "Vendor / Modelo (opcional)",
+                    "Vendor / Model (optional)",
                     "ej. anthropic/claude-3-7-sonnet",
                 ),
                 FormField::new(
-                    "Worktree / Directorio (opcional)",
+                    "Worktree / Directory (optional)",
                     "ej. .shepherd/worktrees/task-12",
                 ),
                 FormField::new(
-                    "Skills adicionales (separadas por coma)",
+                    "Additional skills (comma separated)",
                     "ej. git-safe, rust-tools",
                 ),
             ],
@@ -214,7 +214,7 @@ impl ShepherdAgentsSectionState {
     pub fn start_clean_all(&mut self) {
         let count = self.definitive_count();
         if count == 0 {
-            self.error = Some("No hay agentes finalizados para limpiar".into());
+            self.error = Some("No finished agents to clean".into());
         } else {
             self.confirm_clean_all = Some(count);
             self.confirm_kill = None;
@@ -227,7 +227,7 @@ impl ShepherdAgentsSectionState {
     pub fn focus_selected_agent(&mut self) -> Option<ShepherdAgentsAction> {
         let agent = self.selected_agent()?;
         if agent.pane.is_empty() {
-            self.error = Some("El agente no tiene un terminal asignado".into());
+            self.error = Some("The agent has no terminal assigned".into());
             return None;
         }
         let action = ShepherdAgentsAction::FocusPane {
@@ -249,10 +249,10 @@ impl ShepherdAgentsSectionState {
         let skills_raw = form.fields[4].value.trim().to_string();
 
         if role.is_empty() {
-            return Err("El rol del agente es obligatorio".into());
+            return Err("The agent role is required".into());
         }
         if task.is_empty() {
-            return Err("La tarea asignada es obligatoria".into());
+            return Err("The assigned task is required".into());
         }
 
         let (vendor, model) = if vendor_raw.is_empty() {
@@ -535,7 +535,7 @@ pub fn render_agents_section(
         state.selected,
         state.list_scroll,
         None,
-        Some(("+ Nuevo", "s")),
+        Some(("+ New", "s")),
         palette,
     );
 
@@ -557,8 +557,8 @@ pub fn render_agents_section(
             buffer,
             detail_area,
             form,
-            "Lanzar Agente",
-            "Cancelar",
+            "Launch Agent",
+            "Cancel",
             true,
             palette,
         ));
@@ -567,15 +567,14 @@ pub fn render_agents_section(
 
     // 2. Confirm kill stripe
     if let Some(ref agent_id) = state.confirm_kill {
-        let msg = format!(
-            "¿Enviar SIGKILL al proceso del agente '{agent_id}'? Se detendrá inmediatamente."
-        );
+        let msg =
+            format!("Send SIGKILL to the process of agent '{agent_id}'? It will stop immediately.");
         hits.stripe_hits = Some(render_confirm_stripe(
             buffer,
             detail_area,
             &msg,
-            "Confirmar Matar",
-            "Cancelar",
+            "Confirm Kill",
+            "Cancel",
             true,
             palette,
         ));
@@ -584,13 +583,15 @@ pub fn render_agents_section(
 
     // 3. Confirm clean stripe
     if let Some(ref agent_id) = state.confirm_clean {
-        let msg = format!("¿Limpiar el agente '{agent_id}'? Se cerrará su terminal y se eliminarán sus archivos de sesión.");
+        let msg = format!(
+            "Clean agent '{agent_id}'? Its terminal will be closed and its session files removed."
+        );
         hits.stripe_hits = Some(render_confirm_stripe(
             buffer,
             detail_area,
             &msg,
-            "Confirmar Limpiar",
-            "Cancelar",
+            "Confirm Clean",
+            "Cancel",
             true,
             palette,
         ));
@@ -599,15 +600,14 @@ pub fn render_agents_section(
 
     // 4. Confirm clean all stripe
     if let Some(count) = state.confirm_clean_all {
-        let msg = format!(
-            "¿Limpiar todos los agentes finalizados ({count})? Se eliminarán de la sesión."
-        );
+        let msg =
+            format!("Clean all finished agents ({count})? They will be removed from the session.");
         hits.stripe_hits = Some(render_confirm_stripe(
             buffer,
             detail_area,
             &msg,
-            "Limpiar Definitivos",
-            "Cancelar",
+            "Clean Final",
+            "Cancel",
             true,
             palette,
         ));
@@ -619,11 +619,11 @@ pub fn render_agents_section(
         hits.empty_hits = Some(render_empty_state(
             buffer,
             detail_area,
-            "NO HAY AGENTES ACTIVOS",
-            "No hay ningún agente en ejecución en esta sesión de Shepherd.\nPuedes lanzar el primer agente con un rol y tarea específicos.",
+            "NO ACTIVE AGENTS",
+            "No agent is running in this Shepherd session.\nYou can launch the first agent with a specific role and task.",
             &[
-                ("+ Lanzar Primer Agente", Some("s")),
-                ("Refrescar", Some("r")),
+                ("+ Launch First Agent", Some("s")),
+                ("Refresh", Some("r")),
                 ("Snapshots", Some("t")),
             ],
             palette,
@@ -659,7 +659,7 @@ pub fn render_agents_section(
         }
 
         let meta_line = format!(
-            "Vendor: {} | Modelo: {} | Terminal Pane: {}",
+            "Vendor: {} | Model: {} | Terminal Pane: {}",
             agent.vendor,
             if agent.model.is_empty() {
                 "default"
@@ -667,19 +667,19 @@ pub fn render_agents_section(
                 &agent.model
             },
             if agent.pane.is_empty() {
-                "ninguno"
+                "none"
             } else {
                 &agent.pane
             }
         );
 
         let header = DetailHeader {
-            title: format!("AGENTE: {} (ID: {})", agent.role, agent.id),
+            title: format!("AGENT: {} (ID: {})", agent.role, agent.id),
             badges,
             metadata_line: Some(meta_line),
             actions: vec![
                 ("Ir a Terminal".to_string(), Some("Enter".into())),
-                ("+ Nuevo".to_string(), Some("s".into())),
+                ("+ New".to_string(), Some("s".into())),
             ],
         };
 
@@ -688,9 +688,9 @@ pub fn render_agents_section(
         if agent.needs_you {
             blocks.push(DetailContentBlock::Notice {
                 text: format!(
-                    "AVISO DESTACADO (NEEDS YOU):\nEsperando al humano: {}",
+                    "HIGHLIGHTED NOTICE (NEEDS YOU):\nWaiting for the human: {}",
                     if agent.notice.is_empty() {
-                        "Acción requerida en el terminal nativo (diálogo, login o confirmación)."
+                        "Action required in the native terminal (dialog, login or confirmation)."
                     } else {
                         &agent.notice
                     }
@@ -699,10 +699,10 @@ pub fn render_agents_section(
             });
         }
 
-        blocks.push(DetailContentBlock::Heading("TAREA ASIGNADA:".into()));
+        blocks.push(DetailContentBlock::Heading("ASSIGNED TASK:".into()));
         blocks.push(DetailContentBlock::Paragraph(
             if agent.task_text.is_empty() {
-                "Sin descripción de tarea asignada.".into()
+                "No task description assigned.".into()
             } else {
                 agent.task_text.clone()
             },
@@ -710,24 +710,24 @@ pub fn render_agents_section(
 
         blocks.push(DetailContentBlock::Heading("SNAPSHOTS:".into()));
         blocks.push(DetailContentBlock::Paragraph(if agent.snapshots == 0 {
-            "Aún no hay snapshots — se toman solos al quedar inactivo; abre la línea de tiempo (t) para capturar uno."
+            "No snapshots yet — they are taken automatically when idle; open the timeline (t) to capture one."
                 .into()
         } else {
             format!(
-                "{} snapshot(s); último: {}. Abre la línea de tiempo (t) para ver diffs y restaurar.",
+                "{} snapshot(s); latest: {}. Open the timeline (t) to see diffs and restore.",
                 agent.snapshots, agent.last_snapshot
             )
         }));
 
         let mut bottom_actions = vec![
             ("Ir a Terminal", "Enter", true),
-            ("Matar Agente", "K", false),
-            ("Limpiar Sesión", "x", false),
+            ("Kill Agent", "K", false),
+            ("Clean Session", "x", false),
             ("Snapshots", "t", false),
         ];
 
         if state.definitive_count() > 0 {
-            bottom_actions.push(("Limpiar Definitivos", "X", false));
+            bottom_actions.push(("Clean Final", "X", false));
         }
 
         hits.detail_hits = Some(render_detail_view(

@@ -83,15 +83,15 @@ impl CreateSkillFormState {
     pub fn validate(&self) -> Result<(), String> {
         let n = self.name.trim();
         if n.is_empty() {
-            return Err("El nombre de la skill es obligatorio".into());
+            return Err("The skill name is required".into());
         }
         if !shepherd_core::skills::name_ok(n) {
             return Err(format!(
-                "Nombre de skill inválido: '{n}'. Use solo minúsculas, números y guiones."
+                "Invalid skill name: '{n}'. Use only lowercase letters, numbers and hyphens."
             ));
         }
         if self.description.trim().is_empty() {
-            return Err("La descripción de la skill es obligatoria".into());
+            return Err("The skill description is required".into());
         }
         Ok(())
     }
@@ -260,7 +260,7 @@ impl ShepherdSkillsState {
         // Shadowing check: un cambio que no tenga efecto debe fallar con un mensaje claro
         if let Some(ref blocker) = skill.shadowed_by {
             let msg = format!(
-                "No se puede alternar la skill '{}': la configuración de nivel '{}' la anula y tapa este cambio",
+                "Cannot toggle skill '{}': the '{}' level setting overrides it and masks this change",
                 skill.name, blocker
             );
             self.error = Some(msg.clone());
@@ -278,7 +278,7 @@ impl ShepherdSkillsState {
         self.last_action = Some(action.clone());
         self.error = None;
         self.feedback_notice = Some(
-            "Cambio guardado. Recuerda: añadir o quitar skills se aplica al REINICIAR el agente."
+            "Change saved. Remember: adding or removing skills applies when the agent is RESTARTED."
                 .into(),
         );
         Ok(Some(action))
@@ -291,13 +291,13 @@ impl ShepherdSkillsState {
         if let Some(skill) = self.selected_agent_skill() {
             if !skill.edited {
                 self.error = Some(format!(
-                    "La skill '{}' no tiene modificaciones locales que restaurar",
+                    "Skill '{}' has no local changes to restore",
                     skill.name
                 ));
                 return;
             }
             let message = format!(
-                "¿Restaurar la skill '{}' al contenido original? Se perderán las modificaciones locales de esta sesión.",
+                "Restore skill '{}' to its original content? Local changes from this session will be lost.",
                 skill.name
             );
             self.sub_modal = SkillsSubModal::ConfirmRestore {
@@ -315,12 +315,13 @@ impl ShepherdSkillsState {
         if let Some(skill) = self.selected_catalog_skill() {
             // Guard: default skills cannot be deleted! Only user and repo skills can be deleted.
             if skill.scope == Scope::Default {
-                self.error = Some("No se pueden borrar las skills predeterminadas del sistema (solo usuario/repo)".into());
+                self.error =
+                    Some("Default system skills cannot be deleted (user/repo only)".into());
                 return;
             }
 
             let message = format!(
-                "¿Borrar la skill '{}' del catálogo ({})? Se eliminarán los archivos del directorio de la skill.",
+                "Delete skill '{}' from the catalog ({})? The files in the skill directory will be removed.",
                 skill.name, skill.scope
             );
             self.sub_modal = SkillsSubModal::ConfirmDelete {
@@ -547,7 +548,7 @@ mod tests {
         } = state.sub_modal
         {
             assert_eq!(skill_name, "implement-task");
-            assert!(message.contains("Se perderán las modificaciones locales"));
+            assert!(message.contains("Local changes"));
         } else {
             panic!("Expected ConfirmRestore modal");
         }
@@ -623,7 +624,7 @@ mod tests {
         {
             assert_eq!(skill_name, "my-custom-skill");
             assert_eq!(scope, Scope::User);
-            assert!(message.contains("eliminarán los archivos"));
+            assert!(message.contains("files in the skill directory will be removed"));
         } else {
             panic!("Expected ConfirmDelete modal");
         }
