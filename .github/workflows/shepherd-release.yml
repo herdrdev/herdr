@@ -1,0 +1,137 @@
+name: Shepherd release binaries
+
+# Builds the Linux and macOS binaries and attaches them, with SHA256SUMS, to a GitHub release.
+#  - push a tag like v0.2.0 or v0.2.0-beta: builds and publishes (creates the release if it does not exist)
+#  - run it by hand with an existing tag (for example v0.1.0-beta) to add the binaries to that release
+# install.sh downloads these assets, so keep the names: shepherd-<linux|macos>-<x86_64|aarch64>.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: existing release tag to build and attach the binaries to (for example v0.1.0-beta)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  RUST_TOOLCHAIN_VERSION: 1.96.1
+
+jobs:
+  build:
+    if: github.repository == 'Rivaldito/shepherd'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            name: shepherd-linux-x86_64
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-latest
+            name: shepherd-linux-aarch64
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            name: shepherd-macos-x86_64
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            name: shepherd-macos-aarch64
+    env:
+      LIBGHOSTTY_VT_OPTIMIZE: ReleaseSafe
+      LIBGHOSTTY_VT_SIMD: 'false'
+
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.tag || github.ref_name }}
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN_VERSION }}
+          targets: ${{ matrix.target }}
+
+      - name: Install Zig
+        uses: vercel-labs/setup-zig@83c1594f26b86da8a9a8ddd9b5ee5f3af0f96943 # v1.0.2
+        with:
+          version: 0.16.0
+
+      - name: Install Linux build tools
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build musl-tools gcc-aarch64-linux-gnu crossbuild-essential-arm64
+
+      - name: Set Linux aarch64 linker
+        if: matrix.target == 'aarch64-unknown-linux-musl'
+        run: echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
+
+      - name: Install macOS build tools
+        if: runner.os == 'macOS'
+        run: brew install cmake ninja
+
+      - name: Remove Zig caches
+        run: rm -rf .zig-cache vendor/libghostty-vt/.zig-cache vendor/libghostty-vt/zig-out
+
+      - name: Build
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Check the Linux binary is static
+        if: runner.os == 'Linux'
+        run: |
+          file target/${{ matrix.target }}/release/shepherd
+          ldd target/${{ matrix.target }}/release/shepherd 2>&1 | tee ldd.txt || true
+          grep -qE "statically linked|not a dynamic executable" ldd.txt
+
+      - name: Package
+        run: cp target/${{ matrix.target }}/release/shepherd ${{ matrix.name }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ${{ matrix.name }}
+          path: ${{ matrix.name }}
+          retention-days: 7
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Download the binaries
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Write SHA256SUMS
+        working-directory: dist
+        run: |
+          ls -l
+          sha256sum shepherd-* > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Create the release if it does not exist
+        run: |
+          if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            flags=""
+            case "$TAG" in *-*) flags="--prerelease" ;; esac
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag $flags \
+              --title "shepherd ${TAG#v}" \
+              --notes "Prebuilt binaries for Linux and macOS. Install with: curl -fsSL https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/install.sh | sh"
+          fi
+
+      - name: Attach the binaries
+        run: gh release upload "$TAG" dist/shepherd-* dist/SHA256SUMS --repo "$GITHUB_REPOSITORY" --clobber

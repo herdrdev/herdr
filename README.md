@@ -187,9 +187,15 @@ the native app is a desktop window over the same server as the terminal; `ctrl+s
 
 a complete walk from an empty machine to a team of agents. it takes about ten minutes plus the first build.
 
-**1. get the tools.** you need git, Rust 1.96.1+, Zig 0.16.0 (to build the vendored terminal library) and at least one agent cli (`claude`, `codex` or `agy`). check with `rustc --version`, `zig version` and `git --version`. if zig is not on your `PATH`, run `export ZIG=/path/to/zig`.
+**1. get the tools.** you need git and at least one agent cli (`claude`, `codex` or `agy`). building from source also needs Rust 1.96.1+ and Zig 0.16.0 (to build the vendored terminal library); if zig is not on your `PATH`, run `export ZIG=/path/to/zig`.
 
-**2. build it.** shepherd is in beta and ships no binaries yet.
+**2. install it.** one command, for linux and macos (x86_64 and arm64):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Rivaldito/shepherd/main/install.sh | sh
+```
+
+it downloads the binary of the latest release, checks its sha-256 and puts it in `~/.local/bin` (set `SHEPHERD_INSTALL_DIR` to change it, or `SHEPHERD_VERSION=v0.1.0-beta` to pick a release). you can also download a binary from the [releases](https://github.com/Rivaldito/shepherd/releases) page. or build it from source:
 
 ```bash
 git clone https://github.com/Rivaldito/shepherd.git

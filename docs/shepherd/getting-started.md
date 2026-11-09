@@ -14,7 +14,17 @@ This guide takes you from nothing to a running team of agents. It assumes Linux 
 
 If Zig is not on your `PATH`, point the build at it: `export ZIG=/path/to/zig`.
 
-## 2. Build
+## 2. Install
+
+On Linux and macOS (x86_64 and arm64) the quickest way is the installer, which downloads the binary of the latest release, checks its SHA-256 and puts it in `~/.local/bin`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Rivaldito/shepherd/main/install.sh | sh
+```
+
+Set `SHEPHERD_INSTALL_DIR` to install somewhere else, or `SHEPHERD_VERSION=v0.1.0-beta` to pick a release. You can also download a binary from the [releases page](https://github.com/Rivaldito/shepherd/releases). If you installed the binary, skip the build below.
+
+## 2b. Build from source
 
 ```bash
 git clone https://github.com/Rivaldito/shepherd.git
