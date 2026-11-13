@@ -468,7 +468,7 @@ pub(crate) fn take_terminal_resize_signal() -> bool {
     false
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClipboardCommand {
     pub program: &'static str,

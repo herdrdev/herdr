@@ -10,8 +10,7 @@ use std::sync::OnceLock;
 pub(super) const REMOTE_BRIDGE_CLOCK: libc::clockid_t = libc::CLOCK_MONOTONIC;
 
 use super::{
-    read_limited_reader, ClipboardCommand, ClipboardImage, ForegroundJob, ForegroundProcess,
-    LimitedRead, Signal,
+    read_limited_reader, ClipboardImage, ForegroundJob, ForegroundProcess, LimitedRead, Signal,
 };
 
 pub(crate) use super::unix_common::{
@@ -33,6 +32,9 @@ pub(crate) use power::monitor_host_power;
 
 mod launchd_spawn;
 pub(crate) use launchd_spawn::{leave_launchd_job, spawn_launchd_job};
+
+mod clipboard;
+pub(crate) use clipboard::write_clipboard;
 
 #[cfg(test)]
 mod config_file_tests;
@@ -642,16 +644,6 @@ fn kern_procargs2(pid: u32) -> Option<Vec<u8>> {
     }
 }
 
-pub fn write_clipboard(bytes: &[u8]) -> bool {
-    run_clipboard_command(
-        &ClipboardCommand {
-            program: "pbcopy",
-            args: &[],
-        },
-        bytes,
-    )
-}
-
 pub fn read_clipboard_text() -> Option<String> {
     const MAX_CLIPBOARD_TEXT_BYTES: usize = 1024 * 1024;
 
@@ -896,34 +888,6 @@ fn run_notification_command(mut command: Command) -> std::io::Result<bool> {
     };
 
     Ok(status.success())
-}
-
-fn run_clipboard_command(command: &ClipboardCommand, bytes: &[u8]) -> bool {
-    let mut child = match Command::new(command.program)
-        .args(command.args)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-    {
-        Ok(child) => child,
-        Err(_) => return false,
-    };
-
-    let Some(mut stdin) = child.stdin.take() else {
-        let _ = child.kill();
-        let _ = child.wait();
-        return false;
-    };
-
-    if stdin.write_all(bytes).is_err() {
-        let _ = child.kill();
-        let _ = child.wait();
-        return false;
-    }
-    drop(stdin);
-
-    child.wait().map(|status| status.success()).unwrap_or(false)
 }
 
 /// Start time of `pid` in microseconds. It tells a process apart from a later
