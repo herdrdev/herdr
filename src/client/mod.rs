@@ -232,7 +232,12 @@ fn run_client_with_mode(
     crate::logging::startup("client");
     info!(path = %socket_path.display(), "{log_message}");
 
-    let endpoint_catalog = if client_rendered_shell && !is_remote_client_process() {
+    // Moshi resolves panes on the SSH/Mosh host. A desktop's saved remote
+    // selection would route the terminal elsewhere while Chat stays local.
+    let endpoint_catalog = if client_rendered_shell
+        && !is_remote_client_process()
+        && std::env::var("MOSHI_CLIENT").as_deref() != Ok("1")
+    {
         endpoint::EndpointCatalog::load().unwrap_or_else(|error| {
             warn!(%error, "saved SSH endpoint catalog is unavailable");
             endpoint::EndpointCatalog::default()
@@ -664,7 +669,11 @@ async fn run_client_loop(
     let mut pending_activation: Option<endpoint::PendingEndpointActivation> = None;
     let mut scheduled_activation = None;
     let mut pending_catalog: Option<Result<Vec<endpoint::SavedSshEndpoint>, String>> = None;
-    if state.shell.is_some() && !is_remote_client && state.attach_escape.is_none() {
+    if state.shell.is_some()
+        && !is_remote_client
+        && state.attach_escape.is_none()
+        && std::env::var("MOSHI_CLIENT").as_deref() != Ok("1")
+    {
         catalog_reload::watch_profiles(event_tx.clone(), should_quit.clone());
     }
 
