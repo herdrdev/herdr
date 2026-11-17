@@ -577,19 +577,23 @@ impl HeadlessServer {
             crate::kitty_graphics::HostCellSize::default()
         };
         let area = Rect::new(0, 0, cols, rows);
-        if self.app_client_count() == 1 {
-            for (workspace_index, workspace) in self.app.state.workspaces.iter().enumerate() {
-                for tab_index in 0..workspace.tabs.len() {
-                    crate::ui::resize_tab_surface(
-                        &self.app.state,
-                        &self.app.terminal_runtimes,
-                        workspace_index,
-                        tab_index,
-                        area,
-                        cell_size,
-                    );
-                }
-            }
+        if self.app_client_count() == 1 && self.defer_hidden_resize {
+            crate::ui::resize_tab_surface(
+                &self.app.state,
+                &self.app.terminal_runtimes,
+                target.workspace_index,
+                target.tab_index,
+                area,
+                cell_size,
+            );
+            self.pending_hidden_resize = Some(PendingHiddenResize {
+                area,
+                cell_size,
+                due: Instant::now() + HIDDEN_RESIZE_SETTLE,
+            });
+        } else if self.app_client_count() == 1 {
+            self.pending_hidden_resize = None;
+            self.resize_all_tab_surfaces(area, cell_size);
         } else {
             crate::ui::compute_tab_surface_for(
                 &self.app.state,
@@ -608,6 +612,38 @@ impl HeadlessServer {
             let _ = resize_popup_runtime(&self.app, Rect::new(0, 0, cols, rows), cell_size);
         }
         true
+    }
+
+    fn resize_all_tab_surfaces(&self, area: Rect, cell_size: crate::kitty_graphics::HostCellSize) {
+        for (workspace_index, workspace) in self.app.state.workspaces.iter().enumerate() {
+            for tab_index in 0..workspace.tabs.len() {
+                crate::ui::resize_tab_surface(
+                    &self.app.state,
+                    &self.app.terminal_runtimes,
+                    workspace_index,
+                    tab_index,
+                    area,
+                    cell_size,
+                );
+            }
+        }
+    }
+
+    /// Applies the geometry deferred for hidden tabs once the resize burst has settled.
+    pub(super) fn flush_pending_hidden_resize(&mut self, now: Instant) {
+        if self.pending_hidden_resize.is_some_and(|p| now >= p.due) {
+            self.apply_pending_hidden_resize();
+        }
+    }
+
+    fn apply_pending_hidden_resize(&mut self) {
+        let Some(pending) = self.pending_hidden_resize.take() else {
+            return;
+        };
+        // With several clients each tab follows its own viewer's render path instead.
+        if self.app_client_count() == 1 {
+            self.resize_all_tab_surfaces(pending.area, pending.cell_size);
+        }
     }
 
     pub(super) fn resize_tabs_for_only_shell_client(
@@ -706,6 +742,8 @@ impl HeadlessServer {
             return false;
         };
         if self.tab_geometry_controllers.insert(tab_id, client_id) == Some(client_id) {
+            // The tab may have skipped resizes while hidden during a burst.
+            self.apply_pending_hidden_resize();
             return false;
         }
         self.apply_shell_tab_geometry(client_id, start_pending_agent_resumes)

@@ -115,6 +115,8 @@ fn test_headless_server_with_event_hub(event_hub: api::EventHub) -> HeadlessServ
         next_client_id: 1,
         foreground_client_id: None,
         tab_geometry_controllers: HashMap::new(),
+        defer_hidden_resize: false,
+        pending_hidden_resize: None,
         popup_owner_tab_id: None,
         client_shell_boot_id: "test-boot".into(),
         sent_window_title: None,
@@ -8427,4 +8429,155 @@ fn no_handle_internal_event_bypass_in_module() {
              handle_internal_event_with_forwarding (bypass risk):\n  {}",
         bypass_lines.join("\n  ")
     );
+}
+
+fn hidden_resize_burst_server() -> (HeadlessServer, Vec<crate::layout::PaneId>, Vec<String>) {
+    let mut server = test_headless_server();
+    let mut workspace = crate::workspace::Workspace::test_new("hidden-resize-burst");
+    let mut panes = vec![workspace.tabs[0].root_pane];
+    for name in ["second", "third", "fourth"] {
+        let tab = workspace.test_add_tab(Some(name));
+        panes.push(workspace.tabs[tab].root_pane);
+    }
+    for &pane_id in &panes {
+        workspace.insert_test_runtime(
+            pane_id,
+            crate::terminal::TerminalRuntime::test_with_screen_bytes(80, 24, b""),
+        );
+    }
+    server.app.state.workspaces = vec![workspace];
+    server.app.state.active = Some(0);
+    server.app.state.selected = 0;
+    server.app.state.mode = crate::app::Mode::Terminal;
+    let tab_ids = (0..panes.len())
+        .map(|tab| server.app.public_tab_id(0, tab).unwrap())
+        .collect();
+    (server, panes, tab_ids)
+}
+
+/// Number of real reflows a pane runtime has performed (each bumps content_seq twice).
+fn resize_count(server: &HeadlessServer, pane: crate::layout::PaneId) -> u64 {
+    server.app.state.workspaces[0].test_runtimes[&pane].content_seq() / 2
+}
+
+fn send_shell_resize(server: &mut HeadlessServer, client_id: u64, cols: u16, rows: u16) {
+    server.handle_server_event(ServerEvent::ClientShellResize {
+        client_id,
+        surface_cols: cols,
+        surface_rows: rows,
+        cell_width_px: 0,
+        cell_height_px: 0,
+        pixel_mouse: false,
+    });
+}
+
+#[tokio::test]
+async fn shell_resize_burst_defers_hidden_tabs_until_settled() {
+    let (mut server, panes, _) = hidden_resize_burst_server();
+    let (control, _) = connect_test_shell(&mut server, 90, 100, 30);
+    let _ = control.recv().expect("snapshot");
+    let before: Vec<u64> = panes.iter().map(|&p| resize_count(&server, p)).collect();
+
+    const BURST: u16 = 10;
+    for step in 0..BURST {
+        send_shell_resize(&mut server, 90, 100 + step + 1, 30 + step);
+    }
+    let latest_visible = server.app.state.workspaces[0].test_runtimes[&panes[0]].current_size();
+
+    // Visible pane follows every event; hidden panes do not reflow mid-burst.
+    assert_eq!(
+        resize_count(&server, panes[0]) - before[0],
+        u64::from(BURST)
+    );
+    for i in 1..panes.len() {
+        assert_eq!(resize_count(&server, panes[i]) - before[i], 0, "tab {i}");
+    }
+
+    // Before the deadline nothing flushes; after it each hidden pane reflows once.
+    let due = server.pending_hidden_resize.expect("pending").due;
+    server.flush_pending_hidden_resize(due - Duration::from_millis(1));
+    assert_eq!(resize_count(&server, panes[1]) - before[1], 0);
+    server.flush_pending_hidden_resize(due);
+    server.flush_pending_hidden_resize(due + Duration::from_secs(1));
+    for i in 1..panes.len() {
+        assert_eq!(resize_count(&server, panes[i]) - before[i], 1, "tab {i}");
+        assert_eq!(
+            server.app.state.workspaces[0].test_runtimes[&panes[i]].current_size(),
+            latest_visible
+        );
+    }
+    assert!(server.pending_hidden_resize.is_none());
+    shutdown_test_runtimes(&mut server);
+}
+
+#[tokio::test]
+async fn focusing_hidden_tab_mid_burst_resizes_it_immediately() {
+    let (mut server, panes, tab_ids) = hidden_resize_burst_server();
+    let (control, _) = connect_test_shell(&mut server, 91, 100, 30);
+    let _ = control.recv().expect("snapshot");
+    for step in 0..5u16 {
+        send_shell_resize(&mut server, 91, 90 + step, 28 + step);
+    }
+    let before_other = resize_count(&server, panes[2]);
+    let before_focused = resize_count(&server, panes[1]);
+
+    assert!(server.focus_shell_client_on_tab(91, &tab_ids[1]));
+    assert!(server.claim_shell_tab_geometry(91, false));
+
+    let latest = server.app.state.workspaces[0].test_runtimes[&panes[0]].current_size();
+    assert_eq!(resize_count(&server, panes[1]) - before_focused, 1);
+    assert_eq!(
+        server.app.state.workspaces[0].test_runtimes[&panes[1]].current_size(),
+        latest
+    );
+    // The focus path is a non-burst geometry apply: it flushes the remaining tabs too.
+    assert_eq!(resize_count(&server, panes[2]) - before_other, 1);
+    assert!(server.pending_hidden_resize.is_none());
+    shutdown_test_runtimes(&mut server);
+}
+
+#[tokio::test]
+async fn hidden_tab_layout_change_applies_without_waiting_for_settle() {
+    let (mut server, panes, _) = hidden_resize_burst_server();
+    let (control, _) = connect_test_shell(&mut server, 92, 100, 30);
+    let _ = control.recv().expect("snapshot");
+    send_shell_resize(&mut server, 92, 110, 32);
+    assert!(server.pending_hidden_resize.is_some());
+    let before = resize_count(&server, panes[1]);
+
+    // Non-resize geometry reapply (e.g. a layout change) must not be deferred.
+    assert!(server.reapply_controlled_shell_tab_geometry(false));
+
+    assert_eq!(resize_count(&server, panes[1]) - before, 1);
+    assert!(server.pending_hidden_resize.is_none());
+    shutdown_test_runtimes(&mut server);
+}
+
+#[tokio::test]
+async fn refocusing_controlled_tab_mid_burst_resizes_it_immediately() {
+    let (mut server, panes, tab_ids) = hidden_resize_burst_server();
+    let (control, _) = connect_test_shell(&mut server, 93, 100, 30);
+    let _ = control.recv().expect("snapshot");
+    assert!(server.focus_shell_client_on_tab(93, &tab_ids[1]));
+    assert!(server.claim_shell_tab_geometry(93, false));
+    assert!(server.focus_shell_client_on_tab(93, &tab_ids[0]));
+    let _ = server.claim_shell_tab_geometry(93, false);
+    for step in 0..5u16 {
+        send_shell_resize(&mut server, 93, 90 + step, 28 + step);
+    }
+    let latest = server.app.state.workspaces[0].test_runtimes[&panes[0]].current_size();
+    assert_ne!(
+        server.app.state.workspaces[0].test_runtimes[&panes[1]].current_size(),
+        latest
+    );
+
+    // Tab 1 is already controlled by this client, so the claim must still apply geometry.
+    assert!(server.focus_shell_client_on_tab(93, &tab_ids[1]));
+    assert!(!server.claim_shell_tab_geometry(93, false));
+
+    assert_eq!(
+        server.app.state.workspaces[0].test_runtimes[&panes[1]].current_size(),
+        latest
+    );
+    shutdown_test_runtimes(&mut server);
 }
