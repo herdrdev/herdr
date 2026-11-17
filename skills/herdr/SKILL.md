@@ -128,7 +128,7 @@ An available shell pane must be at its interactive prompt, with the shell itself
 herdr agent start reviewer --kind codex --pane <returned-pane-id>
 ```
 
-Use the kind requested by the user. Run `herdr agent` to inspect the installed kind list and options. Pass native agent arguments only after `--`:
+Use the kind requested by the user. When the request names a harness instead ("a pi session", "a claude session"), use the kind with that harness's name, so `--kind pi` starts the Pi harness and `--kind claude` starts Claude Code. Run `herdr agent` to inspect the installed kind list and options. Pass native agent arguments only after `--`:
 
 ```bash
 herdr agent start reviewer --kind codex --pane <returned-pane-id> -- <agent-args...>
