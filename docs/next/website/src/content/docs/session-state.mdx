@@ -124,6 +124,8 @@ A successful handoff preserves long-lived server-owned session state: pane PTYs 
 
 Updated Unix servers can send more than 64 panes in one handoff by transferring them in batches. The sending server must already contain this support: an older running server still enforces its 64-pane limit on the first upgrade. That limit may require a normal server restart, which ends pane processes. Batching does not change update installation order or remove other handoff compatibility requirements.
 
+Servers launched directly by a systemd service refuse live handoff before transferring panes. Use `herdr update` without `--handoff`, then restart the service when ready. Restarting ends its pane processes; handoff does not yet preserve systemd supervision.
+
 Live handoff is experimental and opt-in:
 
 ```bash

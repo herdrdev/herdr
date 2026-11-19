@@ -1955,6 +1955,59 @@ fn live_handoff_preserves_http_servers_across_multiple_sessions() {
     cleanup_test_base(&base);
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn systemd_service_refuses_live_handoff_before_transfer() {
+    let _lock = test_lock();
+    let base = unique_test_dir();
+    let runtime_dir = base.join("runtime");
+    let api_socket = runtime_dir.join("herdr.sock");
+    let mut spawned = spawn_server_with_env(
+        &base.join("config"),
+        &runtime_dir,
+        &api_socket,
+        &[("INVOCATION_ID", "0123456789abcdef0123456789abcdef")],
+    );
+    wait_for_socket(&api_socket, Duration::from_secs(10));
+    register_runtime_dir(&runtime_dir);
+    let created = request(
+        &api_socket,
+        serde_json::json!({"id":"create", "method":"workspace.create", "params":{}}),
+    );
+    let pane_id = created["result"]["root_pane"]["pane_id"].as_str().unwrap();
+
+    for params in [
+        serde_json::json!({}),
+        serde_json::json!({
+            "import_exe": "/nonexistent/herdr-4972",
+            "expected_version": "99.0.0",
+            "expected_protocol": 999999
+        }),
+    ] {
+        let refused = request(
+            &api_socket,
+            serde_json::json!({"id":"handoff", "method":"server.live_handoff", "params":params}),
+        );
+        let error = refused["error"]["message"].as_str().unwrap_or("");
+        assert!(error.contains("systemd"), "{refused}");
+        assert!(error.contains("restart the service"), "{refused}");
+        assert!(spawned.child.try_wait().unwrap().is_none());
+        assert_ok(request(
+            &api_socket,
+            serde_json::json!({"id":"input", "method":"pane.send_input", "params":{
+                "pane_id":pane_id, "text":"echo still-alive-4972", "keys":["Enter"]
+            }}),
+        ));
+        wait_for_output(&api_socket, pane_id, "still-alive-4972");
+    }
+    let _ = request(
+        &api_socket,
+        serde_json::json!({"id":"stop", "method":"server.stop", "params":{}}),
+    );
+    drop(spawned);
+    cleanup_test_base(&base);
+}
+
 #[test]
 fn live_handoff_bad_expected_protocol_rolls_back_old_server() {
     let _lock = test_lock();
