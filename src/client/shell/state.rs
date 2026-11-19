@@ -64,6 +64,7 @@ pub(super) struct ClientShellLayout {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum ClientMobileTarget {
     Machine(ClientEndpointId),
+    StartMachine(ClientEndpointId),
     NewWorkspace,
     Workspace {
         endpoint_id: ClientEndpointId,

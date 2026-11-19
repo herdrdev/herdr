@@ -61,6 +61,7 @@ struct ReconnectState {
     generation: Option<u64>,
     ready_since: Option<Instant>,
     retry_after_resume: bool,
+    start_epoch: Option<u64>,
 }
 
 impl ReconnectState {
@@ -75,6 +76,7 @@ impl ReconnectState {
             generation: None,
             ready_since: None,
             retry_after_resume: false,
+            start_epoch: None,
         }
     }
 }
@@ -210,6 +212,7 @@ impl EndpointSupervisors {
             self.next_generation = self.next_generation.saturating_add(1);
             let endpoint_id = endpoint_id.clone();
             let target = state.target.clone();
+            let start_epoch = state.start_epoch.take();
             let event_tx = event_tx.clone();
             let shutdown = self.shutdown.clone();
             tokio::spawn(async move {
@@ -221,6 +224,7 @@ impl EndpointSupervisors {
                 let result = tokio::task::spawn_blocking(move || {
                     connect_once(
                         &target,
+                        start_epoch,
                         options,
                         endpoint_id,
                         generation,
@@ -234,7 +238,16 @@ impl EndpointSupervisors {
                     Ok(Err(error)) => EndpointSupervisorEvent::Status {
                         endpoint_id: task_endpoint_id,
                         generation,
-                        status: if failure_needs_attention(&error) {
+                        status: if let Some(inactive) = error
+                            .get_ref()
+                            .and_then(|error| error.downcast_ref::<crate::remote::HostStatus>())
+                        {
+                            if inactive.state == crate::remote::HostState::Stopped {
+                                ClientEndpointStatus::Stopped(inactive.epoch)
+                            } else {
+                                ClientEndpointStatus::Offline(inactive.epoch)
+                            }
+                        } else if failure_needs_attention(&error) {
                             ClientEndpointStatus::Attention
                         } else {
                             ClientEndpointStatus::Reconnecting
@@ -272,6 +285,7 @@ impl EndpointSupervisors {
         let retry_after_resume = std::mem::take(&mut state.retry_after_resume);
         match status {
             ClientEndpointStatus::Online => {
+                state.start_epoch = None;
                 if endpoint_id.is_local() {
                     state.attempts = 0;
                 }
@@ -286,6 +300,10 @@ impl EndpointSupervisors {
             ClientEndpointStatus::Disabled => {
                 state.ready_since = None;
                 state.next_attempt = None;
+            }
+            ClientEndpointStatus::Stopped(_) | ClientEndpointStatus::Offline(_) => {
+                state.ready_since = None;
+                state.next_attempt = Some(now + Duration::from_secs(2));
             }
             ClientEndpointStatus::Connecting | ClientEndpointStatus::Reconnecting => {
                 // A brief maintenance wake can complete a handshake without restoring the link.
@@ -311,6 +329,9 @@ impl EndpointSupervisors {
                     },
                 );
             }
+        }
+        if state.start_epoch.is_some() {
+            state.next_attempt = Some(now);
         }
         true
     }
@@ -417,6 +438,23 @@ impl EndpointSupervisors {
         true
     }
 
+    pub(crate) fn start_now(
+        &mut self,
+        endpoint_id: &ClientEndpointId,
+        epoch: u64,
+        now: Instant,
+    ) -> bool {
+        let Some(state) = self.endpoints.get_mut(endpoint_id) else {
+            return false;
+        };
+        if !state.in_flight && state.next_attempt.is_none() {
+            return false;
+        }
+        state.start_epoch = Some(epoch);
+        state.next_attempt = Some(now);
+        true
+    }
+
     pub(crate) fn disconnected(
         &mut self,
         endpoint_id: &ClientEndpointId,
@@ -440,6 +478,7 @@ impl Drop for EndpointSupervisors {
 
 fn connect_once(
     target: &ConnectTarget,
+    start_epoch: Option<u64>,
     options: EndpointConnectOptions,
     endpoint_id: ClientEndpointId,
     generation: u64,
@@ -474,6 +513,15 @@ fn connect_once(
             (stream, Box::new(()))
         }
         ConnectTarget::Ssh(profile) => {
+            if let Some(epoch) = start_epoch {
+                crate::remote::start_saved_ssh(
+                    profile.id.as_str(),
+                    &profile.target,
+                    &profile.session,
+                    epoch,
+                    Arc::clone(&cancelled),
+                )?;
+            }
             let connected = crate::remote::connect_saved_ssh(
                 profile.id.as_str(),
                 &profile.target,

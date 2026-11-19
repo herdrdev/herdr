@@ -724,6 +724,8 @@ pub(super) fn endpoint_status_presentation(
         ClientEndpointStatus::Connecting => ("◐", "connecting", palette.yellow),
         ClientEndpointStatus::Online => ("●", "online", palette.green),
         ClientEndpointStatus::Reconnecting => ("◐", "reconnecting", palette.yellow),
+        ClientEndpointStatus::Stopped(_) => ("■", "stopped", palette.overlay0),
+        ClientEndpointStatus::Offline(_) => ("■", "offline", palette.overlay0),
         ClientEndpointStatus::Attention => ("!", "attention", palette.red),
         ClientEndpointStatus::Disabled => ("·", "disabled", palette.overlay0),
     }

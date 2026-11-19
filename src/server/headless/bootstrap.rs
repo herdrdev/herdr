@@ -2,6 +2,7 @@ use super::*;
 
 /// Run the headless server. This is the entry point called from main.rs.
 pub fn run_server() -> io::Result<()> {
+    let expected_epoch = crate::server::lifecycle::take_expected_epoch()?;
     let launcher_warning = crate::platform::leave_launcher_job();
     crate::platform::ignore_server_hangup();
     let args: Vec<String> = std::env::args().collect();
@@ -31,6 +32,11 @@ pub fn run_server() -> io::Result<()> {
         return run_handoff_import_server(&socket_path, token);
     }
 
+    let mut lifecycle = crate::server::lifecycle::lock_for_start(&api::socket_path())?;
+    if let Some(epoch) = expected_epoch {
+        lifecycle.require_epoch(epoch)?;
+    }
+
     let loaded_config = config::Config::load();
     #[cfg(windows)]
     if loaded_config.config.server.allow_unelevated_clients {
@@ -38,7 +44,7 @@ pub fn run_server() -> io::Result<()> {
     }
     let (api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
     let event_hub = api::EventHub::default();
-    let server_stop = crate::server::shutdown::ServerStop::default();
+    let server_stop = crate::server::shutdown::ServerStop::for_epoch(lifecycle.next_epoch()?);
 
     // Start the JSON API socket server.
     let _api_server = match api::start_server_with_stop_control(
@@ -87,6 +93,9 @@ pub fn run_server() -> io::Result<()> {
             }
             Err(err) => return Err(err),
         };
+
+        lifecycle.commit(false)?;
+        drop(lifecycle);
 
         info!(
             api_socket = %api::socket_path().display(),
@@ -142,7 +151,10 @@ fn run_handoff_import_server(socket_path: &Path, token: &str) -> io::Result<()> 
 
     let (api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
     let event_hub = api::EventHub::default();
-    let server_stop = crate::server::shutdown::ServerStop::default();
+    // The old owner holds the lifecycle lock throughout the authenticated transfer.
+    let server_stop = crate::server::shutdown::ServerStop::for_epoch(
+        crate::server::lifecycle::read(&api::socket_path())?.epoch,
+    );
 
     let mut imports = HashMap::new();
     for (pane, fd) in received.manifest.panes.into_iter().zip(received.fds) {
@@ -170,6 +182,14 @@ fn run_handoff_import_server(socket_path: &Path, token: &str) -> io::Result<()> 
             &received.manifest.snapshot,
             &mut imports,
         )?;
+        if let Some(path) = std::env::var_os("HERDR_TEST_HANDOFF_IMPORT_PAUSE") {
+            let path = PathBuf::from(path);
+            std::fs::write(&path, b"ready")?;
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while path.exists() && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
         crate::server::handoff::report_restored(&mut received.stream)?;
         if std::env::var("HERDR_TEST_HANDOFF_IMPORT_FAIL").as_deref() == Ok("after_restored") {
             return Err(io::Error::other(

@@ -310,16 +310,21 @@ pub fn delete_session(name: &str) -> Result<SessionInfo, String> {
         return Err("deleting the default session is not supported".to_string());
     }
     validate_name(name)?;
-    let Some(dir) = exact_session_dir_for_delete(name)? else {
-        return Ok(session_info(Some(name)));
-    };
+    let dir = exact_session_dir_for_delete(name)?.unwrap_or_else(|| data_dir_for(Some(name)));
     let socket_path = dir.join("herdr.sock");
-    if is_running_at(&socket_path) {
+    let mut lifecycle =
+        crate::server::lifecycle::lock(&socket_path).map_err(|error| error.to_string())?;
+    if crate::server::autodetect::is_server_listening_at(&socket_path)
+        .map_err(|error| error.to_string())?
+        || crate::server::autodetect::is_server_listening_at(&dir.join("herdr-client.sock"))
+            .map_err(|error| error.to_string())?
+    {
         return Err(format!(
             "session {name} is running; stop it before deleting"
         ));
     }
     let info = session_info(Some(name));
+    lifecycle.commit(true).map_err(|error| error.to_string())?;
     match std::fs::remove_dir_all(&dir) {
         Ok(()) => Ok(info),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(info),
@@ -1133,6 +1138,33 @@ mod tests {
     #[test]
     fn delete_default_session_is_rejected() {
         assert!(delete_session(DEFAULT_SESSION_NAME).is_err());
+    }
+
+    #[test]
+    fn delete_and_recreate_revoke_named_start_authority() {
+        let _guard = env_lock().lock().unwrap();
+        #[cfg(unix)]
+        let root = PathBuf::from("/tmp");
+        #[cfg(windows)]
+        let root = std::env::temp_dir();
+        let root = root.join(format!("herdr-delete-{}", std::process::id()));
+        std::env::set_var("XDG_CONFIG_HOME", &root);
+        let directory = data_dir_for(Some("work"));
+        let path = directory.join("herdr.sock");
+        for existing in [false, true] {
+            if existing {
+                std::fs::create_dir_all(&directory).unwrap();
+            }
+            let before = crate::server::lifecycle::read(&path).unwrap().epoch;
+            delete_session("work").unwrap();
+            std::fs::create_dir_all(&directory).unwrap();
+            assert!(crate::server::lifecycle::lock_for_start(&path)
+                .unwrap()
+                .require_epoch(before)
+                .is_err());
+        }
+        std::fs::remove_dir_all(&root).unwrap();
+        std::env::remove_var("XDG_CONFIG_HOME");
     }
 
     #[test]

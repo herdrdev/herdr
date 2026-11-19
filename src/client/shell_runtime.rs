@@ -498,7 +498,10 @@ pub(super) fn present_endpoint_connection_failure(
     let unavailable = state.shell.as_mut().and_then(|shell| {
         shell.set_endpoint_status(endpoint_id, status);
         shell.set_machine_diagnostic(endpoint_id, message.clone());
-        let requested = shell.report_machine_retry(endpoint_id);
+        let requested = !matches!(
+            status,
+            endpoint::ClientEndpointStatus::Stopped(_) | endpoint::ClientEndpointStatus::Offline(_)
+        ) && shell.report_machine_retry(endpoint_id);
         (active_failure && status == endpoint::ClientEndpointStatus::Attention && !requested)
             .then(|| format!("{}: {message}", shell.endpoint_label(endpoint_id)))
     });

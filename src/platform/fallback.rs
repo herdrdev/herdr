@@ -3,6 +3,13 @@ use std::process::Command;
 
 use super::{ClipboardImage, ForegroundJob, Signal};
 
+pub(crate) fn server_lifecycle_identity(
+    path: &std::path::Path,
+) -> std::io::Result<(Vec<u8>, std::path::PathBuf)> {
+    let path = std::path::absolute(path)?;
+    Ok((path.as_os_str().as_encoded_bytes().to_vec(), path))
+}
+
 #[cfg(unix)]
 pub(crate) use super::unix_common::set_default_plugin_pane_pwd;
 

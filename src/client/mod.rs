@@ -777,6 +777,9 @@ async fn run_client_loop(
             }
         }
         if let Some(shell) = state.shell.as_mut() {
+            for (endpoint_id, epoch) in shell.take_machine_starts() {
+                supervisors.start_now(&endpoint_id, epoch, now);
+            }
             for endpoint_id in shell.take_machine_retries() {
                 supervisors.retry_now(&endpoint_id, now);
             }
