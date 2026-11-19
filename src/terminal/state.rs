@@ -967,12 +967,19 @@ impl TerminalState {
                 .as_ref()
                 .is_none_or(|incoming| incoming == anchored)
         });
-        let opencode_cross_talk = (source, agent_label) == ("herdr:opencode", "opencode")
-            && process_present
+        // OpenCode and Mastra Code announce every session switch with a
+        // session-start report before that session's events. A lifecycle report
+        // for another session while the agent process is live is cross-talk
+        // (for Mastra Code, a nested helper session that inherited the pane),
+        // so it must neither take over nor latch the anchored session.
+        let session_cross_talk = matches!(
+            (source, agent_label),
+            ("herdr:opencode", "opencode") | ("herdr:mastracode", "mastracode")
+        ) && process_present
             && anchored_session_ref
                 .zip(session_ref.as_ref())
                 .is_some_and(|(anchored, incoming)| anchored != incoming);
-        if opencode_cross_talk {
+        if session_cross_talk {
             return FullLifecycleHookReportRoute::Ignore;
         }
         if let Some(suppressed) = self.suppressed_full_lifecycle_hook_reports.get(source) {
@@ -3721,6 +3728,139 @@ mod tests {
                 .as_ref()
                 .map(|session| session.session_ref.value.as_str()),
             Some("mastracode-new")
+        );
+    }
+
+    #[test]
+    fn mastracode_helper_report_right_after_session_start_does_not_latch() {
+        let mut terminal = test_terminal();
+        terminal.set_detected_state(Some(Agent::Mastracode), AgentState::Idle);
+        terminal
+            .set_agent_session_ref_for_session_start(
+                "herdr:mastracode".into(),
+                "mastracode".into(),
+                crate::agent_resume::AgentSessionRef::id("thread-a"),
+                Some(10),
+                Some("startup".into()),
+            )
+            .expect("root session start");
+
+        let helper = terminal.set_hook_authority_with_session_ref(
+            "herdr:mastracode".into(),
+            "mastracode".into(),
+            AgentState::Working,
+            None,
+            crate::agent_resume::AgentSessionRef::id("thread-a--alexandria-question"),
+            Some(11),
+        );
+        assert!(helper.is_none());
+
+        terminal
+            .set_hook_authority_with_session_ref(
+                "herdr:mastracode".into(),
+                "mastracode".into(),
+                AgentState::Working,
+                None,
+                crate::agent_resume::AgentSessionRef::id("thread-a"),
+                Some(12),
+            )
+            .expect("root session report after the helper report should apply");
+        assert_eq!(terminal.state, AgentState::Working);
+    }
+
+    #[test]
+    fn mastracode_helper_session_report_does_not_latch_anchored_session() {
+        let mut terminal = test_terminal();
+        terminal.set_detected_state(Some(Agent::Mastracode), AgentState::Idle);
+        terminal
+            .set_agent_session_ref_for_session_start(
+                "herdr:mastracode".into(),
+                "mastracode".into(),
+                crate::agent_resume::AgentSessionRef::id("thread-a"),
+                Some(10),
+                Some("startup".into()),
+            )
+            .expect("root session start");
+        let report = |terminal: &mut TerminalState, session: &str, state, seq| {
+            terminal.set_hook_authority_with_session_ref(
+                "herdr:mastracode".into(),
+                "mastracode".into(),
+                state,
+                None,
+                crate::agent_resume::AgentSessionRef::id(session),
+                Some(seq),
+            )
+        };
+        report(&mut terminal, "thread-a", AgentState::Working, 11);
+        report(&mut terminal, "thread-a", AgentState::Idle, 12);
+        assert_eq!(terminal.state, AgentState::Idle);
+
+        let helper = report(
+            &mut terminal,
+            "thread-a--alexandria-question",
+            AgentState::Working,
+            13,
+        );
+
+        assert!(helper.is_none());
+        assert_eq!(terminal.state, AgentState::Idle);
+        assert!(terminal.suppressed_full_lifecycle_hook_reports.is_empty());
+        report(&mut terminal, "thread-a", AgentState::Working, 14);
+        assert_eq!(terminal.state, AgentState::Working);
+        report(&mut terminal, "thread-a", AgentState::Blocked, 15);
+        assert_eq!(terminal.state, AgentState::Blocked);
+        report(&mut terminal, "thread-a", AgentState::Idle, 16);
+        assert_eq!(terminal.state, AgentState::Idle);
+        assert_eq!(
+            terminal
+                .hook_authority
+                .as_ref()
+                .and_then(|authority| authority.session_ref.as_ref())
+                .map(|session_ref| session_ref.value.as_str()),
+            Some("thread-a")
+        );
+    }
+
+    #[test]
+    fn mastracode_session_start_moves_live_authority_to_new_session() {
+        let mut terminal = test_terminal();
+        terminal.set_detected_state(Some(Agent::Mastracode), AgentState::Idle);
+        let session_start = |terminal: &mut TerminalState, session: &str, seq| {
+            terminal
+                .set_agent_session_ref_for_session_start(
+                    "herdr:mastracode".into(),
+                    "mastracode".into(),
+                    crate::agent_resume::AgentSessionRef::id(session),
+                    Some(seq),
+                    Some("startup".into()),
+                )
+                .expect("session start");
+        };
+        let report = |terminal: &mut TerminalState, session: &str, state, seq| {
+            terminal.set_hook_authority_with_session_ref(
+                "herdr:mastracode".into(),
+                "mastracode".into(),
+                state,
+                None,
+                crate::agent_resume::AgentSessionRef::id(session),
+                Some(seq),
+            )
+        };
+        session_start(&mut terminal, "thread-a", 10);
+        report(&mut terminal, "thread-a", AgentState::Working, 11);
+        report(&mut terminal, "thread-a", AgentState::Idle, 12);
+
+        session_start(&mut terminal, "thread-b", 13);
+        report(&mut terminal, "thread-b", AgentState::Working, 14);
+
+        assert_eq!(terminal.state, AgentState::Working);
+        assert_eq!(
+            terminal
+                .hook_authority
+                .as_ref()
+                .and_then(|authority| authority.session_ref.as_ref())
+                .map(|session_ref| session_ref.value.as_str()),
+            Some("thread-b")
         );
     }
 
