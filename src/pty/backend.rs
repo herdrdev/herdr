@@ -13,6 +13,22 @@ pub(crate) struct SpawnedPty {
     pub child: Box<dyn Child + Send + Sync>,
 }
 
+#[cfg(target_os = "linux")]
+mod linux;
+#[cfg(target_os = "linux")]
+pub(crate) use linux::wait_for_child;
+
+#[cfg(not(target_os = "linux"))]
+pub(crate) use wait_for_child_blocking as wait_for_child;
+
+pub(crate) async fn wait_for_child_blocking(
+    mut child: Box<dyn portable_pty::Child + Send + Sync>,
+) -> std::io::Result<portable_pty::ExitStatus> {
+    tokio::task::spawn_blocking(move || child.wait())
+        .await
+        .map_err(std::io::Error::other)?
+}
+
 #[cfg(windows)]
 pub(crate) fn spawn_with_portable_pty(
     rows: u16,
