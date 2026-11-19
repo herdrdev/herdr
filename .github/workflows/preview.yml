@@ -154,7 +154,7 @@ jobs:
             os: macos-latest
             name: herdr-macos-aarch64
           - target: x86_64-pc-windows-msvc
-            os: windows-latest
+            os: windows-2022
             name: herdr-windows-x86_64.zip
     runs-on: ${{ matrix.os }}
     env:
