@@ -2738,14 +2738,13 @@ impl PaneRuntime {
             let child_pid = child_pid.clone();
             let child_wait_completed = child_wait_completed.clone();
             let events = events.clone();
-            let rt = tokio::runtime::Handle::current();
-            let mut child = spawned.child;
+            let child = spawned.child;
             if let Some(pid) = child.process_id() {
                 child_pid.store(pid, Ordering::Release);
                 crate::logging::pane_spawned(pane_id.raw(), pid);
             }
-            tokio::task::spawn_blocking(move || {
-                let exit_reason = match child.wait() {
+            tokio::spawn(async move {
+                let exit_reason = match crate::pty::backend::wait_for_child(child).await {
                     Ok(status) => {
                         let exit_reason = crate::platform::classify_child_exit(&status);
                         let status_text = format!("{status:?}");
@@ -2758,11 +2757,13 @@ impl PaneRuntime {
                     }
                 };
                 child_wait_completed.store(true, Ordering::Release);
-                // Use blocking send — PaneDied is critical, must not be dropped
-                if let Err(e) = rt.block_on(events.send(AppEvent::PaneDied {
-                    pane_id,
-                    exit_reason,
-                })) {
+                if let Err(e) = events
+                    .send(AppEvent::PaneDied {
+                        pane_id,
+                        exit_reason,
+                    })
+                    .await
+                {
                     error!(pane = pane_id.raw(), err = %e, "failed to send PaneDied event");
                 }
             });
