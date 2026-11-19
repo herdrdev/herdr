@@ -10,7 +10,6 @@ use super::scrollbar::{render_pane_scrollbar, should_show_scrollbar};
 #[cfg(test)]
 use super::text::display_width;
 use super::text::truncate_end;
-use super::widgets::panel_contrast_fg;
 use crate::app::state::Palette;
 use crate::app::AppState;
 use crate::layout::{PaneId, PaneInfo};
@@ -887,7 +886,7 @@ fn selection_fg_for_bg(bg: Color, p: &Palette) -> Color {
                 Color::Black
             }
         })
-        .unwrap_or_else(|| panel_contrast_fg(p))
+        .unwrap_or_else(|| p.accent_foreground())
 }
 
 fn mix_rgb(base: Rgb, target: Rgb, amount: f32) -> Rgb {
