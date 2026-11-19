@@ -30,6 +30,7 @@ pub(crate) fn accepts_endpoint_message(
                 | ServerMessage::ServerShutdown { .. }
                 | ServerMessage::ClientShellSnapshot(_)
                 | ServerMessage::Welcome { .. }
+                | ServerMessage::ReloadSoundConfig
         )
         || (activation_message
             && matches!(
@@ -50,6 +51,12 @@ mod tests {
 
     #[test]
     fn inactive_endpoints_deliver_metadata_but_not_presentation_effects() {
+        assert!(accepts_endpoint_message(
+            false,
+            false,
+            false,
+            &ServerMessage::ReloadSoundConfig
+        ));
         assert!(accepts_endpoint_message(
             false,
             false,

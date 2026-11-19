@@ -320,7 +320,9 @@ description = "apply layout"
 `link_handler_id`;shell 插件也可以读取 `HERDR_PLUGIN_CLICKED_URL` 和
 `HERDR_PLUGIN_LINK_HANDLER_ID`。每个插件内的处理器按清单顺序检查。
 
-只有启用 `ui.mouse_capture` 时，点击链接才会调用插件。匹配的处理器先执行，启动失败会显示错误并停止。没有匹配处理器时，只有 HTTP(S) 链接会在外部打开。关闭捕获后，外层终端使用自己的快捷键和警告处理显式超链接。Windows Terminal URL 检测的注意事项见[鼠标操作](/zh-cn/docs/quick-start/#使用鼠标)。
+启用 `ui.mouse_capture` 时，与已启用且可用的处理器匹配的窗格链接由 Herdr 接管。终端转发 Ctrl+点击时调用现有插件动作；启动失败会显示错误并停止。其他显式超链接和纯文本 HTTP(S) URL 仍可通过外层终端原有的快捷键和本地应用处理器打开。Herdr 自身的浏览器回退仍仅支持 HTTP(S)。关闭捕获后，所有显式链接都由终端处理，同时禁用 Herdr 的鼠标界面。macOS 点击操作和 Windows Terminal URL 检测的限制见[鼠标操作](/zh-cn/docs/quick-start/#使用鼠标)。
+
+选择性处理需要更新后的服务器。旧服务器在更新并重启前，仍会在启用鼠标捕获时禁用原生超链接。
 
 ## 存储
 

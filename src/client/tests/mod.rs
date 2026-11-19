@@ -760,7 +760,22 @@ fn sound_from_notify_message_rejects_unknown_payloads() {
 }
 
 #[test]
-fn reload_local_client_config_refreshes_local_client_presentation_state() {
+fn config_reload_updates_mouse_capture_on_every_endpoint() {
+    struct Capture {
+        sent: Arc<Mutex<Vec<ClientMessage>>>,
+        fail: bool,
+    }
+
+    impl endpoint::EndpointTransport for Capture {
+        fn send(&mut self, message: &ClientMessage) -> io::Result<()> {
+            if self.fail {
+                return Err(io::Error::new(io::ErrorKind::BrokenPipe, "test failure"));
+            }
+            self.sent.lock().unwrap().push(message.clone());
+            Ok(())
+        }
+    }
+
     let _guard = crate::config::test_config_env_lock().lock().unwrap();
     let path = std::env::temp_dir().join(format!(
         "herdr-client-config-reload-{}-{}.toml",
@@ -770,30 +785,91 @@ fn reload_local_client_config_refreshes_local_client_presentation_state() {
             .unwrap()
             .as_nanos()
     ));
-    std::fs::write(
-        &path,
-        "[ui]\nredraw_on_focus_gained = false\nhost_cursor = \"drawn\"\nmouse_capture = false\n",
-    )
-    .unwrap();
     let path_string = path.to_string_lossy().to_string();
     let _env = EnvVarGuard::set(crate::config::CONFIG_PATH_ENV_VAR, &path_string);
-    let mut sound_config = crate::config::SoundConfig::default();
-    let mut redraw_on_focus_gained = true;
-    let mut draw_host_cursor = false;
-    let mut remote_image_paste_key = None;
-    let mut mouse_capture = true;
-
-    reload_local_client_config(
-        &mut sound_config,
-        &mut redraw_on_focus_gained,
-        &mut draw_host_cursor,
-        &mut remote_image_paste_key,
-        &mut mouse_capture,
+    let local_sent = Arc::new(Mutex::new(Vec::new()));
+    let ssh_sent = Arc::new(Mutex::new(Vec::new()));
+    let mut endpoints = endpoint::EndpointRegistry::new(
+        Capture {
+            sent: local_sent.clone(),
+            fail: false,
+        },
+        1,
+        endpoint::EndpointNegotiation::default(),
     );
+    let ssh_id = endpoint::ClientEndpointId::Ssh(
+        endpoint::ProfileId::parse("0123456789abcdef0123456789abcdef").unwrap(),
+    );
+    endpoints.insert(
+        ssh_id.clone(),
+        Capture {
+            sent: ssh_sent.clone(),
+            fail: false,
+        },
+        2,
+        endpoint::EndpointNegotiation::default(),
+        false,
+    );
+    let broken_id = endpoint::ClientEndpointId::Ssh(
+        endpoint::ProfileId::parse("fedcba9876543210fedcba9876543210").unwrap(),
+    );
+    endpoints.insert(
+        broken_id.clone(),
+        Capture {
+            sent: Arc::new(Mutex::new(Vec::new())),
+            fail: true,
+        },
+        3,
+        endpoint::EndpointNegotiation::default(),
+        false,
+    );
+    let mut state = ClientState::test_new();
+    state.redraw_on_focus_gained = true;
+    state.freeze_presentation();
+    let mut pending_activation = None;
+    let host_mouse_capture_active = AtomicBool::new(false);
+    let host_sgr_pixels_active = AtomicBool::new(false);
+    let mut prefix_input_source = crate::platform::RealPrefixInputSource::default();
 
-    assert!(!redraw_on_focus_gained);
-    assert!(draw_host_cursor);
-    assert!(!mouse_capture);
+    for enabled in [true, false, true] {
+        std::fs::write(
+            &path,
+            format!(
+                "[ui]\nredraw_on_focus_gained = false\nhost_cursor = \"drawn\"\nmouse_capture = {enabled}\n"
+            ),
+        )
+        .unwrap();
+        super::config_reload::apply_reload(
+            &mut state,
+            &mut endpoints,
+            &mut pending_activation,
+            &host_mouse_capture_active,
+            &host_sgr_pixels_active,
+            &mut prefix_input_source,
+        )
+        .unwrap();
+        assert_eq!(state.shell_mouse_capture_preference, enabled);
+        for sent in [&local_sent, &ssh_sent] {
+            assert!(matches!(
+                sent.lock().unwrap().last(),
+                Some(ClientMessage::ClientShellMouseCapture { enabled: actual }) if *actual == enabled
+            ));
+        }
+        endpoints.set_surface_active(&ssh_id, true);
+        assert!(endpoints.set_active(&ssh_id));
+    }
+
+    assert!(!state.redraw_on_focus_gained);
+    assert!(state.draw_host_cursor);
+    assert!(endpoints
+        .connection(&endpoint::ClientEndpointId::Local)
+        .is_some());
+    assert!(endpoints.connection(&ssh_id).is_some());
+    assert!(endpoints.connection(&broken_id).is_none());
+    let failures = endpoints.take_failures();
+    assert_eq!(failures.len(), 1);
+    assert_eq!(failures[0].endpoint_id, broken_id);
+    assert_eq!(failures[0].kind, io::ErrorKind::BrokenPipe);
     let _ = std::fs::remove_file(path);
 }
 

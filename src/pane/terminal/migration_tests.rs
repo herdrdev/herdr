@@ -513,3 +513,90 @@ fn capture_bounded_migration_observations() {
     }
     assert_eq!(observations.last().unwrap(), &terminal.observe());
 }
+
+#[test]
+fn native_text_links_follow_terminal_wraps_and_keep_explicit_targets() {
+    let url = "https://example.com/路径?q=a(b)";
+    let mut terminal = Harness::new(21, 5);
+    terminal.write(format!("[docs]({url}), next").as_bytes());
+    let links = terminal.pane.visible_hyperlinks(Rect::new(2, 3, 21, 5));
+    assert!(links.iter().any(|((_, y), _, _)| *y > 3));
+    assert!(links.iter().all(|(_, _, uri)| uri == url));
+    assert!(!links.iter().any(|(_, symbol, _)| symbol == ","));
+    terminal.resize(30, 5);
+    assert!(terminal
+        .pane
+        .visible_hyperlinks(Rect::new(0, 0, 30, 5))
+        .iter()
+        .all(|(_, _, uri)| uri == url));
+
+    let mut terminal = Harness::new(20, 4);
+    terminal.write(b"https://example.com/\r\nnot-the-url\r\n\x1b]8;;obsidian://note\x1b\\https://example.org\x1b]8;;\x1b\\");
+    let links = terminal.pane.visible_hyperlinks(Rect::new(0, 0, 20, 4));
+    assert!(links
+        .iter()
+        .any(|(_, _, uri)| uri == "https://example.com/"));
+    assert!(!links.iter().any(|(_, _, uri)| uri.contains("not-the-url")));
+    assert!(links.iter().any(|(_, _, uri)| uri == "obsidian://note"));
+    assert!(!links.iter().any(|(_, _, uri)| uri == "https://example.org"));
+
+    // A scrolled viewport can start inside a label before the URL begins.
+    let mut terminal = Harness::new(20, 2);
+    terminal.write(format!("[{}](https://example.test/path)", "label".repeat(5)).as_bytes());
+    assert!(terminal.pane.visible_text().starts_with("llabel]("));
+    let links = terminal.pane.visible_hyperlinks(Rect::new(0, 0, 20, 2));
+    assert!(!links.is_empty());
+    assert!(links
+        .iter()
+        .all(|(_, _, uri)| uri == "https://example.test/path"));
+}
+
+#[test]
+fn native_text_links_recheck_offscreen_tokens_and_clipped_clients() {
+    let mut terminal = Harness::new(20, 2);
+    let url = "https://example.com/abcdefghijklmnopqrstuv";
+    terminal.write(url.as_bytes());
+    // The start is above the viewport. A smaller peer must not clear the
+    // dependency used by a larger peer's retained frame.
+    let links = terminal.pane.visible_hyperlinks(Rect::new(0, 0, 20, 2));
+    assert!(!links.is_empty());
+    assert!(links.iter().all(|(_, _, uri)| uri == url));
+    terminal.pane.visible_hyperlinks(Rect::new(0, 0, 1, 1));
+    terminal.write(b"Z");
+    assert!(matches!(
+        terminal.pane.collect_dirty_patch(20, 2),
+        TerminalDirtyPatchOutcome::Fallback
+    ));
+    assert!(terminal
+        .pane
+        .visible_hyperlinks(Rect::new(0, 0, 20, 2))
+        .iter()
+        .all(|(_, _, uri)| uri == &format!("{url}Z")));
+
+    // Even the URL scheme can be split by the bottom viewport boundary.
+    let mut clipped_scheme = Harness::new(20, 2);
+    clipped_scheme.write(format!("{}{url}", " ".repeat(38)).as_bytes());
+    clipped_scheme.pane.scroll_up(100);
+    let links = clipped_scheme
+        .pane
+        .visible_hyperlinks(Rect::new(0, 0, 20, 2));
+    assert_eq!(links.len(), 2);
+    assert!(links.iter().all(|(_, _, uri)| uri == url));
+
+    // Editing the tail below a scrolled-up viewport changes the URI attached
+    // to visible cells even though their displayed characters stay clean.
+    let mut terminal = Harness::new(20, 2);
+    terminal.write(url.as_bytes());
+    terminal.pane.scroll_up(100);
+    terminal.full_cells();
+    let links = terminal.pane.visible_hyperlinks(Rect::new(0, 0, 20, 2));
+    assert!(!links.is_empty());
+    terminal.write(b"Z");
+    assert!(matches!(
+        terminal.pane.collect_dirty_patch(20, 2),
+        TerminalDirtyPatchOutcome::Fallback
+    ));
+    let links = terminal.pane.visible_hyperlinks(Rect::new(0, 0, 20, 2));
+    assert!(!links.is_empty());
+    assert!(links.iter().all(|(_, _, uri)| uri == &format!("{url}Z")));
+}

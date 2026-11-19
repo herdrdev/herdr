@@ -277,6 +277,33 @@ pub(super) struct RenderedPaneSurface {
     pub(super) graphics_sources: crate::kitty_graphics::surface::SourceFiles,
 }
 
+pub(super) fn reserve_plugin_links(app: &app::App, frame: &mut FrameData) {
+    if app.plugin_link_patterns.is_empty() || frame.hyperlinks.is_empty() {
+        return;
+    }
+    let claimed = frame
+        .hyperlinks
+        .iter()
+        .map(|uri| {
+            app.plugin_link_patterns
+                .iter()
+                .any(|pattern| pattern.is_match(uri))
+        })
+        .collect::<Vec<_>>();
+    if !claimed.contains(&true) {
+        return;
+    }
+    // Keep destinations and indices intact; only their native click targets differ.
+    for cell in &mut frame.cells {
+        if cell
+            .hyperlink
+            .is_some_and(|index| claimed.get(index as usize) == Some(&true))
+        {
+            cell.hyperlink = None;
+        }
+    }
+}
+
 #[derive(Debug)]
 pub(super) enum SurfaceRenderDeferred {
     Synchronized,

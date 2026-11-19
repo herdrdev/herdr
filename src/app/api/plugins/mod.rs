@@ -25,15 +25,48 @@ pub(crate) use manifest::load_plugin_manifest;
 use runtime::{read_capped_plugin_output, MAX_PLUGIN_COMMANDS_IN_FLIGHT};
 
 impl App {
+    pub(crate) fn refresh_plugin_link_patterns(&mut self) -> bool {
+        // A foreground refresh supersedes older results even if its patterns match.
+        self.plugin_link_refresh_generation = self.plugin_link_refresh_generation.wrapping_add(1);
+        let patterns = plugin_link_pattern_strings(self.state.installed_plugins.values());
+        if self
+            .plugin_link_patterns
+            .iter()
+            .map(regex::Regex::as_str)
+            .eq(patterns.iter().map(String::as_str))
+        {
+            return false;
+        }
+        self.apply_plugin_link_patterns(
+            patterns
+                .into_iter()
+                .filter_map(|pattern| regex::Regex::new(&pattern).ok())
+                .collect(),
+        )
+    }
+
+    fn apply_plugin_link_patterns(&mut self, patterns: Vec<regex::Regex>) -> bool {
+        if self
+            .plugin_link_patterns
+            .iter()
+            .map(regex::Regex::as_str)
+            .eq(patterns.iter().map(regex::Regex::as_str))
+        {
+            return false;
+        }
+        self.plugin_link_patterns = patterns;
+        self.render_dirty.request_generic();
+        self.render_notify.notify_one();
+        true
+    }
+
     fn replace_installed_plugins(&mut self, entries: Vec<InstalledPluginInfo>) {
-        let entries =
-            crate::persist::plugin_registry::reload_manifests(entries, |path, enabled| {
-                load_plugin_manifest(path, enabled).map_err(|(_, message)| message)
-            });
+        let entries = reload_plugin_manifests(entries);
         self.state.installed_plugins = entries
             .into_iter()
             .map(|plugin| (plugin.plugin_id.clone(), plugin))
             .collect();
+        self.refresh_plugin_link_patterns();
     }
 
     fn refresh_installed_plugins(&mut self) -> std::io::Result<()> {
@@ -45,12 +78,60 @@ impl App {
         Ok(())
     }
 
+    pub(crate) fn start_plugin_link_refresh(&mut self) {
+        if !self.policy.persist_plugin_registry || self.plugin_link_refresh_in_flight {
+            return;
+        }
+        let generation = self.plugin_link_refresh_generation;
+        let event_tx = self.event_tx.clone();
+        let spawned = crate::thread_spawn::spawn_named("herdr-plugin-links", move || {
+            let mut leases = crate::plugin_installations::Leases::new();
+            let result = crate::plugin_installations::load(&mut leases)
+                .map(|entries| {
+                    let entries = reload_plugin_manifests(entries);
+                    plugin_link_pattern_strings(entries.iter())
+                        .into_iter()
+                        .filter_map(|pattern| regex::Regex::new(&pattern).ok())
+                        .collect()
+                })
+                .map_err(|error| error.to_string());
+            let _ = event_tx.blocking_send(crate::events::AppEvent::PluginLinkPatternsRefreshed {
+                generation,
+                result,
+            });
+        });
+        match spawned {
+            Ok(_) => self.plugin_link_refresh_in_flight = true,
+            Err(error) => tracing::warn!(%error, "failed to start plugin link refresh"),
+        }
+    }
+
+    pub(crate) fn finish_plugin_link_refresh(
+        &mut self,
+        generation: u64,
+        result: Result<Vec<regex::Regex>, String>,
+    ) -> bool {
+        self.plugin_link_refresh_in_flight = false;
+        if generation != self.plugin_link_refresh_generation {
+            return false;
+        }
+        match result {
+            Ok(patterns) => self.apply_plugin_link_patterns(patterns),
+            Err(error) => {
+                tracing::warn!(%error, "failed to refresh plugin link handlers");
+                false
+            }
+        }
+    }
+
     fn update_installed_plugins<T>(
         &mut self,
         mutation: impl FnOnce(&mut crate::app::state::InstalledPluginRegistry) -> T,
     ) -> std::io::Result<T> {
         if !self.policy.persist_plugin_registry {
-            return Ok(mutation(&mut self.state.installed_plugins));
+            let result = mutation(&mut self.state.installed_plugins);
+            self.refresh_plugin_link_patterns();
+            return Ok(result);
         }
         let (result, _) = crate::persist::plugin_registry::update(|entries| {
             let mut registry = entries
@@ -676,27 +757,7 @@ impl App {
         plugins.sort_by(|a, b| a.plugin_id.cmp(&b.plugin_id));
         for plugin in plugins {
             for handler in &plugin.link_handlers {
-                if ensure_platform_supported(
-                    &effective_platforms(&handler.platforms, &plugin.platforms).clone(),
-                    &handler.id,
-                )
-                .is_err()
-                {
-                    continue;
-                }
-                let Some(action) = plugin
-                    .actions
-                    .iter()
-                    .find(|action| action.id == handler.action)
-                else {
-                    continue;
-                };
-                if ensure_platform_supported(
-                    &effective_platforms(&action.platforms, &plugin.platforms).clone(),
-                    &action.id,
-                )
-                .is_err()
-                {
+                if !plugin_link_handler_available(&plugin, handler) {
                     continue;
                 }
                 let Ok(regex) = regex::Regex::new(&handler.pattern) else {
@@ -765,6 +826,57 @@ fn normalize_optional_plugin_id(
         },
         None => Ok(None),
     }
+}
+
+fn reload_plugin_manifests(entries: Vec<InstalledPluginInfo>) -> Vec<InstalledPluginInfo> {
+    crate::persist::plugin_registry::reload_manifests(entries, |path, enabled| {
+        load_plugin_manifest(path, enabled).map_err(|(_, message)| message)
+    })
+}
+
+fn plugin_link_pattern_strings<'a>(
+    plugins: impl Iterator<Item = &'a InstalledPluginInfo>,
+) -> Vec<String> {
+    let mut patterns = plugins
+        .flat_map(|plugin| {
+            plugin
+                .link_handlers
+                .iter()
+                .filter(move |handler| plugin_link_handler_available(plugin, handler))
+                .map(|handler| handler.pattern.clone())
+        })
+        .collect::<Vec<_>>();
+    patterns.sort_unstable();
+    patterns.dedup();
+    patterns
+}
+
+fn plugin_link_handler_available(
+    plugin: &InstalledPluginInfo,
+    handler: &PluginManifestLinkHandler,
+) -> bool {
+    if !plugin.enabled || !plugin_manifest_available(plugin) {
+        return false;
+    }
+    if ensure_platform_supported(
+        effective_platforms(&handler.platforms, &plugin.platforms),
+        &handler.id,
+    )
+    .is_err()
+    {
+        return false;
+    }
+    plugin
+        .actions
+        .iter()
+        .find(|action| action.id == handler.action)
+        .is_some_and(|action| {
+            ensure_platform_supported(
+                effective_platforms(&action.platforms, &plugin.platforms),
+                &action.id,
+            )
+            .is_ok()
+        })
 }
 
 fn plugin_manifest_available(plugin: &InstalledPluginInfo) -> bool {

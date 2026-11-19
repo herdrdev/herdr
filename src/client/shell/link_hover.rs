@@ -200,18 +200,29 @@ impl ClientShellState {
                 .is_some_and(|hover| hover.target == target)
         {
             let regions = match result {
-                Ok(crate::api::schema::ResponseResult::PaneLinkResolved { regions })
+                Ok(crate::api::schema::ResponseResult::PaneLinkResolved { mut regions }) => {
+                    // The terminal's shared viewport can extend beyond this client's pane.
+                    regions.retain_mut(|region| {
+                        if region.row >= target.inner_rect.height
+                            || region.start_col >= target.inner_rect.width
+                        {
+                            return false;
+                        }
+                        region.end_col = region.end_col.min(target.inner_rect.width - 1);
+                        true
+                    });
                     if regions.len() <= usize::from(target.inner_rect.height)
-                        && regions.iter().all(|region| {
-                            region.row < target.inner_rect.height
-                                && region.start_col <= region.end_col
-                                && region.end_col < target.inner_rect.width
-                        })
                         && regions
                             .iter()
-                            .any(|region| region_contains(region, target.col, target.row)) =>
-                {
-                    regions
+                            .all(|region| region.start_col <= region.end_col)
+                        && regions
+                            .iter()
+                            .any(|region| region_contains(region, target.col, target.row))
+                    {
+                        regions
+                    } else {
+                        Vec::new()
+                    }
                 }
                 _ => Vec::new(),
             };

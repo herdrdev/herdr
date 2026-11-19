@@ -285,6 +285,14 @@ impl EndpointRegistry {
         self.send_to(&endpoint_id, message)
     }
 
+    pub(crate) fn send_to_all(&mut self, message: &ClientMessage) {
+        // Sending can remove a failed connection; keep delivering to the others.
+        let endpoint_ids = self.connections.keys().cloned().collect::<Vec<_>>();
+        for endpoint_id in endpoint_ids {
+            self.send_to(&endpoint_id, message);
+        }
+    }
+
     pub(crate) fn send_to(
         &mut self,
         endpoint_id: &ClientEndpointId,

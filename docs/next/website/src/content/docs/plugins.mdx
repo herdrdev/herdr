@@ -368,7 +368,9 @@ name an action declared by the same plugin. Link handler actions receive
 `HERDR_PLUGIN_CLICKED_URL` and `HERDR_PLUGIN_LINK_HANDLER_ID`. Handlers are
 checked in manifest order inside each plugin.
 
-Link clicks invoke plugins only while `ui.mouse_capture` is enabled. Matching handlers run first. A launch failure shows an error and stops. Without a matching handler, only HTTP(S) links open externally. When capture is disabled, the outer terminal handles explicit hyperlinks using its own shortcuts and warnings. See [mouse controls](/docs/quick-start/#use-the-mouse) for the Windows Terminal URL detection caveat.
+With `ui.mouse_capture` enabled, pane links matched by an enabled, available handler are reserved for Herdr. Ctrl-click invokes the existing plugin action when the terminal forwards the gesture; a launch failure shows an error and stops. Other explicit hyperlinks and plain-text HTTP(S) URLs remain available to the outer terminal using its usual shortcuts and local application handlers. Herdr's own browser fallback remains HTTP(S)-only. Disabling capture makes all explicit links terminal-native and disables Herdr's mouse UI. See [mouse controls](/docs/quick-start/#use-the-mouse) for macOS gesture and Windows Terminal URL detection limitations.
+
+Selective handling requires an updated server. Older servers keep native hyperlinks disabled while mouse capture is enabled until that server is updated and restarted.
 
 ## Storage
 

@@ -85,6 +85,39 @@ fn ctrl_hover_underlines_wrapped_segments_and_caches_the_link() {
 }
 
 #[test]
+fn ctrl_hover_clips_server_regions_to_the_visible_pane() {
+    let mut state = hover_state();
+    let mouse = hover_mouse(&state, 1, 0);
+    let id = hover_request(&state.handle_raw_events(vec![RawInputEvent::Mouse(mouse)]));
+    let (repaint, actions) = state.handle_endpoint_result(
+        "boot-1",
+        &id,
+        Ok(crate::api::schema::ResponseResult::PaneLinkResolved {
+            regions: (0..3)
+                .map(|row| crate::api::schema::PaneLinkRegion {
+                    row,
+                    start_col: 0,
+                    end_col: 8,
+                })
+                .collect(),
+        }),
+    );
+    assert!(repaint);
+    assert!(actions.is_empty(), "hover must not activate a link");
+    let frame = state.compose(106, 20).unwrap();
+    let pane = &state.hits.panes[0];
+    for row in 0..2 {
+        for col in 0..4 {
+            let cell = &frame.cells[usize::from(pane.inner_rect.y + row)
+                * usize::from(frame.width)
+                + usize::from(pane.inner_rect.x + col)];
+            assert_ne!(cell.modifier & Modifier::UNDERLINED.bits(), 0);
+            assert!(cell.hyperlink.is_none());
+        }
+    }
+}
+
+#[test]
 fn ctrl_hover_pending_request_does_not_block_another_endpoint_with_the_same_boot_id() {
     use crate::client::endpoint::{
         ClientEndpointId, ClientEndpointStatus, ProfileId, SavedSshEndpoint,
