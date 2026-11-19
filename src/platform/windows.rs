@@ -72,6 +72,20 @@ impl PrivateLocalListener {
     }
 }
 
+pub(crate) fn shutdown_client_stream(stream: &crate::ipc::LocalStream) -> std::io::Result<()> {
+    use std::os::windows::io::AsHandle as _;
+
+    let crate::ipc::LocalStream::NamedPipe(pipe) = stream;
+    let ok = unsafe {
+        windows_sys::Win32::System::Pipes::DisconnectNamedPipe(pipe.as_handle().as_raw_handle())
+    };
+    if ok == 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
 pub(crate) struct ChildPipe(std::fs::File);
 
 impl ChildPipe {
