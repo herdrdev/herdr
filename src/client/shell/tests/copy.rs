@@ -1567,6 +1567,47 @@ fn navigator_narrow_layout_and_long_search_stay_inside_the_popup() {
     }
 }
 
+#[test]
+fn navigator_popup_does_not_inherit_pane_text_modifiers() {
+    // The navigator draws its own BOLD and DIM text.
+    let pane_only = Modifier::all() - Modifier::BOLD - Modifier::DIM;
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    let area = state.layout(106, 30).pane_surface;
+    let mut styled = Buffer::empty(Rect::new(0, 0, area.width, area.height));
+    styled.set_style(styled.area, Style::default().add_modifier(pane_only));
+    let mut pane = surface();
+    pane.frame = FrameData::from_ratatui_buffer_with_hyperlinks(&styled, None, &[]);
+    let rect = SurfaceRect {
+        x: 0,
+        y: 0,
+        width: area.width,
+        height: area.height,
+    };
+    pane.panes[0].rect = rect;
+    pane.panes[0].inner_rect = rect;
+    state.set_pane_surface(pane);
+    state.open_navigator_overlay();
+    let frame = state.compose(106, 30).expect("navigator frame");
+    let popup = state.hits.navigator_popup;
+
+    let (mut covered, mut uncovered) = (0, 0);
+    for y in area.y..area.bottom() {
+        for x in area.x..area.right() {
+            let cell = &frame.cells[usize::from(y) * usize::from(frame.width) + usize::from(x)];
+            let inherited = cell.modifier & pane_only.bits();
+            if super::super::contains(popup, (x, y)) {
+                covered += 1;
+                assert_eq!(inherited, 0, "({x}, {y}) {:?}", cell.symbol);
+            } else {
+                uncovered += 1;
+                assert_eq!(inherited, pane_only.bits(), "({x}, {y})");
+            }
+        }
+    }
+    assert!(covered > 0 && uncovered > 0);
+}
+
 fn navigator_scale_snapshot(workspaces: usize, tabs: usize, panes: usize) -> ClientShellSnapshot {
     let mut result = snapshot();
     let workspace_template = result.workspaces[0].clone();
