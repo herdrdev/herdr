@@ -1,7 +1,7 @@
 #!/bin/sh
 # managed by herdr; reinstalling the integration replaces this file.
 # HERDR_INTEGRATION_ID=letta
-# HERDR_INTEGRATION_VERSION=2
+# HERDR_INTEGRATION_VERSION=3
 
 [ "${1:-}" = "session" ] || exit 0
 [ "${HERDR_ENV:-}" = "1" ] || exit 0
@@ -16,7 +16,7 @@ command -v python3 >/dev/null 2>&1 || exit 0
 
 # SessionStart stdout is injected into Letta's next user message. Keep every
 # path silent, including successful reports and malformed hook input.
-python3 -c '
+python3 -I -c '
 import json
 import os
 import subprocess

@@ -1,5 +1,65 @@
 use super::harness::*;
 
+#[test]
+fn python_hooks_ignore_project_shadow_modules() {
+    let base = unique_test_dir();
+    fs::create_dir_all(&base).unwrap();
+    let marker = base.join("shadow-imported");
+    fs::write(
+        base.join("json.py"),
+        "open('shadow-imported', 'w').close()\nraise SystemExit(0)\n",
+    )
+    .unwrap();
+
+    for integration in [
+        "antigravity_cli",
+        "claude",
+        "codex",
+        "copilot",
+        "cursor",
+        "devin",
+        "droid",
+        "grok",
+        "kimi",
+        "letta",
+        "mastracode",
+        "qodercli",
+        "qwen",
+    ] {
+        let filename = if matches!(integration, "letta" | "qwen") {
+            "herdr-agent-session.sh"
+        } else {
+            "herdr-agent-state.sh"
+        };
+        let hook = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src/integration/assets")
+            .join(integration)
+            .join(filename);
+        let mut child = Command::new("sh")
+            .arg(hook)
+            .arg("session")
+            .current_dir(&base)
+            .env("HERDR_ENV", "1")
+            .env("HERDR_PANE_ID", "p_test")
+            .env("HERDR_SOCKET_PATH", base.join("herdr.sock"))
+            .env("HERDR_BIN_PATH", std::env::current_exe().unwrap())
+            .env("PYTHONPATH", &base)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child.stdin.take().unwrap().write_all(b"{}").unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(output.status.success(), "{integration}: {output:?}");
+        assert!(
+            !marker.exists(),
+            "{integration} executed the project's json.py"
+        );
+    }
+    cleanup_test_base(&base);
+}
+
 fn run_claude_hook(action: &str, hook_input: &str) -> Option<serde_json::Value> {
     run_shell_hook(
         "src/integration/assets/claude/herdr-agent-state.sh",

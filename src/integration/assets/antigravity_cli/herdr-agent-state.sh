@@ -3,7 +3,7 @@
 # managed by herdr; reinstalling or updating the integration overwrites this file.
 # add custom hooks beside this file instead of editing it.
 # HERDR_INTEGRATION_ID=antigravity_cli
-# HERDR_INTEGRATION_VERSION=4
+# HERDR_INTEGRATION_VERSION=5
 
 # Session-only: this hook reports the Antigravity conversation so Herdr can
 # resume the pane. Lifecycle state comes from Herdr's screen detection.
@@ -23,7 +23,7 @@ emit_and_exit() {
 [ -n "${HERDR_PANE_ID:-}" ] || emit_and_exit
 command -v python3 >/dev/null 2>&1 || emit_and_exit
 
-python3 -c '
+python3 -I -c '
 import json
 import os
 import socket

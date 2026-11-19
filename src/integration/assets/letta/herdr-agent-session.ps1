@@ -1,6 +1,6 @@
 # managed by herdr; reinstalling the integration replaces this file.
 # HERDR_INTEGRATION_ID=letta
-# HERDR_INTEGRATION_VERSION=2
+# HERDR_INTEGRATION_VERSION=3
 
 param([string]$Action = "")
 
