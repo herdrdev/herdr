@@ -49,6 +49,15 @@ For internal testing, `HERDR_MANIFEST_URL` can point the installer at a custom m
 
 Local persistent sessions continue running after the client detaches or its terminal window closes. Servers and pane processes launched through Windows OpenSSH also survive logout; run `herdr` again to reconnect.
 
+SSH cold starts use a signed-in Windows session of the same account. Without one, `herdr --remote` waits and saved connections retry automatically. Existing servers and panes keep running in their current session.
+
+While waiting, press **F** for a one-time Session 0 start, where Codex sandbox, computer use and desktop tools may fail; **Esc** or **Ctrl+C** cancels. To allow startup without sign-in by default, add this to the **Windows host's** `%APPDATA%\herdr\config.toml`:
+
+```toml
+[server]
+allow_headless_remote_start = true
+```
+
 Elevated Windows servers require an administrator client by default, including servers started through an elevated SSH login. Ordinary servers accept clients from ordinary and administrator terminals belonging to the same account; attaching never changes the server's privileges.
 
 To deliberately share elevated sessions with ordinary clients, set:

@@ -3,6 +3,13 @@
 //! Centralizes OS-dependent behavior behind a clean boundary so core
 //! modules don't scatter `#[cfg]` branches through product logic.
 
+pub(crate) const REMOTE_WINDOWS_START_SUPPORTED: bool = cfg!(windows);
+
+#[cfg(not(windows))]
+pub(crate) fn is_windows_sign_in_required(_error: &std::io::Error) -> bool {
+    false
+}
+
 #[cfg(unix)]
 pub(crate) mod ssh_agent;
 
