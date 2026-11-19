@@ -125,6 +125,42 @@ pub(crate) fn integration_target_install_layout_available(
     }
 }
 
+/// Whether the directory an integration installs into exists yet. Agents create
+/// it on their first run and the installers refuse to create it for them, so an
+/// agent on PATH that has never run has nothing to install into.
+pub(crate) fn integration_target_config_dir_present(
+    target: crate::api::schema::IntegrationTarget,
+) -> bool {
+    use crate::api::schema::IntegrationTarget;
+
+    let dir = match target {
+        // The extensions directory itself is created when its parent exists.
+        IntegrationTarget::Pi => pi_extension_dir().map(parent_dir),
+        IntegrationTarget::Omp => omp_extension_dir().map(parent_dir),
+        IntegrationTarget::Claude => claude_dir(),
+        IntegrationTarget::Codex => codex_dir(),
+        IntegrationTarget::Copilot => copilot_dir(),
+        IntegrationTarget::Devin => devin_dir(),
+        IntegrationTarget::Droid => droid_dir(),
+        IntegrationTarget::Kimi => kimi_dir(),
+        IntegrationTarget::Opencode => opencode_dir(),
+        IntegrationTarget::Kilo => kilo_dir(),
+        IntegrationTarget::Hermes => hermes_dir(),
+        IntegrationTarget::Qodercli => qodercli_dir(),
+        IntegrationTarget::Qwen => qwen_dir(),
+        IntegrationTarget::Cursor => cursor_dir(),
+        // The Mastra Code installer creates its own directory.
+        IntegrationTarget::Mastracode => return true,
+        IntegrationTarget::AntigravityCli => antigravity_cli_dir(),
+        IntegrationTarget::Grok => grok_dir(),
+    };
+    dir.is_ok_and(|dir| dir.is_dir())
+}
+
+fn parent_dir(path: PathBuf) -> PathBuf {
+    path.parent().map(Path::to_path_buf).unwrap_or(path)
+}
+
 pub(crate) fn command_available(command: &str) -> bool {
     let Some(paths) = std::env::var_os("PATH") else {
         return false;
@@ -247,7 +283,8 @@ pub(crate) fn integration_recommendations() -> Vec<super::IntegrationRecommendat
                 target,
                 label: integration_target_label(target),
                 command: integration_target_command(target),
-                available: integration_target_available(target)
+                available: (integration_target_available(target)
+                    && integration_target_config_dir_present(target))
                     || status.state != super::IntegrationStatusKind::NotInstalled,
                 path,
                 state: status.state,
