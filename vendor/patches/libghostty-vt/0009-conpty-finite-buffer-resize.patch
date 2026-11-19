@@ -1,0 +1,391 @@
+diff --git a/vendor/libghostty-vt/include/ghostty/vt/terminal.h b/vendor/libghostty-vt/include/ghostty/vt/terminal.h
+index 6404af53..2d09aa94 100644
+--- a/vendor/libghostty-vt/include/ghostty/vt/terminal.h
++++ b/vendor/libghostty-vt/include/ghostty/vt/terminal.h
+@@ -1586,6 +1586,8 @@ typedef enum GHOSTTY_ENUM_TYPED {
+   GHOSTTY_TERMINAL_OPT_KITTY_IMAGE_PRESERVE_PNG = 40,
+   /** Optional synchronous GhosttyKittyImageSnapshotFileFn; NULL disables. */
+   GHOSTTY_TERMINAL_OPT_KITTY_IMAGE_SNAPSHOT_FILE = 41,
++  /** Reflow a finite ConPTY buffer separately from history. bool*; NULL disables. */
++  GHOSTTY_TERMINAL_OPT_CONPTY_RESIZE = 42,
+   GHOSTTY_TERMINAL_OPT_MAX_VALUE = GHOSTTY_ENUM_MAX_VALUE,
+ } GhosttyTerminalOption;
+
+diff --git a/vendor/libghostty-vt/src/terminal/PageList.zig b/vendor/libghostty-vt/src/terminal/PageList.zig
+index 94ef9bb0..cf36eef8 100644
+--- a/vendor/libghostty-vt/src/terminal/PageList.zig
++++ b/vendor/libghostty-vt/src/terminal/PageList.zig
+@@ -1230,6 +1230,9 @@ pub const Resize = struct {
+     /// be truncated if the new size is smaller than the old size.
+     reflow: bool = true,
+
++    /// Reflow the finite ConPTY buffer independently from archived history.
++    conpty_resize: bool = false,
++
+     /// Set this to the current cursor position in the active area. Some
+     /// resize/reflow behavior depends on the cursor position.
+     cursor: ?Cursor = null,
+@@ -1276,6 +1279,13 @@ pub fn resize(self: *PageList, opts: Resize) Allocator.Error!void {
+         return;
+     }
+
++    const active_top = if (opts.conpty_resize and
++        (opts.cols orelse self.cols) != self.cols)
++        try self.trackPin(self.pin(.{ .active = .{} }).?)
++    else
++        null;
++    defer if (active_top) |p| self.untrackPin(p);
++
+     // Recalculate our minimum limits. This allows grow to work properly when
+     // increasing beyond the explicit limits to fit the active area.
+     const old_limits = self.limits;
+@@ -1289,13 +1299,25 @@ pub fn resize(self: *PageList, opts: Resize) Allocator.Error!void {
+     // only rows change, reflow is impossible. So we change our behavior based
+     // on the change of columns.
+     const cols = opts.cols orelse self.cols;
+-    switch (std.math.order(cols, self.cols)) {
++    if (opts.conpty_resize) {
++        // ConPTY grows its buffer before reflow and shrinks it afterward.
++        if (opts.rows) |rows| {
++            if (rows > self.rows) try self.resizeWithoutReflow(.{
++                .rows = rows,
++                .conpty_resize = true,
++            });
++        }
++        if (cols != self.cols) try self.resizeCols(cols, opts.cursor, active_top);
++        if (opts.rows) |rows| {
++            if (rows < self.rows) try self.resizeWithoutReflow(.{ .rows = rows });
++        }
++    } else switch (std.math.order(cols, self.cols)) {
+         .eq => try self.resizeWithoutReflow(opts),
+
+         .gt => {
+             // We grow rows after cols so that we can do our unwrapping/reflow
+             // before we do a no-reflow grow.
+-            try self.resizeCols(cols, opts.cursor);
++            try self.resizeCols(cols, opts.cursor, null);
+             try self.resizeWithoutReflow(opts);
+         },
+
+@@ -1307,7 +1329,7 @@ pub fn resize(self: *PageList, opts: Resize) Allocator.Error!void {
+                 copy.cols = self.cols;
+                 break :opts copy;
+             });
+-            try self.resizeCols(cols, opts.cursor);
++            try self.resizeCols(cols, opts.cursor, null);
+         },
+     }
+
+@@ -1332,8 +1354,11 @@ fn resizeCols(
+     self: *PageList,
+     cols: size.CellCountInt,
+     cursor: ?Resize.Cursor,
++    active_top: ?*Pin,
+ ) Allocator.Error!void {
+     assert(cols != self.cols);
++    const old_active_top = if (active_top) |p| p.* else null;
++    const has_history = self.total_rows > self.rows;
+
+     // If we have a cursor position (x,y), then we try under any col resizing
+     // to keep the same number remaining active rows beneath it. This is a
+@@ -1456,6 +1481,13 @@ fn resizeCols(
+     {
+         var reflow_cursor: ReflowCursor = .init(first_rewritten_node);
+         while (it.next()) |row| {
++            if (old_active_top) |boundary| {
++                if (has_history and row.node == boundary.node and row.y == boundary.y) {
++                    // Archived text must not rejoin a live partial line.
++                    reflow_cursor.page_row.wrap = false;
++                    reflow_cursor.new_rows = @max(reflow_cursor.new_rows, 1);
++                }
++            }
+             try reflow_cursor.reflowRow(
+                 self,
+                 row,
+@@ -1485,6 +1517,22 @@ fn resizeCols(
+         self.total_rows = reflow_cursor.total_rows;
+     }
+
++    if (active_top) |p| {
++        // Padding temporarily leaves a pinned viewport shorter than self.rows.
++        self.pauseIntegrityChecks(true);
++        defer self.pauseIntegrityChecks(false);
++        const start = self.pointFromPin(.screen, p.*).?.screen.y;
++        const missing = self.rows -| (self.total_rows - start);
++        for (0..missing) |_| _ = try self.grow();
++        switch (self.viewport) {
++            .pin => if (self.pinIsActive(self.viewport_pin.*)) {
++                self.viewport = .active;
++            },
++            .active, .top => {},
++        }
++        return;
++    }
++
+     // If our total rows is less than our active rows, we need to grow.
+     // This can happen if you're growing columns such that enough active
+     // rows unwrap that we no longer have enough.
+@@ -2851,6 +2899,20 @@ fn resizeWithoutReflow(self: *PageList, opts: Resize) Allocator.Error!void {
+             // Making rows larger we adjust our row count, and then grow
+             // to the row count.
+             .gt => gt: {
++                if (opts.conpty_resize) {
++                    const delta = rows - self.rows;
++                    self.pauseIntegrityChecks(true);
++                    defer self.pauseIntegrityChecks(false);
++                    self.rows = rows;
++                    for (0..delta) |_| _ = try self.grow();
++                    switch (self.viewport) {
++                        .pin => if (self.pinIsActive(self.viewport_pin.*)) {
++                            self.viewport = .active;
++                        },
++                        .active, .top => {},
++                    }
++                    break :gt;
++                }
+                 // If our rows increased and our cursor is NOT at the bottom,
+                 // we want to try to preserve the y value of the old cursor.
+                 // In other words, we don't want to "pull down" scrollback.
+diff --git a/vendor/libghostty-vt/src/terminal/Screen.zig b/vendor/libghostty-vt/src/terminal/Screen.zig
+index 70b92124..0c1784b6 100644
+--- a/vendor/libghostty-vt/src/terminal/Screen.zig
++++ b/vendor/libghostty-vt/src/terminal/Screen.zig
+@@ -2018,6 +2018,8 @@ pub const Resize = struct {
+     /// lost from the top of the scrollback.
+     reflow: bool = true,
+
++    conpty_resize: bool = false,
++
+     /// Set this to enable prompt redraw on resize. This signals
+     /// that the running program can redraw the prompt if the cursor is
+     /// currently at a prompt. This detects OSC133 prompts lines and clears
+@@ -2043,6 +2045,8 @@ pub inline fn resize(
+     // modify its X/Y for reflow. Do this before changing any state since
+     // tracking the pin can fail.
+     const saved_cursor_pin: ?*Pin = saved_cursor: {
++        // ConPTY retains saved cursor coordinates across buffer reflow.
++        if (opts.conpty_resize) break :saved_cursor null;
+         const sc = self.saved_cursor orelse break :saved_cursor null;
+         const pin = self.pages.pin(.{ .active = .{
+             .x = sc.x,
+@@ -2114,6 +2118,7 @@ pub inline fn resize(
+         .rows = opts.rows,
+         .cols = opts.cols,
+         .reflow = opts.reflow,
++        .conpty_resize = opts.conpty_resize,
+         .cursor = .{
+             .x = self.cursor.x,
+             .y = self.cursor.y,
+@@ -2136,6 +2141,7 @@ pub inline fn resize(
+     // If our cursor was updated, we do a full reload so all our cursor
+     // state is correct.
+     self.cursorReload();
++    if (opts.conpty_resize) self.cursor.pending_wrap = false;
+
+     // Clear any redrawable prompt after the fallible resize but before
+     // restoring the cursor style and hyperlink, so cleared cells retain the
+diff --git a/vendor/libghostty-vt/src/terminal/Terminal.zig b/vendor/libghostty-vt/src/terminal/Terminal.zig
+index e9cc3b8e..3f124417 100644
+--- a/vendor/libghostty-vt/src/terminal/Terminal.zig
++++ b/vendor/libghostty-vt/src/terminal/Terminal.zig
+@@ -79,6 +79,9 @@ colors: Colors,
+ /// char CSI (ESC [ <n> b).
+ previous_char: ?u21 = null,
+
++/// Host resize policy, retained across terminal resets.
++conpty_resize: bool = false,
++
+ /// The modes that this terminal currently has active.
+ modes: modespkg.ModeState = .{},
+
+@@ -4088,6 +4091,7 @@ pub fn resize(
+         .cols = opts.cols,
+         .rows = opts.rows,
+         .reflow = self.modes.get(.wraparound),
++        .conpty_resize = self.conpty_resize,
+         .prompt_redraw = self.flags.shell_redraws_prompt,
+     });
+
+@@ -15875,6 +15879,153 @@ test "Terminal: resize with high unique style per cell with wrapping" {
+     try t.resize(alloc, .{ .cols = 60, .rows = 30 });
+ }
+
++test "Terminal: ConPTY resize preserves the finite buffer across both axes" {
++    const alloc = testing.allocator;
++    // ReadConsoleOutputCharacterW captures, with three 127-character lines.
++    const cases = [_][6]u16{
++        .{ 25, 17, 33, 17, 11, 1 },
++        .{ 33, 17, 25, 17, 16, 1 },
++        .{ 25, 17, 25, 23, 16, 1 },
++        .{ 25, 23, 25, 17, 16, 1 },
++        .{ 25, 17, 33, 23, 11, 1 },
++        .{ 33, 23, 25, 17, 16, 1 },
++        .{ 25, 23, 33, 17, 12, 0 },
++        .{ 33, 17, 25, 23, 18, 0 },
++    };
++    for (cases) |case| {
++        var t = try init(testing.io, alloc, .{ .cols = case[0], .rows = case[1] });
++        defer t.deinit(alloc);
++        t.conpty_resize = true;
++        t.fullReset();
++        for (0..3) |line| {
++            var buf: [127]u8 = undefined;
++            try t.printString(try std.fmt.bufPrint(&buf, "L{d:0>4} {s}", .{ line, "x" ** 121 }));
++            t.carriageReturn();
++            try t.linefeed();
++        }
++        try t.printString("M001!");
++        try t.resize(alloc, .{ .cols = case[2], .rows = case[3] });
++        try testing.expectEqual(case[4], t.screens.active.cursor.y);
++        const body = if (case[2] == 33)
++            "x" ** 27 ++ "\n" ++ "x" ** 33 ++ "\n" ++ "x" ** 33 ++ "\n" ++ "x" ** 28 ++ "\n"
++        else
++            "x" ** 19 ++ "\n" ++ "x" ** 25 ++ "\n" ++ "x" ** 25 ++ "\n" ++ "x" ** 25 ++ "\n" ++ "x" ** 25 ++ "\nxx\n";
++        const prefix = if (case[5] == 0)
++            try std.fmt.allocPrint(alloc, "L0000 {s}", .{body})
++        else if (case[2] == 33)
++            try alloc.dupe(u8, "x" ** 33 ++ "\n" ++ "x" ** 33 ++ "\n" ++ "x" ** 11 ++ "\n")
++        else
++            try alloc.dupe(u8, "x" ** 25 ++ "\n" ++ "x" ** 25 ++ "\n" ++ "x" ** 25 ++ "\nxx\n");
++        defer alloc.free(prefix);
++        const expected = try std.fmt.allocPrint(alloc, "{s}L0001 {s}L0002 {s}M001!", .{ prefix, body, body });
++        defer alloc.free(expected);
++        const actual = try t.screens.active.dumpStringAlloc(alloc, .{ .active = .{} });
++        defer alloc.free(actual);
++        try testing.expectEqualStrings(expected, actual);
++    }
++}
++
++test "Terminal: ConPTY resize clears pending wrap only when geometry changes" {
++    const alloc = testing.allocator;
++    const cases = [_][4]u16{
++        .{ 33, 17, 29, 0 },
++        .{ 20, 17, 9, 1 },
++        .{ 25, 23, 4, 1 },
++        .{ 25, 12, 4, 1 },
++        .{ 33, 23, 29, 0 },
++        .{ 25, 17, 5, 1 },
++    };
++    for (cases) |case| {
++        var t = try init(testing.io, alloc, .{ .cols = 25, .rows = 17 });
++        defer t.deinit(alloc);
++        t.conpty_resize = true;
++        try t.printString("x" ** 20 ++ "M001!");
++        try testing.expect(t.screens.active.cursor.pending_wrap);
++        try t.resize(alloc, .{ .cols = case[0], .rows = case[1] });
++        try t.printString("M002!");
++        try testing.expectEqual(case[2], t.screens.active.cursor.x);
++        try testing.expectEqual(case[3], t.screens.active.cursor.y);
++        const expected = if (case[0] == 33)
++            "x" ** 20 ++ "M001M002!"
++        else if (case[0] == 20)
++            "x" ** 20 ++ "\nM001M002!"
++        else if (case[1] == 17)
++            "x" ** 20 ++ "M001!\nM002!"
++        else
++            "x" ** 20 ++ "M001M\n002!";
++        const actual = try t.screens.active.dumpStringAlloc(alloc, .{ .active = .{} });
++        defer alloc.free(actual);
++        try testing.expectEqualStrings(expected, actual);
++    }
++}
++
++test "Terminal: ConPTY resize keeps saved cursor coordinates" {
++    const alloc = testing.allocator;
++    var t = try init(testing.io, alloc, .{ .cols = 25, .rows = 17 });
++    defer t.deinit(alloc);
++    t.conpty_resize = true;
++    t.setCursorPos(4, 5);
++    t.saveCursor();
++    t.setCursorPos(1, 1);
++    for (0..3) |_| {
++        try t.printString("x" ** 127);
++        t.carriageReturn();
++        try t.linefeed();
++    }
++    try t.resize(alloc, .{ .cols = 33, .rows = 17 });
++    t.restoreCursor();
++    try testing.expectEqual(@as(u16, 3), t.screens.active.cursor.y);
++    try testing.expectEqual(@as(u16, 4), t.screens.active.cursor.x);
++
++    // Native ConPTY retains saved pending wrap even after the right edge moves.
++    for ([_][2]u16{ .{ 33, 17 }, .{ 20, 17 }, .{ 25, 23 }, .{ 25, 17 } }) |geometry| {
++        var pending = try init(testing.io, alloc, .{ .cols = 25, .rows = 17 });
++        defer pending.deinit(alloc);
++        pending.conpty_resize = true;
++        try pending.printString("x" ** 25);
++        pending.saveCursor();
++        pending.setCursorPos(3, 1);
++        try pending.printString("M001!");
++        try pending.resize(alloc, .{ .cols = geometry[0], .rows = geometry[1] });
++        pending.restoreCursor();
++        try pending.printString("Z");
++        try testing.expectEqual(@as(u16, 1), pending.screens.active.cursor.y);
++        try testing.expectEqual(@as(u16, 1), pending.screens.active.cursor.x);
++    }
++}
++
++test "Terminal: ConPTY resize preserves a pinned history viewport" {
++    const alloc = testing.allocator;
++    for ([_][2]u16{ .{ 32, 4 }, .{ 4, 8 } }) |geometry| {
++        var t = try init(testing.io, alloc, .{ .cols = 4, .rows = 4 });
++        defer t.deinit(alloc);
++        t.conpty_resize = true;
++        try t.printString("x" ** 32);
++        t.screens.active.scroll(.{ .delta_row = -1 });
++        try testing.expect(t.screens.active.pages.viewport == .pin);
++        try t.resize(alloc, .{ .cols = geometry[0], .rows = geometry[1] });
++        try testing.expect(t.screens.active.pages.viewport == .pin);
++        t.screens.active.pages.assertIntegrity();
++    }
++}
++
++test "Terminal: ConPTY resize leaves alternate screen without reflow" {
++    const alloc = testing.allocator;
++    var t = try init(testing.io, alloc, .{ .cols = 25, .rows = 17 });
++    defer t.deinit(alloc);
++    t.conpty_resize = true;
++    _ = try t.switchScreen(.alternate);
++    for (0..3) |_| {
++        try t.printString("x" ** 127);
++        t.carriageReturn();
++        try t.linefeed();
++    }
++    try t.printString("M001!");
++    try t.resize(alloc, .{ .cols = 33, .rows = 17 });
++    try testing.expectEqual(@as(u16, 16), t.screens.active.cursor.y);
++    try testing.expectEqual(@as(u16, 5), t.screens.active.cursor.x);
++}
++
+ test "Terminal: resize with reflow and saved cursor" {
+     const alloc = testing.allocator;
+     const io_impl = testing.io;
+diff --git a/vendor/libghostty-vt/src/terminal/c/terminal.zig b/vendor/libghostty-vt/src/terminal/c/terminal.zig
+index e825183e..c027ebb7 100644
+--- a/vendor/libghostty-vt/src/terminal/c/terminal.zig
++++ b/vendor/libghostty-vt/src/terminal/c/terminal.zig
+@@ -1187,6 +1187,8 @@ pub const Option = enum(c_int) {
+     kitty_image_preserve_png = 40,
+     kitty_image_snapshot_file = 41,
+
++    conpty_resize = 42,
++
+     /// Input type expected for setting the option.
+     pub fn InType(comptime self: Option) type {
+         return switch (self) {
+@@ -1215,6 +1217,7 @@ pub const Option = enum(c_int) {
+             .kitty_image_medium_shared_mem,
+             .glyph_protocol,
+             .title_report,
++            .conpty_resize,
+             => ?*const bool,
+             .kitty_image_medium_temp_file => ?*const lib.String,
+             .apc_max_bytes,
+@@ -1441,6 +1444,7 @@ fn setTyped(
+         .scrollback_max_lines => wrapper.terminal.setScrollbackMaxLines(
+             if (value) |ptr| ptr.* else null,
+         ),
++        .conpty_resize => wrapper.terminal.conpty_resize = if (value) |ptr| ptr.* else false,
+         .continuation_max_bytes => setContinuationMaxBytes(
+             wrapper,
+             if (value) |ptr| ptr.* else default_continuation_max_bytes,

@@ -3207,7 +3207,9 @@ pub const GhosttyTerminalOption_GHOSTTY_TERMINAL_OPT_KITTY_IMAGE_PRESERVE_PNG:
 #[doc = " Optional synchronous GhosttyKittyImageSnapshotFileFn; NULL disables."]
 pub const GhosttyTerminalOption_GHOSTTY_TERMINAL_OPT_KITTY_IMAGE_SNAPSHOT_FILE:
     GhosttyTerminalOption = 41;
-#[doc = " Optional synchronous GhosttyKittyImageSnapshotFileFn; NULL disables."]
+#[doc = " Reflow a finite ConPTY buffer separately from history. bool*; NULL disables."]
+pub const GhosttyTerminalOption_GHOSTTY_TERMINAL_OPT_CONPTY_RESIZE: GhosttyTerminalOption = 42;
+#[doc = " Reflow a finite ConPTY buffer separately from history. bool*; NULL disables."]
 pub const GhosttyTerminalOption_GHOSTTY_TERMINAL_OPT_MAX_VALUE: GhosttyTerminalOption = 2147483647;
 #[doc = " Terminal option identifiers.\n\n These values are used with ghostty_terminal_set() to configure\n terminal callbacks and associated state.\n\n @ingroup terminal"]
 pub type GhosttyTerminalOption = ::std::os::raw::c_int;

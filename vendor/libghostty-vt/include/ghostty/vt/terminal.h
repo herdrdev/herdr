@@ -1586,6 +1586,8 @@ typedef enum GHOSTTY_ENUM_TYPED {
   GHOSTTY_TERMINAL_OPT_KITTY_IMAGE_PRESERVE_PNG = 40,
   /** Optional synchronous GhosttyKittyImageSnapshotFileFn; NULL disables. */
   GHOSTTY_TERMINAL_OPT_KITTY_IMAGE_SNAPSHOT_FILE = 41,
+  /** Reflow a finite ConPTY buffer separately from history. bool*; NULL disables. */
+  GHOSTTY_TERMINAL_OPT_CONPTY_RESIZE = 42,
   GHOSTTY_TERMINAL_OPT_MAX_VALUE = GHOSTTY_ENUM_MAX_VALUE,
 } GhosttyTerminalOption;
 

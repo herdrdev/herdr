@@ -2018,6 +2018,8 @@ pub const Resize = struct {
     /// lost from the top of the scrollback.
     reflow: bool = true,
 
+    conpty_resize: bool = false,
+
     /// Set this to enable prompt redraw on resize. This signals
     /// that the running program can redraw the prompt if the cursor is
     /// currently at a prompt. This detects OSC133 prompts lines and clears
@@ -2043,6 +2045,8 @@ pub inline fn resize(
     // modify its X/Y for reflow. Do this before changing any state since
     // tracking the pin can fail.
     const saved_cursor_pin: ?*Pin = saved_cursor: {
+        // ConPTY retains saved cursor coordinates across buffer reflow.
+        if (opts.conpty_resize) break :saved_cursor null;
         const sc = self.saved_cursor orelse break :saved_cursor null;
         const pin = self.pages.pin(.{ .active = .{
             .x = sc.x,
@@ -2114,6 +2118,7 @@ pub inline fn resize(
         .rows = opts.rows,
         .cols = opts.cols,
         .reflow = opts.reflow,
+        .conpty_resize = opts.conpty_resize,
         .cursor = .{
             .x = self.cursor.x,
             .y = self.cursor.y,
@@ -2136,6 +2141,7 @@ pub inline fn resize(
     // If our cursor was updated, we do a full reload so all our cursor
     // state is correct.
     self.cursorReload();
+    if (opts.conpty_resize) self.cursor.pending_wrap = false;
 
     // Clear any redrawable prompt after the fallible resize but before
     // restoring the cursor style and hyperlink, so cleared cells retain the

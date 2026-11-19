@@ -6024,6 +6024,55 @@ mod tests {
         );
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn windows_conpty_resize_preserves_live_buffer_and_scrollback() {
+        let (tx, _rx) = mpsc::channel(4);
+        let mut bytes = Vec::new();
+        for line in 0..3 {
+            bytes.extend_from_slice(format!("L{line:04} {}\r\n", "x".repeat(121)).as_bytes());
+        }
+        bytes.extend_from_slice(b"M001!");
+        let mut terminal = crate::ghostty::Terminal::new(25, 17, 100_000).unwrap();
+        crate::platform::configure_conpty_terminal(&mut terminal).unwrap();
+        terminal.write(&bytes);
+        let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
+
+        pane.resize(17, 33, 8, 16);
+
+        // Native ReadConsoleOutputCharacterW capture: the live first line
+        // retains 77 characters after its first 50 scrolled into history.
+        let mut expected = vec!["x".repeat(33), "x".repeat(33), "x".repeat(11)];
+        for line in 1..3 {
+            expected.push(format!("L{line:04} {}", "x".repeat(27)));
+            expected.extend(["x".repeat(33), "x".repeat(33), "x".repeat(28)]);
+        }
+        expected.push("M001!".to_owned());
+        assert_eq!(pane.visible_text(), expected.join("\n") + "\n");
+        {
+            let core = pane.core.lock().unwrap();
+            assert_eq!(core.terminal.cursor_y().unwrap(), 11);
+            let total = core.terminal.scrollbar().unwrap().total;
+            let history = core
+                .terminal
+                .read_text_screen((0, 0), (32, (total - 1) as u32), false)
+                .unwrap();
+            assert!(history
+                .replace('\n', "")
+                .contains(&format!("L0000 {}", "x".repeat(121))));
+        }
+
+        pane.process_pty_bytes(PaneId::from_raw(1), 0, b"\x1b[12;1HP> HELLO\x1b[K", &tx);
+        expected[11] = "P> HELLO".to_owned();
+        assert_eq!(pane.visible_text(), expected.join("\n") + "\n");
+        assert!(!pane.visible_text().contains("M001!"));
+
+        let mut unchanged = crate::ghostty::Terminal::new(25, 17, 100_000).unwrap();
+        unchanged.write(&bytes);
+        unchanged.resize(33, 17, 8, 16).unwrap();
+        assert_eq!(unchanged.cursor_y().unwrap(), 12);
+    }
+
     #[test]
     fn resize_reflow_keeps_scrolled_viewport_and_bottom_detection_sane() {
         let (tx, _rx) = mpsc::channel(4);
