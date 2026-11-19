@@ -29,7 +29,28 @@ pub struct ApiRequestMessage {
     pub response_write_complete: Option<std::sync::mpsc::Receiver<()>>,
 }
 
-pub type ApiRequestSender = mpsc::UnboundedSender<ApiRequestMessage>;
+pub enum ServerRequest {
+    Api(Box<ApiRequestMessage>),
+    AgentStatus {
+        id: String,
+        pane_id: String,
+        respond_to: std::sync::mpsc::Sender<
+            Result<schema::PaneAgentStatusChangedEvent, schema::ErrorResponse>,
+        >,
+    },
+}
+
+#[cfg(test)]
+impl ServerRequest {
+    fn into_api(self) -> ApiRequestMessage {
+        match self {
+            Self::Api(request) => *request,
+            Self::AgentStatus { .. } => panic!("expected public API request"),
+        }
+    }
+}
+
+pub type ApiRequestSender = mpsc::UnboundedSender<ServerRequest>;
 
 pub fn socket_path() -> PathBuf {
     crate::session::active_api_socket_path()

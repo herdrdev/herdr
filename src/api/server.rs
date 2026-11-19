@@ -963,11 +963,13 @@ fn dispatch_to_app(
 ) -> String {
     let request_id = request.id.clone();
     let (respond_to, response_rx) = std::sync::mpsc::channel();
-    if let Err(err) = api_tx.send(ApiRequestMessage {
-        request,
-        respond_to,
-        response_write_complete,
-    }) {
+    if let Err(err) = api_tx.send(crate::api::ServerRequest::Api(Box::new(
+        ApiRequestMessage {
+            request,
+            respond_to,
+            response_write_complete,
+        },
+    ))) {
         return error_response_json(
             request_id,
             "server_unavailable",
@@ -1131,63 +1133,30 @@ mod tests {
         fs::remove_dir_all(directory).unwrap();
     }
 
-    fn pane_info(
-        pane_id: &str,
+    fn status_snapshot(
         agent_status: crate::api::schema::AgentStatus,
-    ) -> crate::api::schema::PaneInfo {
-        crate::api::schema::PaneInfo {
-            pane_id: pane_id.into(),
-            terminal_id: "term_1".into(),
+    ) -> crate::api::schema::PaneAgentStatusChangedEvent {
+        crate::api::schema::PaneAgentStatusChangedEvent {
+            pane_id: "pane_1".into(),
             workspace_id: "ws_1".into(),
-            tab_id: "tab_1".into(),
-            focused: true,
-            cwd: None,
-            foreground_cwd: None,
-            restore_error: None,
-            label: None,
+            agent_status,
             agent: Some("pi".into()),
             title: None,
-            terminal_title: None,
-            terminal_title_stripped: None,
             display_agent: None,
-            agent_status,
             state_labels: HashMap::new(),
-            tokens: HashMap::new(),
-            agent_session: None,
-            scroll: None,
-            revision: 0,
         }
     }
 
-    fn spawn_pane_get_responder(
+    fn spawn_agent_status_responder(
         agent_status: crate::api::schema::AgentStatus,
     ) -> (ApiRequestSender, std::thread::JoinHandle<()>) {
-        let (api_tx, mut api_rx) = mpsc::unbounded_channel::<ApiRequestMessage>();
+        let (api_tx, mut api_rx) = mpsc::unbounded_channel::<crate::api::ServerRequest>();
         let responder = std::thread::spawn(move || {
             while let Some(msg) = api_rx.blocking_recv() {
-                match msg.request.method {
-                    Method::PaneGet(_) => msg
-                        .respond_to
-                        .send(
-                            serde_json::to_string(&SuccessResponse {
-                                id: msg.request.id,
-                                result: ResponseResult::PaneInfo {
-                                    pane: pane_info("pane_1", agent_status),
-                                },
-                            })
-                            .unwrap(),
-                        )
-                        .unwrap(),
-                    Method::EventsWait(_) => msg
-                        .respond_to
-                        .send(error_response_json(
-                            msg.request.id,
-                            "unexpected_dispatch",
-                            "events.wait should be handled by the api server".into(),
-                        ))
-                        .unwrap(),
-                    other => panic!("unexpected request: {other:?}"),
-                }
+                let crate::api::ServerRequest::AgentStatus { respond_to, .. } = msg else {
+                    panic!("status wait dispatched a public request");
+                };
+                respond_to.send(Ok(status_snapshot(agent_status))).unwrap();
             }
         });
         (api_tx, responder)
@@ -1301,7 +1270,7 @@ mod tests {
             "pane.graphics.stream",
         ] {
             let (mut client, server, _path) = local_stream_pair("removed-pane-graphics");
-            let (api_tx, mut api_rx) = mpsc::unbounded_channel::<ApiRequestMessage>();
+            let (api_tx, mut api_rx) = mpsc::unbounded_channel::<crate::api::ServerRequest>();
             writeln!(
                 client,
                 "{{\"id\":\"removed\",\"method\":\"{method}\",\"params\":{{}}}}"
@@ -1333,7 +1302,7 @@ mod tests {
     #[test]
     fn unrelated_unknown_method_retains_standard_invalid_request_response() {
         let (mut client, server, _path) = local_stream_pair("unknown-api-request");
-        let (api_tx, mut api_rx) = mpsc::unbounded_channel::<ApiRequestMessage>();
+        let (api_tx, mut api_rx) = mpsc::unbounded_channel::<crate::api::ServerRequest>();
         client
             .write_all(b"{\"id\":\"unknown\",\"method\":\"nope\",\"params\":{}}\n")
             .unwrap();
@@ -1358,7 +1327,7 @@ mod tests {
     #[test]
     fn ordinary_api_request_still_uses_normal_connection_path() {
         let (mut client, server, _path) = local_stream_pair("ordinary-api-request");
-        let (api_tx, _api_rx) = mpsc::unbounded_channel::<ApiRequestMessage>();
+        let (api_tx, _api_rx) = mpsc::unbounded_channel::<crate::api::ServerRequest>();
         client
             .write_all(b"{\"id\":\"ordinary\",\"method\":\"ping\",\"params\":{}}\n")
             .unwrap();
@@ -1464,7 +1433,7 @@ mod tests {
             handle_request(request_for_thread, &tx, None, None, None, None)
         });
 
-        let msg = rx.blocking_recv().unwrap();
+        let msg = rx.blocking_recv().unwrap().into_api();
         assert_eq!(msg.request.id, "req_2");
         msg.respond_to
             .send(
@@ -1498,7 +1467,7 @@ mod tests {
             handle_connection(server, &api_tx, &event_hub, &server_running, None)
         });
 
-        let msg = api_rx.blocking_recv().unwrap();
+        let msg = api_rx.blocking_recv().unwrap().into_api();
         let response_write_complete = msg
             .response_write_complete
             .expect("socket-dispatched requests include write completion");
@@ -1523,7 +1492,7 @@ mod tests {
     #[test]
     fn events_wait_agent_status_returns_initial_match() {
         let (api_tx, responder) =
-            spawn_pane_get_responder(crate::api::schema::AgentStatus::Blocked);
+            spawn_agent_status_responder(crate::api::schema::AgentStatus::Blocked);
 
         let (mut client, server, _path) = local_stream_pair("api-events-wait-initial");
         client
@@ -1550,7 +1519,7 @@ mod tests {
     #[test]
     fn events_wait_agent_status_times_out_server_side() {
         let (api_tx, responder) =
-            spawn_pane_get_responder(crate::api::schema::AgentStatus::Unknown);
+            spawn_agent_status_responder(crate::api::schema::AgentStatus::Unknown);
 
         let (mut client, server, _path) = local_stream_pair("api-events-wait-timeout");
         client
@@ -1578,24 +1547,18 @@ mod tests {
     fn events_wait_agent_status_returns_not_found_when_pane_closes() {
         let event_hub = EventHub::default();
         let responder_event_hub = event_hub.clone();
-        let (api_tx, mut api_rx) = mpsc::unbounded_channel::<ApiRequestMessage>();
+        let (api_tx, mut api_rx) = mpsc::unbounded_channel::<crate::api::ServerRequest>();
         let responder = std::thread::spawn(move || {
-            let mut pane_get_count = 0;
+            let mut status_read_count = 0;
             while let Some(msg) = api_rx.blocking_recv() {
-                let Method::PaneGet(_) = msg.request.method else {
-                    panic!("unexpected request: {:?}", msg.request.method);
+                let crate::api::ServerRequest::AgentStatus { id, respond_to, .. } = msg else {
+                    panic!("status wait dispatched a public request");
                 };
-                pane_get_count += 1;
-                let response = if pane_get_count == 1 {
-                    serde_json::to_string(&SuccessResponse {
-                        id: msg.request.id,
-                        result: ResponseResult::PaneInfo {
-                            pane: pane_info("pane_1", crate::api::schema::AgentStatus::Unknown),
-                        },
-                    })
-                    .unwrap()
+                status_read_count += 1;
+                let response = if status_read_count == 1 {
+                    Ok(status_snapshot(crate::api::schema::AgentStatus::Unknown))
                 } else {
-                    if pane_get_count == 2 {
+                    if status_read_count == 2 {
                         responder_event_hub.push(crate::api::schema::EventEnvelope {
                             event: crate::api::schema::EventKind::PaneClosed,
                             data: crate::api::schema::EventData::PaneClosed {
@@ -1604,13 +1567,15 @@ mod tests {
                             },
                         });
                     }
-                    error_response_json(
-                        msg.request.id,
-                        "pane_not_found",
-                        "pane pane_1 not found".into(),
-                    )
+                    Err(ErrorResponse {
+                        id,
+                        error: crate::api::schema::ErrorBody {
+                            code: "pane_not_found".into(),
+                            message: "pane pane_1 not found".into(),
+                        },
+                    })
                 };
-                msg.respond_to.send(response).unwrap();
+                respond_to.send(response).unwrap();
             }
         });
 
@@ -1634,11 +1599,12 @@ mod tests {
 
     #[test]
     fn wait_for_output_stops_when_client_disconnects() {
-        let (api_tx, mut api_rx) = mpsc::unbounded_channel::<ApiRequestMessage>();
+        let (api_tx, mut api_rx) = mpsc::unbounded_channel::<crate::api::ServerRequest>();
         let (first_read_tx, first_read_rx) = std::sync::mpsc::channel();
         let responder = std::thread::spawn(move || {
             let mut notified = false;
             while let Some(msg) = api_rx.blocking_recv() {
+                let msg = msg.into_api();
                 assert!(matches!(msg.request.method, Method::PaneRead(_)));
                 if !notified {
                     first_read_tx.send(()).unwrap();
@@ -1736,15 +1702,19 @@ mod tests {
 
     #[test]
     fn subscription_setup_errors_preserve_request_id_and_reject_entire_stream() {
-        let (api_tx, mut api_rx) = mpsc::unbounded_channel::<ApiRequestMessage>();
+        let (api_tx, mut api_rx) = mpsc::unbounded_channel::<crate::api::ServerRequest>();
         let event_hub = EventHub::default();
         let responder_event_hub = event_hub.clone();
         let responder = std::thread::spawn(move || {
-            let msg = api_rx.blocking_recv().unwrap();
-            let Method::PaneGet(params) = msg.request.method else {
-                panic!("unexpected request: {:?}", msg.request.method);
+            let crate::api::ServerRequest::AgentStatus {
+                id,
+                pane_id,
+                respond_to,
+            } = api_rx.blocking_recv().unwrap()
+            else {
+                panic!("status setup dispatched a public request");
             };
-            assert_eq!(params.pane_id, "w999:p9");
+            assert_eq!(pane_id, "w999:p9");
             responder_event_hub.push(crate::api::schema::EventEnvelope {
                 event: crate::api::schema::EventKind::PaneClosed,
                 data: crate::api::schema::EventData::PaneClosed {
@@ -1752,12 +1722,14 @@ mod tests {
                     workspace_id: "w999".into(),
                 },
             });
-            msg.respond_to
-                .send(error_response_json(
-                    msg.request.id,
-                    "pane_not_found",
-                    "pane w999:p9 not found".into(),
-                ))
+            respond_to
+                .send(Err(ErrorResponse {
+                    id,
+                    error: crate::api::schema::ErrorBody {
+                        code: "pane_not_found".into(),
+                        message: "pane w999:p9 not found".into(),
+                    },
+                }))
                 .unwrap();
             assert!(
                 api_rx.blocking_recv().is_none(),
@@ -1785,7 +1757,7 @@ mod tests {
 
     #[test]
     fn subscriptions_stop_when_client_disconnects() {
-        let (api_tx, _api_rx) = mpsc::unbounded_channel::<ApiRequestMessage>();
+        let (api_tx, _api_rx) = mpsc::unbounded_channel::<crate::api::ServerRequest>();
         let (mut client, server, _path) = local_stream_pair("api-sub-disconnect");
         client
             .write_all(
@@ -1818,7 +1790,7 @@ mod tests {
 
     #[test]
     fn subscriptions_stop_when_server_shuts_down() {
-        let (api_tx, _api_rx) = mpsc::unbounded_channel::<ApiRequestMessage>();
+        let (api_tx, _api_rx) = mpsc::unbounded_channel::<crate::api::ServerRequest>();
         let (mut client, server, _path) = local_stream_pair("api-sub-shutdown");
         client
             .write_all(

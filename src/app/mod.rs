@@ -108,7 +108,7 @@ pub struct App {
     pub(crate) terminal_runtimes: crate::terminal::TerminalRuntimeRegistry,
     pub event_tx: mpsc::Sender<AppEvent>,
     pub(crate) event_rx: mpsc::Receiver<AppEvent>,
-    pub(crate) api_rx: tokio::sync::mpsc::UnboundedReceiver<crate::api::ApiRequestMessage>,
+    pub(crate) api_rx: tokio::sync::mpsc::UnboundedReceiver<crate::api::ServerRequest>,
     pub(crate) event_hub: crate::api::EventHub,
     pub(crate) last_focus: Option<(usize, crate::layout::PaneId)>,
     pub(crate) policy: AppPolicy,
@@ -391,7 +391,7 @@ impl App {
         config: &Config,
         policy: AppPolicy,
         config_diagnostic: Option<String>,
-        api_rx: tokio::sync::mpsc::UnboundedReceiver<crate::api::ApiRequestMessage>,
+        api_rx: tokio::sync::mpsc::UnboundedReceiver<crate::api::ServerRequest>,
         event_hub: crate::api::EventHub,
     ) -> Self {
         Self::try_new(config, policy, config_diagnostic, api_rx, event_hub)
@@ -402,7 +402,7 @@ impl App {
         config: &Config,
         policy: AppPolicy,
         config_diagnostic: Option<String>,
-        api_rx: tokio::sync::mpsc::UnboundedReceiver<crate::api::ApiRequestMessage>,
+        api_rx: tokio::sync::mpsc::UnboundedReceiver<crate::api::ServerRequest>,
         event_hub: crate::api::EventHub,
     ) -> std::io::Result<Self> {
         let prefix_keys = config.prefix_keys();
@@ -710,7 +710,7 @@ impl App {
     pub fn new_from_handoff(
         config: &Config,
         config_diagnostic: Option<String>,
-        api_rx: tokio::sync::mpsc::UnboundedReceiver<crate::api::ApiRequestMessage>,
+        api_rx: tokio::sync::mpsc::UnboundedReceiver<crate::api::ServerRequest>,
         event_hub: crate::api::EventHub,
         snapshot: &crate::persist::SessionSnapshot,
         imports: &mut std::collections::HashMap<

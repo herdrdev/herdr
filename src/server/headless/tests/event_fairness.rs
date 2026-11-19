@@ -6,14 +6,14 @@ fn queue_requests(server: &mut HeadlessServer, count: usize) -> std::sync::mpsc:
     let (respond_to, responses) = std::sync::mpsc::channel();
     for index in 0..count {
         sender
-            .send(api::ApiRequestMessage {
+            .send(api::ServerRequest::Api(Box::new(api::ApiRequestMessage {
                 request: api::schema::Request {
                     id: index.to_string(),
                     method: api::schema::Method::WorkspaceList(api::schema::EmptyParams::default()),
                 },
                 respond_to: respond_to.clone(),
                 response_write_complete: None,
-            })
+            })))
             .unwrap();
     }
     responses
@@ -112,14 +112,14 @@ async fn server_loop_drains_api_backlog_and_runs_scheduled_work() {
             api::schema::Method::WorkspaceList(api::schema::EmptyParams::default())
         };
         sender
-            .send(api::ApiRequestMessage {
+            .send(api::ServerRequest::Api(Box::new(api::ApiRequestMessage {
                 request: api::schema::Request {
                     id: index.to_string(),
                     method,
                 },
                 respond_to: respond_to.clone(),
                 response_write_complete: None,
-            })
+            })))
             .unwrap();
     }
     server.app.config_diagnostic_deadline = Some(Instant::now());
@@ -141,6 +141,133 @@ async fn server_loop_drains_api_backlog_and_runs_scheduled_work() {
     assert!(server.app.state.config_diagnostic.is_none());
     assert!(server.app.config_diagnostic_deadline.is_none());
     assert_eq!(server.app.terminal_runtimes.len(), 0);
+}
+
+#[test]
+fn agent_status_request_expires_metadata_and_preserves_errors() {
+    let mut server = test_headless_server();
+    let workspace = crate::workspace::Workspace::test_new("status-read");
+    let pane_id = workspace.tabs[0].root_pane;
+    server.app.state.workspaces = vec![workspace];
+    server.app.state.ensure_test_terminals();
+    let public_pane_id = server.app.public_pane_id(0, pane_id).unwrap();
+    let terminal_id = server.app.state.workspaces[0]
+        .pane_state(pane_id)
+        .unwrap()
+        .attached_terminal_id
+        .clone();
+    let terminal = server.app.state.terminals.get_mut(&terminal_id).unwrap();
+    terminal.set_detected_state(
+        Some(crate::detect::Agent::Pi),
+        crate::detect::AgentState::Working,
+    );
+    terminal.set_agent_metadata(crate::terminal::AgentMetadataReport {
+        source: "status-test".into(),
+        agent_label: None,
+        applies_to_source: None,
+        title: Some("expired".into()),
+        display_agent: None,
+        state_labels: HashMap::new(),
+        clear_title: false,
+        clear_display_agent: false,
+        clear_state_labels: false,
+        ttl: Some(Duration::ZERO),
+        seq: None,
+    });
+    server.app.sync_agent_metadata_deadline();
+    let sequence = server.app.event_hub.current_sequence();
+    let (respond_to, response) = std::sync::mpsc::channel();
+    assert!(
+        server.handle_server_request(api::ServerRequest::AgentStatus {
+            id: "status".into(),
+            pane_id: public_pane_id.clone(),
+            respond_to,
+        })
+    );
+    let snapshot = response.recv().unwrap().unwrap();
+    assert_eq!(snapshot.pane_id, public_pane_id);
+    assert_eq!(snapshot.agent_status, api::schema::AgentStatus::Working);
+    assert_eq!(snapshot.title, None);
+    assert!(server.app.event_hub.current_sequence() > sequence);
+    assert!(server.app.agent_metadata_deadline.is_none());
+
+    for shutting_down in [false, true] {
+        server.shutting_down = shutting_down;
+        let (respond_to, response) = std::sync::mpsc::channel();
+        server.handle_server_request(api::ServerRequest::AgentStatus {
+            id: "missing".into(),
+            pane_id: "missing".into(),
+            respond_to,
+        });
+        let error = response.recv().unwrap().unwrap_err();
+        assert_eq!(error.id, "missing");
+        assert_eq!(
+            error.error.code,
+            if shutting_down {
+                "server_unavailable"
+            } else {
+                "pane_not_found"
+            }
+        );
+        assert_eq!(
+            error.error.message,
+            if shutting_down {
+                "server is shutting down"
+            } else {
+                "pane missing not found"
+            }
+        );
+    }
+}
+
+#[test]
+fn agent_status_request_preserves_foreground_seen_projection() {
+    let mut server = test_headless_server();
+    let workspace = crate::workspace::Workspace::test_new("status-seen");
+    let pane_id = workspace.tabs[0].root_pane;
+    server.app.state.workspaces = vec![workspace];
+    server.app.state.ensure_test_terminals();
+    server.app.state.active = Some(0);
+    let public_pane_id = server.app.public_pane_id(0, pane_id).unwrap();
+    let terminal_id = server.app.state.workspaces[0]
+        .pane_state(pane_id)
+        .unwrap()
+        .attached_terminal_id
+        .clone();
+    server
+        .app
+        .state
+        .terminals
+        .get_mut(&terminal_id)
+        .unwrap()
+        .set_detected_state(
+            Some(crate::detect::Agent::Pi),
+            crate::detect::AgentState::Idle,
+        );
+    let (_control, _render) = connect_test_shell(&mut server, 5289, 120, 40);
+    for focused in [false, true] {
+        server.clients.get_mut(&5289).unwrap().outer_terminal_focus = Some(focused);
+        server.foreground_client_id = Some(5289);
+        server.app.state.workspaces[0]
+            .pane_state_mut(pane_id)
+            .unwrap()
+            .seen = false;
+        let (respond_to, response) = std::sync::mpsc::channel();
+        server.handle_server_request(api::ServerRequest::AgentStatus {
+            id: "seen".into(),
+            pane_id: public_pane_id.clone(),
+            respond_to,
+        });
+        let snapshot = response.recv().unwrap().unwrap();
+        assert_eq!(
+            snapshot.agent_status,
+            if focused {
+                api::schema::AgentStatus::Idle
+            } else {
+                api::schema::AgentStatus::Done
+            }
+        );
+    }
 }
 
 #[test]
