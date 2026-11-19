@@ -394,7 +394,7 @@ impl ClientShellState {
                         hit.scroll,
                         &self.config.palette,
                         crate::terminal_theme::TerminalTheme {
-                            background: self.host_background,
+                            background: self.host_theme.background,
                             ..Default::default()
                         },
                     );
@@ -758,7 +758,7 @@ fn render_client_copy_search_highlights(
     let bottom = top.saturating_add(u32::from(hit.inner_rect.height.saturating_sub(1)));
     let style = if current_only {
         Style::default()
-            .fg(panel_contrast_fg(palette))
+            .fg(palette.accent_foreground())
             .bg(palette.accent)
             .add_modifier(Modifier::BOLD)
     } else {

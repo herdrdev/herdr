@@ -6,7 +6,6 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph, Widget},
 };
 
-use super::widgets::panel_contrast_fg;
 use crate::{
     app::state::{CopyFeedback, Palette},
     config::ToastClipboardPosition,
@@ -95,7 +94,7 @@ pub(crate) fn render_config_diagnostic_buffer(
     mut covered: impl FnMut(Rect),
 ) -> u16 {
     let style = Style::default()
-        .fg(panel_contrast_fg(palette))
+        .fg(palette.fill_foreground())
         .bg(palette.yellow)
         .add_modifier(Modifier::BOLD);
     let mut rendered_rows = 0u16;
@@ -127,6 +126,45 @@ pub(crate) fn render_config_diagnostic_buffer(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn config_diagnostic_uses_non_accent_fill_foreground() {
+        use crate::terminal_theme::{RgbColor, TerminalTheme};
+        let mut host = TerminalTheme {
+            foreground: Some(RgbColor {
+                r: 238,
+                g: 238,
+                b: 238,
+            }),
+            background: Some(RgbColor {
+                r: 16,
+                g: 16,
+                b: 16,
+            }),
+            ..Default::default()
+        };
+        host.palette[4] = Some(RgbColor {
+            r: 20,
+            g: 20,
+            b: 245,
+        });
+        host.palette[8] = Some(RgbColor {
+            r: 24,
+            g: 24,
+            b: 24,
+        });
+        let palette = Palette::terminal_for_host(&host);
+        assert_ne!(palette.accent_foreground(), palette.fill_foreground());
+        let area = Rect::new(0, 0, 40, 1);
+        let mut buffer = Buffer::empty(area);
+        let mut diagnostic = Rect::default();
+        render_config_diagnostic_buffer(&mut buffer, area, "invalid config", &palette, |rect| {
+            diagnostic = rect;
+        });
+        let cell = &buffer[(diagnostic.x + 2, diagnostic.y)];
+        assert_eq!(cell.bg, palette.yellow);
+        assert_eq!(cell.fg, palette.fill_foreground());
+    }
 
     #[test]
     fn copy_feedback_rect_uses_configured_position() {

@@ -313,6 +313,7 @@ fn every_dialog_and_menu_occludes_its_panel_not_the_whole_screen() {
             section: ClientSettingsSection::Theme,
             selected: 0,
             original_theme_name: String::new(),
+            theme_preview: None,
             original_palette: palette,
             integrations: Vec::new(),
             integration_messages: Vec::new(),

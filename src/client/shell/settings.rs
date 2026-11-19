@@ -38,6 +38,7 @@ impl ClientShellState {
             selected: theme_index(&self.config.theme_name),
             original_theme_name: self.config.theme_name.clone(),
             original_palette: self.config.palette.clone(),
+            theme_preview: None,
             integrations: Vec::new(),
             integration_messages: Vec::new(),
             loading_integrations: false,
@@ -140,15 +141,19 @@ impl ClientShellState {
     }
 
     fn preview_selected_theme(&mut self) {
-        let Some(ClientShellOverlay::Settings(settings)) = self.overlay.as_ref() else {
+        let Some(ClientShellOverlay::Settings(settings)) = self.overlay.as_mut() else {
             return;
         };
         let Some(name) = crate::config::THEME_NAMES.get(settings.selected) else {
             return;
         };
+        settings.theme_preview = Some((*name).to_owned());
         self.config.theme_name = (*name).to_owned();
-        self.config.palette =
-            crate::app::client_palette_for_theme(&self.config.theme_runtime, name);
+        self.config.palette = crate::app::client_palette_for_theme(
+            &self.config.theme_runtime,
+            name,
+            &self.host_theme,
+        );
     }
 
     pub(super) fn cancel_settings_overlay(&mut self) {

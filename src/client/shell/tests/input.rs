@@ -7,11 +7,13 @@ fn host_appearance_prefers_explicit_reports_over_background_inference() {
 
     let light = crate::app::client_palette_for_appearance(
         &state.config.theme_runtime,
-        crate::terminal_theme::HostAppearance::Light,
+        Some(crate::terminal_theme::HostAppearance::Light),
+        &crate::terminal_theme::TerminalTheme::default(),
     );
     let dark = crate::app::client_palette_for_appearance(
         &state.config.theme_runtime,
-        crate::terminal_theme::HostAppearance::Dark,
+        Some(crate::terminal_theme::HostAppearance::Dark),
+        &crate::terminal_theme::TerminalTheme::default(),
     );
 
     let inferred = state.handle_raw_events(vec![RawInputEvent::HostDefaultColor {
@@ -74,6 +76,169 @@ fn host_appearance_prefers_explicit_reports_over_background_inference() {
         Some(crate::terminal_theme::HostAppearance::Dark)
     );
     assert_eq!(state.config.palette, dark);
+}
+
+#[test]
+fn terminal_theme_refreshes_from_host_reports_without_auto_switch_and_keeps_overrides() {
+    use crate::terminal_theme::{DefaultColorKind, RgbColor};
+    use ratatui::style::Color;
+
+    let config: Config = toml::from_str(
+        r##"
+[theme]
+name = "terminal"
+[theme.custom]
+overlay0 = "#123456"
+"##,
+    )
+    .unwrap();
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
+    let background = RgbColor {
+        r: 255,
+        g: 249,
+        b: 232,
+    };
+    let foreground = RgbColor {
+        r: 69,
+        g: 55,
+        b: 60,
+    };
+    let surface = RgbColor {
+        r: 94,
+        g: 82,
+        b: 82,
+    };
+    let accent = RgbColor {
+        r: 66,
+        g: 106,
+        b: 121,
+    };
+    let initial = state.config.palette.clone();
+    state.handle_raw_events(vec![RawInputEvent::HostPaletteColors {
+        colors: vec![(4, accent), (8, surface), (7, background)],
+    }]);
+    assert_eq!(state.config.palette, initial);
+
+    let outcome = state.handle_raw_events(vec![
+        RawInputEvent::HostDefaultColor {
+            kind: DefaultColorKind::Background,
+            color: background,
+        },
+        RawInputEvent::HostDefaultColor {
+            kind: DefaultColorKind::Foreground,
+            color: foreground,
+        },
+    ]);
+    assert!(outcome.repaint);
+    assert_eq!(state.config.palette.overlay0, Color::Rgb(0x12, 0x34, 0x56));
+    assert_ne!(state.config.palette, initial);
+    let resolved = state.config.palette.clone();
+
+    let updated = state.handle_raw_events(vec![RawInputEvent::HostPaletteColors {
+        colors: vec![(4, background), (8, foreground)],
+    }]);
+    assert!(updated.repaint);
+    assert_ne!(state.config.palette, resolved);
+    assert_eq!(state.config.palette.overlay0, Color::Rgb(0x12, 0x34, 0x56));
+}
+
+#[test]
+fn settings_theme_only_previews_user_choices_and_cancel_follows_current_appearance() {
+    use crate::terminal_theme::HostAppearance;
+
+    let config: Config = toml::from_str(
+        r#"
+[theme]
+name = "catppuccin"
+auto_switch = true
+light_name = "catppuccin-latte"
+dark_name = "catppuccin"
+"#,
+    )
+    .unwrap();
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
+    let appearance = |value| vec![RawInputEvent::HostColorSchemeChanged(value)];
+    state.handle_raw_events(appearance(HostAppearance::Light));
+    let light = state.config.palette.clone();
+    state.open_settings_overlay();
+    state.handle_raw_events(appearance(HostAppearance::Light));
+    assert_eq!(state.config.palette, light);
+
+    let select = |name| {
+        crate::config::THEME_NAMES
+            .iter()
+            .position(|candidate| *candidate == name)
+            .unwrap()
+    };
+    // Selecting the original manual name is still a deliberate preview under auto-switch.
+    state.select_settings_choice(select("catppuccin"));
+    let manual = state.config.palette.clone();
+    assert_ne!(manual, light);
+    state.handle_raw_events(appearance(HostAppearance::Light));
+    assert_eq!(state.config.palette, manual);
+
+    state.select_settings_choice(select("dracula"));
+    let preview = state.config.palette.clone();
+    state.select_settings_section(
+        ClientSettingsSection::Sound,
+        &mut ClientShellInput::default(),
+    );
+    let mut config = config;
+    config.ui.sound.enabled = false;
+    state.config.apply_live_config(&config, &[], &[]);
+    state.refresh_host_palette();
+    assert_eq!(state.config.palette, preview);
+    assert_eq!(state.config.theme_name, "dracula");
+    assert!(!state.config.sound_enabled);
+    state.handle_raw_events(appearance(HostAppearance::Dark));
+    assert_eq!(state.config.palette, preview);
+    state.cancel_settings_overlay();
+    assert_eq!(state.config.palette, manual);
+}
+
+#[test]
+fn settings_cancel_after_config_reload_keeps_rollback_name_and_palette_together() {
+    use crate::terminal_theme::HostAppearance;
+
+    for auto_switch in [false, true] {
+        let mut config = Config::default();
+        config.theme.name = Some("catppuccin".into());
+        config.theme.auto_switch = auto_switch;
+        config.theme.light_name = Some("catppuccin-latte".into());
+        let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
+        state.handle_raw_events(vec![RawInputEvent::HostColorSchemeChanged(
+            HostAppearance::Light,
+        )]);
+        state.open_settings_overlay();
+        let preview_index = crate::config::THEME_NAMES
+            .iter()
+            .position(|name| *name == "dracula")
+            .unwrap();
+        state.select_settings_choice(preview_index);
+        let preview = state.config.palette.clone();
+
+        config.theme.name = Some("nord".into());
+        config.theme.light_name = Some("one-light".into());
+        state.config.apply_live_config(&config, &[], &[]);
+        state.refresh_host_palette();
+        assert_eq!(state.config.theme_name, "dracula");
+        assert_eq!(state.config.palette, preview);
+
+        state.cancel_settings_overlay();
+        assert_eq!(state.config.theme_name, "nord");
+        let expected = crate::app::client_palette_for_appearance(
+            &state.config.theme_runtime,
+            Some(HostAppearance::Light),
+            &state.host_theme,
+        );
+        assert_eq!(state.config.palette, expected);
+
+        state.open_settings_overlay();
+        let Some(ClientShellOverlay::Settings(settings)) = state.overlay.as_ref() else {
+            panic!("expected Settings to reopen");
+        };
+        assert_eq!(crate::config::THEME_NAMES[settings.selected], "nord");
+    }
 }
 
 #[test]

@@ -102,7 +102,7 @@ pub(crate) fn render_tab_bar(
         let rect = Rect::new(x, area.y, width, 1);
         let style = if tab.focused {
             let base = Style::default()
-                .fg(panel_contrast_fg(palette))
+                .fg(palette.accent_foreground())
                 .bg(palette.accent);
             if tab.custom_label {
                 base.add_modifier(Modifier::BOLD)
@@ -280,7 +280,7 @@ fn render_tab_bar_status(
         let width = display_width(&segment.text);
         let style = if segment.accent {
             Style::default()
-                .fg(panel_contrast_fg(palette))
+                .fg(palette.accent_foreground())
                 .bg(palette.accent)
                 .add_modifier(Modifier::BOLD)
         } else {

@@ -3,7 +3,7 @@ use super::*;
 fn choice_style(selected: bool, palette: &Palette) -> Style {
     if selected {
         Style::default()
-            .fg(contrast(palette))
+            .fg(palette.accent_foreground())
             .bg(palette.accent)
             .add_modifier(Modifier::BOLD)
     } else {
@@ -84,7 +84,7 @@ pub(super) fn render_settings_overlay(
         let active = *section == settings.section;
         let style = if active {
             Style::default()
-                .fg(contrast(palette))
+                .fg(palette.accent_foreground())
                 .bg(palette.accent)
                 .add_modifier(Modifier::BOLD)
         } else {
@@ -217,7 +217,7 @@ pub(super) fn render_settings_overlay(
                 " ↵ apply "
             },
             Style::default()
-                .fg(contrast(palette))
+                .fg(palette.accent_foreground())
                 .bg(palette.accent)
                 .add_modifier(Modifier::BOLD),
         );
