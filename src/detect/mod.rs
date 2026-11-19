@@ -243,7 +243,16 @@ fn is_muse_versioned_binary(name: &str) -> bool {
 /// Identify which agent is running from the process name.
 /// Returns `None` for plain shells or unrecognized programs.
 pub fn identify_agent(process_name: &str) -> Option<Agent> {
-    parse_agent_label(process_name)
+    parse_agent_label(process_name).or_else(|| {
+        let name = path_basename(process_name).strip_prefix('.')?;
+        let name = name
+            .strip_suffix("-wrapped")
+            .or_else(|| name.strip_suffix("-unwrapped"))?;
+        if name.starts_with('.') {
+            return None;
+        }
+        lookup_agent(&name.to_lowercase())
+    })
 }
 
 pub fn identify_agent_in_job(job: &crate::platform::ForegroundJob) -> Option<(Agent, String)> {
@@ -390,8 +399,12 @@ fn normalized_process_name(process: &crate::platform::ForegroundProcess) -> Stri
         }
     }
 
-    if identify_agent(effective).is_some() {
-        return effective.to_string();
+    if let Some(agent) = identify_agent(effective) {
+        return if parse_agent_label(effective).is_some() {
+            effective.to_string()
+        } else {
+            agent_label(agent).to_string()
+        };
     }
 
     if let Some(runtime) = process.argv.as_deref().and_then(|argv| argv.first()) {
@@ -889,7 +902,7 @@ fn resolved_agent_name_from_path_token(token: &str) -> Option<String> {
 }
 
 fn agent_name_from_basename(basename: &str) -> Option<String> {
-    let agent = parse_agent_label(basename)?;
+    let agent = identify_agent(basename)?;
     Some(agent_label(agent).to_string())
 }
 
@@ -1634,6 +1647,71 @@ mod tests {
             identify_agent_in_job(&job),
             Some((Agent::Hermes, "hermes".to_string()))
         );
+    }
+
+    #[test]
+    fn identify_nix_wrapper_process_names() {
+        for (name, agent) in [
+            ("claude", Agent::Claude),
+            ("claude-code", Agent::Claude),
+            ("codex", Agent::Codex),
+            ("cursor-agent", Agent::Cursor),
+            ("ghcs", Agent::GithubCopilot),
+        ] {
+            for suffix in ["wrapped", "unwrapped"] {
+                let basename = format!(".{name}-{suffix}");
+                assert_eq!(identify_agent(&basename), Some(agent), "{basename}");
+                let path = format!("/nix/store/example/bin/{basename}");
+                let job = crate::platform::ForegroundJob {
+                    process_group_id: 123,
+                    processes: vec![foreground_process(123, "unknown", &[&path])],
+                };
+                assert_eq!(
+                    identify_agent_in_job(&job),
+                    Some((agent, agent_label(agent).to_string())),
+                    "{path}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn identify_nix_wrapper_process_names_rejects_near_misses() {
+        for name in [
+            "claude-wrapped",
+            "claude-unwrapped",
+            ".claude-wrappedx",
+            ".claude-unwrappedx",
+            ".unknown-wrapped",
+            "..claude-wrapped",
+            "..cline-wrapped",
+            "..cline-unwrapped",
+            ".claude-wrapped-unwrapped",
+            ".-wrapped",
+        ] {
+            assert_eq!(identify_agent(name), None, "{name}");
+            assert_eq!(
+                cmdline_argv0_agent_name(&format!("/nix/store/example/bin/{name}")),
+                None,
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn identify_nix_wrapper_process_name_takes_precedence_over_argv() {
+        for suffix in ["wrapped", "unwrapped"] {
+            let name = format!(".claude-{suffix}");
+            let job = crate::platform::ForegroundJob {
+                process_group_id: 123,
+                processes: vec![foreground_process(123, &name, &["codex"])],
+            };
+            assert_eq!(
+                identify_agent_in_job(&job),
+                Some((Agent::Claude, "claude".to_string())),
+                "{name}"
+            );
+        }
     }
 
     #[test]
