@@ -190,7 +190,7 @@ jobs:
 
   build-windows:
     if: ${{ inputs.build_group == 'windows' || inputs.build_group == 'all' }}
-    runs-on: windows-latest
+    runs-on: windows-2022
     env:
       LIBGHOSTTY_VT_OPTIMIZE: ${{ inputs.libghostty_optimize }}
       LIBGHOSTTY_VT_SIMD: ${{ inputs.libghostty_simd }}
