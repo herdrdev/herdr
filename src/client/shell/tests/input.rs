@@ -197,6 +197,51 @@ dark_name = "catppuccin"
 }
 
 #[test]
+fn settings_cancel_after_config_reload_keeps_rollback_name_and_palette_together() {
+    use crate::terminal_theme::HostAppearance;
+
+    for auto_switch in [false, true] {
+        let mut config = Config::default();
+        config.theme.name = Some("catppuccin".into());
+        config.theme.auto_switch = auto_switch;
+        config.theme.light_name = Some("catppuccin-latte".into());
+        let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
+        state.handle_raw_events(vec![RawInputEvent::HostColorSchemeChanged(
+            HostAppearance::Light,
+        )]);
+        state.open_settings_overlay();
+        let preview_index = crate::config::THEME_NAMES
+            .iter()
+            .position(|name| *name == "dracula")
+            .unwrap();
+        state.select_settings_choice(preview_index);
+        let preview = state.config.palette.clone();
+
+        config.theme.name = Some("nord".into());
+        config.theme.light_name = Some("one-light".into());
+        state.config.apply_live_config(&config, &[], &[]);
+        state.refresh_host_palette();
+        assert_eq!(state.config.theme_name, "dracula");
+        assert_eq!(state.config.palette, preview);
+
+        state.cancel_settings_overlay();
+        assert_eq!(state.config.theme_name, "nord");
+        let expected = crate::app::client_palette_for_appearance(
+            &state.config.theme_runtime,
+            Some(HostAppearance::Light),
+            &state.host_theme,
+        );
+        assert_eq!(state.config.palette, expected);
+
+        state.open_settings_overlay();
+        let Some(ClientShellOverlay::Settings(settings)) = state.overlay.as_ref() else {
+            panic!("expected Settings to reopen");
+        };
+        assert_eq!(crate::config::THEME_NAMES[settings.selected], "nord");
+    }
+}
+
+#[test]
 fn full_host_palette_response_is_sent_as_one_theme_update() {
     use std::fmt::Write as _;
 

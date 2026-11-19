@@ -23,6 +23,9 @@ impl ClientShellState {
             &self.host_theme,
         );
         let preview = if let Some(ClientShellOverlay::Settings(settings)) = self.overlay.as_mut() {
+            settings
+                .original_theme_name
+                .clone_from(&self.config.theme_runtime.manual_name);
             settings.original_palette = effective.clone();
             settings.theme_preview.as_deref()
         } else {
