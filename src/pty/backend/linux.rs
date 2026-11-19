@@ -41,6 +41,7 @@ pub(crate) async fn wait_for_child(
 
 #[cfg(test)]
 mod tests {
+    use std::os::fd::{FromRawFd, OwnedFd};
     use std::sync::Arc;
     use std::time::Duration;
 
@@ -51,8 +52,21 @@ mod tests {
     use crate::pane::{AgentDetection, PaneLaunchEnv, PaneRuntime};
     use crate::render_signal::RenderSignal;
 
+    fn pidfd_supported() -> bool {
+        let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, std::process::id(), 0) };
+        if fd < 0 {
+            return false;
+        }
+        drop(unsafe { OwnedFd::from_raw_fd(fd as _) });
+        true
+    }
+
     #[test]
     fn closed_pane_children_are_reaped_when_blocking_pool_is_busy() {
+        // Without pidfd the blocking fallback needs the pool this test fills.
+        if !pidfd_supported() {
+            return;
+        }
         let rt = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(1)
             .enable_all()
@@ -88,8 +102,16 @@ mod tests {
             runtime.shutdown();
             tokio::time::timeout(Duration::from_secs(1), async {
                 while let Some(event) = event_rx.recv().await {
-                    if matches!(event, AppEvent::PaneDied { .. }) {
-                        return true;
+                    if let AppEvent::PaneDied {
+                        pane_id,
+                        exit_reason,
+                    } = event
+                    {
+                        return pane_id == PaneId::from_raw(42)
+                            && !matches!(
+                                exit_reason,
+                                crate::platform::ChildExitReason::WaitFailed
+                            );
                     }
                 }
                 false
