@@ -272,3 +272,49 @@ verification:
 (cd vendor/libghostty-vt && zig build test-lib-vt -Dtest-filter='cursorAbsolute keeps the hyperlink when style migration splits the page')
 just maintenance-test
 ```
+
+## 0009 ANSI BiDi mode (BDSM) and ANSI DECRQM replies
+
+status: active
+
+patch: `vendor/patches/libghostty-vt/0009-ansi-bidi-mode.patch`
+
+herdr issue: https://github.com/herdrdev/herdr/issues/5118
+
+upstream discussion: not opened
+
+upstream pr: not opened
+
+vendored base: `44f2a44df7e8c4a0c6df3f7d872ef3d7ead88e51`
+
+local files:
+
+- `vendor/libghostty-vt/include/ghostty/vt/modes.h`
+- `vendor/libghostty-vt/src/terminal/modes.zig`
+- `vendor/libghostty-vt/src/terminal/stream.zig`
+
+reason: Herdr's client lays out pane rows in BiDi visual order. A pane
+application that already draws visual order, such as a nested Herdr, opts out
+with ECMA-48 BDSM reset (`CSI 8 l`) and back in with `CSI 8 h`. The vendored
+mode table has no ANSI mode 8, so the switch was dropped and Herdr could not
+read it. The patch adds `bidi_implicit` (ANSI 8, default set) to the mode
+table, so `CSI 8 h`/`l`, RIS, and `ghostty_terminal_get` mode queries track it,
+with a matching `GHOSTTY_MODE_BDSM` header macro.
+
+The CSI `p` dispatch also only accepted two intermediates, so ANSI DECRQM
+(`CSI Ps $ p`, one `$` intermediate) was never answered, although the inner
+branch already decoded it. The patch routes one intermediate into the existing
+DECRQM branch. A nested Herdr's host probe (`CSI 8 $ p`) then sees the pane's
+real BiDi mode.
+
+remove when: the vendored source has an ANSI mode 8 entry and answers ANSI
+DECRQM, and Herdr passes the checks below without this patch.
+
+verification:
+
+```sh
+just test-one bidi_mode_switches_are_mirrored_and_reported_by_decrqm
+just test-one snapshot_reports_panes_that_switched_bidi_to_explicit_mode
+just test-one panes_in_explicit_bidi_mode_are_not_reordered_again
+just maintenance-test
+```

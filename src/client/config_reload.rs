@@ -11,6 +11,7 @@ pub(super) fn apply_reload(
     host_mouse_capture_active: &std::sync::atomic::AtomicBool,
     host_sgr_pixels_active: &std::sync::atomic::AtomicBool,
     prefix_input_source: &mut impl crate::platform::PrefixInputSource,
+    terminal_guard: &TerminalGuard,
 ) -> Result<(), ClientError> {
     let previous_mouse_capture = state.shell_mouse_capture_preference;
     let mut mouse_capture = previous_mouse_capture;
@@ -55,6 +56,13 @@ pub(super) fn apply_reload(
     let (frame, resize) = if let Some(shell) = state.shell.as_mut() {
         let previous_size = shell.surface_size(state.reported_size.0, state.reported_size.1);
         shell.reload_client_config();
+        match terminal_guard.set_host_bidi_explicit(&mut io::stdout(), shell.bidi_enabled()) {
+            // The host keeps rows drawn before the switch in their old
+            // order, so the next frame repaints in full.
+            Ok(true) => state.repaint_pending = true,
+            Ok(false) => {}
+            Err(err) => warn!(err = %err, "failed to update host BiDi mode"),
+        }
         let next_size = shell.surface_size(state.reported_size.0, state.reported_size.1);
         let resize = (previous_size != next_size).then(|| {
             shell.invalidate_pane_surface();

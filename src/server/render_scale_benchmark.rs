@@ -142,10 +142,13 @@ fn workspaces(workspace_count: usize) -> Vec<Workspace> {
 }
 
 fn active_panes(pane_count: usize) -> Vec<Workspace> {
-    let history = history();
+    active_panes_with_history(pane_count, &history())
+}
+
+fn active_panes_with_history(pane_count: usize, history: &str) -> Vec<Workspace> {
     let mut workspace = Workspace::test_new("bench");
     let root_pane = workspace.tabs[0].root_pane;
-    workspace.insert_test_runtime(root_pane, runtime(&history));
+    workspace.insert_test_runtime(root_pane, runtime(history));
     let mut pane_ids = vec![root_pane];
 
     for index in 1..pane_count {
@@ -157,7 +160,7 @@ fn active_panes(pane_count: usize) -> Vec<Workspace> {
             Direction::Horizontal
         };
         let pane_id = workspace.test_split(direction);
-        workspace.insert_test_runtime(pane_id, runtime(&history));
+        workspace.insert_test_runtime(pane_id, runtime(history));
         pane_ids.push(pane_id);
     }
 
@@ -603,6 +606,180 @@ fn print_surface_reuse_profiles() {
     }
 }
 
+/// Row patch of `next` against `previous` for every pane: one changed span per
+/// pane row, as the retained surface path sends for streaming output.
+fn streaming_patch(
+    previous: &crate::protocol::FrameData,
+    next: &PaneSurfaceFrame,
+    base_surface_revision: u64,
+) -> crate::protocol::PaneSurfacePatch {
+    let width = usize::from(next.frame.width);
+    let mut rows = Vec::new();
+    for pane in &next.panes {
+        let inner = pane.inner_rect;
+        for y in inner.y..inner.y + inner.height {
+            let start = usize::from(y) * width + usize::from(inner.x);
+            let end = start + usize::from(inner.width);
+            let changed = |index: &usize| previous.cells[*index] != next.frame.cells[*index];
+            let Some(first) = (start..end).find(changed) else {
+                continue;
+            };
+            let last = (start..end).rev().find(changed).unwrap_or(first);
+            rows.push(crate::protocol::PaneSurfacePatchRow {
+                x: (first - usize::from(y) * width) as u16,
+                y,
+                cells: next.frame.cells[first..=last].to_vec(),
+            });
+        }
+    }
+    crate::protocol::PaneSurfacePatch {
+        boot_id: next.boot_id.clone(),
+        projection_revision: next.projection_revision,
+        base_surface_revision,
+        surface_revision: base_surface_revision + 1,
+        rows,
+        panes: next.panes.clone(),
+        cursor: next.frame.cursor.clone(),
+    }
+}
+
+struct StreamingStats {
+    client: StageStats,
+    full_composes: usize,
+    /// One full client composition of the streamed frame, for reference.
+    compose: StageStats,
+}
+
+/// Streams one line per sample into the root pane, renders the server
+/// surface, and measures the client applying the row patch, including the
+/// full composition it falls back to when the patch touches BiDi rows.
+fn profile_bidi_streaming(
+    pane_count: usize,
+    history: &str,
+    line: &str,
+    bidi: bool,
+) -> StreamingStats {
+    let mut config = Config::default();
+    config.ui.bidi = bidi;
+    let mut pipeline =
+        RenderPipeline::with_config(active_panes_with_history(pane_count, history), &config);
+    let surface_size = pipeline.client.surface_size(COLS, ROWS);
+    let area = Rect::new(0, 0, surface_size.cols, surface_size.rows);
+    let target = Some(crate::ui::TabSurfaceTarget {
+        workspace_index: 0,
+        tab_index: 0,
+    });
+    let render = |pipeline: &mut RenderPipeline| {
+        let rendered = super::client_shell::render_pane_surface(
+            &mut pipeline.app,
+            target,
+            area,
+            true,
+            true,
+            HostCellSize {
+                width_px: 1,
+                height_px: 1,
+            },
+            &pipeline.graphics_delivery,
+            1,
+        )
+        .expect("benchmark surface");
+        pipeline.graphics_delivery = rendered.graphics_delivery;
+        PaneSurfaceFrame {
+            boot_id: "bench-boot".into(),
+            projection_revision: 1,
+            surface_revision: 0,
+            frame: rendered.frame,
+            panes: rendered.panes,
+            splits: rendered.splits,
+            popup: rendered.popup,
+            graphics: rendered.graphics,
+        }
+    };
+    let initial = render(&mut pipeline);
+    let mut previous = initial.frame.clone();
+    pipeline.client.set_pane_surface(initial);
+    pipeline.client.compose(COLS, ROWS).expect("initial frame");
+    // The root pane keeps the largest share of the split layout.
+    let streaming = pipeline.app.state.workspaces[0].tabs[0].root_pane;
+    let mut samples = Vec::with_capacity(SAMPLE_COUNT);
+    let mut compose_samples = Vec::with_capacity(SAMPLE_COUNT);
+    let mut full_composes = 0;
+    for iteration in 0..WARMUP_COUNT + SAMPLE_COUNT {
+        pipeline
+            .app
+            .state
+            .runtime_for_pane_in_workspace(&pipeline.app.terminal_runtimes, 0, streaming)
+            .expect("streaming runtime")
+            .test_process_pty_bytes(format!("{iteration:04} {line}\r\n").as_bytes());
+        let next = render(&mut pipeline);
+        let patch = streaming_patch(&previous, &next, iteration as u64);
+        previous = next.frame;
+        let started = Instant::now();
+        let composed = pipeline
+            .client
+            .apply_pane_surface_patch_needs_compose(patch)
+            .expect("benchmark patch was rejected");
+        if composed {
+            black_box(pipeline.client.compose(COLS, ROWS).expect("fallback frame"));
+        }
+        let elapsed = started.elapsed();
+        let started = Instant::now();
+        black_box(
+            pipeline
+                .client
+                .compose(COLS, ROWS)
+                .expect("reference frame"),
+        );
+        if iteration >= WARMUP_COUNT {
+            samples.push(elapsed);
+            compose_samples.push(started.elapsed());
+            full_composes += usize::from(composed);
+        }
+    }
+    StreamingStats {
+        client: summarize(samples),
+        full_composes,
+        compose: summarize(compose_samples),
+    }
+}
+
+fn print_bidi_streaming_profiles() {
+    let ascii_line = "compiling module parser abc 123 finished in 42 ms, cache warm, 7 warnings";
+    let hebrew_line = "מהדר את המודול parser abc 123 הסתיים תוך 42 ms, המטמון חם, 7 אזהרות";
+    let history_of = |line: &str| -> String {
+        (0..2_000)
+            .map(|index| format!("{index} {line}\r\n"))
+            .collect()
+    };
+    println!("streaming output patches at {COLS}x{ROWS}: client apply + fallback compose per line");
+    println!(
+        "       panes  content  bidi  full_composes  median_us  p95_us  max_us  full_compose_median_us"
+    );
+    for pane_count in [1, 15] {
+        for (content, line) in [("ascii", ascii_line), ("hebrew", hebrew_line)] {
+            let history = history_of(line);
+            for bidi in [false, true] {
+                let stats = profile_bidi_streaming(pane_count, &history, line, bidi);
+                println!(
+                    "  {pane_count:>10}  {content:>7}  {bidi:>4}  {:>10}/{SAMPLE_COUNT}  {:>9}  {:>6}  {:>6}  {:>22}",
+                    stats.full_composes,
+                    stats.client.median_us,
+                    stats.client.p95_us,
+                    stats.client.max_us,
+                    stats.compose.median_us
+                );
+            }
+        }
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+#[ignore = "manual BiDi streaming patch profile"]
+async fn bidi_streaming_profile() {
+    print_bidi_streaming_profiles();
+}
+
 #[tokio::test(flavor = "current_thread")]
 #[ignore = "manual client-rendered pipeline scaling profile"]
 async fn render_scale_profile() {
@@ -613,6 +790,7 @@ async fn render_scale_profile() {
     print_token_rule_profiles();
     print_surface_reuse_profiles();
     print_surface_damage_profiles();
+    print_bidi_streaming_profiles();
 }
 
 /// Dirty-row collection while output scrolls a large pane, the host's hot path

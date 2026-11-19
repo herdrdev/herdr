@@ -523,6 +523,25 @@ claude = "on"
 
 Search the [Config reference](/docs/config-reference/) for scrollback limits, nested launches, and other advanced or experimental settings. See [Session state and restore](/docs/session-state/) before enabling pane screen history; that guide explains the security trade-off of saving pane contents.
 
+## Right-to-left text
+
+Herdr draws every pane cell itself, so the outer terminal cannot apply bidirectional layout to pane text. Herdr shows Hebrew, Arabic, and other right-to-left text in reading order by default.
+
+Each pane row is laid out with the Unicode Bidirectional Algorithm and a left-to-right base direction, inside that pane only. Copying, selection text, and `herdr agent read` keep the logical order, while the cursor, mouse clicks, and highlights follow the drawn glyphs. Runs of box-drawing characters split a row, so table frames stay in place.
+
+No outer terminal setting is needed. At startup Herdr asks the outer terminal whether it reorders text itself (the ECMA-48 BiDi mode, `BDSM`). When it does, as WezTerm can, Herdr switches it to explicit mode so text is not reordered twice, and switches it back on exit. When the terminal reports that its BiDi mode is permanently set and cannot be switched, Herdr leaves pane text in logical order for that terminal to lay out. Terminals that do no bidirectional layout are left unchanged.
+
+An application that already draws its text in visual order can opt out for its own pane with the ECMA-48 BiDi mode sequence `CSI 8 l` (for example `printf '\e[8l'`), and opt back in with `CSI 8 h`. Herdr answers BiDi mode queries from pane applications, so a Herdr running inside a pane opts out automatically and nested sessions are not reordered twice.
+
+To draw pane text in logical order everywhere instead, turn the layout off:
+
+```toml
+[ui]
+bidi = false
+```
+
+Changes apply on config reload.
+
 ## Kitty graphics
 
 Applications and plugins integrate through the standard Kitty graphics protocol emitted in pane terminal output. Herdr renders these images by default in compatible outer terminals. The external socket pane-overlay API has been removed; there is no replacement socket image API.

@@ -50,6 +50,7 @@ extern "C" {
 #define GHOSTTY_MODE_INSERT           (ghostty_mode_new(4, true))    /**< Insert mode */
 #define GHOSTTY_MODE_SRM              (ghostty_mode_new(12, true))   /**< Send/receive mode */
 #define GHOSTTY_MODE_LINEFEED         (ghostty_mode_new(20, true))   /**< Linefeed/new line mode */
+#define GHOSTTY_MODE_BDSM             (ghostty_mode_new(8, true))    /**< BiDi implicit mode (ECMA-48 BDSM) */
 /** @} */
 
 /** @name DEC Private Modes

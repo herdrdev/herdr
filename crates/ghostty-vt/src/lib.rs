@@ -187,6 +187,8 @@ pub const MOUSE_FORMAT_SGR: ffi::GhosttyMouseFormat =
 pub const MOUSE_FORMAT_SGR_PIXELS: ffi::GhosttyMouseFormat =
     ffi::GhosttyMouseFormat_GHOSTTY_MOUSE_FORMAT_SGR_PIXELS;
 
+/// ECMA-48 BiDi implicit mode (BDSM), ANSI mode 8. Bit 15 marks ANSI modes.
+pub const MODE_BIDI_IMPLICIT: u16 = 0x8000 | 8;
 pub const MODE_APPLICATION_CURSOR_KEYS: u16 = 1;
 pub const MODE_FOCUS_EVENT: u16 = 1004;
 pub const MODE_MOUSE_UTF8: u16 = 1005;

@@ -27,9 +27,12 @@ use super::frame_output::clear_received_kitty_graphics;
 
 /// Sets up the terminal for client mode (raw mode, optional mouse, keyboard enhancements).
 ///
+/// `bidi` says whether this client lays out pane rows in BiDi visual order
+/// itself; a host that reorders text too is then switched to explicit mode.
+///
 /// Returns a guard that restores the terminal when dropped.
-pub(super) fn setup_terminal(mouse_capture: bool) -> io::Result<TerminalGuard> {
-    setup_terminal_with_capabilities(true, mouse_capture)
+pub(super) fn setup_terminal(mouse_capture: bool, bidi: bool) -> io::Result<TerminalGuard> {
+    setup_terminal_with_capabilities(true, mouse_capture, bidi)
 }
 
 /// Sets up a direct attach terminal.
@@ -38,12 +41,14 @@ pub(super) fn setup_terminal(mouse_capture: bool) -> io::Result<TerminalGuard> {
 /// capture lets wheel events drive the attached viewport or reach child
 /// programs that requested mouse input.
 pub(super) fn setup_direct_attach_terminal(mouse_capture: bool) -> io::Result<TerminalGuard> {
-    setup_terminal_with_capabilities(false, mouse_capture)
+    // The attached pane's own bytes reach the host, so the host keeps its BiDi mode.
+    setup_terminal_with_capabilities(false, mouse_capture, false)
 }
 
 pub(super) fn setup_terminal_with_capabilities(
     enable_client_protocols: bool,
     mouse_capture: bool,
+    bidi: bool,
 ) -> io::Result<TerminalGuard> {
     ratatui::init();
     let mut terminal_guard = TerminalGuard {
@@ -54,6 +59,8 @@ pub(super) fn setup_terminal_with_capabilities(
         reset_modify_other_keys: false,
         modify_other_keys_sequence: None,
         reset_host_color_scheme_reports: false,
+        host_bidi: None,
+        host_bidi_explicit: Arc::new(AtomicBool::new(false)),
         restore_claimed: Arc::new(AtomicBool::new(false)),
         restored: false,
         #[cfg(windows)]
@@ -126,6 +133,10 @@ pub(super) fn setup_terminal_with_capabilities(
     terminal_guard.host_escape_disambiguation_active = host_probe.escape_disambiguation;
     terminal_guard.host_sgr_pixel_mouse = host_probe.sgr_pixel_mouse;
     terminal_guard.buffered_host_input = buffered_host_input;
+    if enable_client_protocols {
+        terminal_guard.host_bidi = host_probe.host_bidi;
+        terminal_guard.set_host_bidi_explicit(&mut io::stdout(), bidi)?;
+    }
     Ok(terminal_guard)
 }
 
@@ -143,6 +154,10 @@ pub(super) struct TerminalGuard {
     /// The modifyOtherKeys sequence written at setup, re-sent on refresh.
     modify_other_keys_sequence: Option<&'static [u8]>,
     reset_host_color_scheme_reports: bool,
+    /// The host's ECMA-48 BiDi mode (BDSM) reported at startup.
+    host_bidi: Option<HostBidiMode>,
+    /// Set while Herdr holds the host in explicit BiDi mode and owes `CSI 8 h`.
+    host_bidi_explicit: Arc<AtomicBool>,
     restore_claimed: Arc<AtomicBool>,
     restored: bool,
     #[cfg(windows)]
@@ -159,6 +174,7 @@ const MAX_BUFFERED_HOST_INPUT: usize = 64 * 1024;
 struct HostKeyboardProbeResponses {
     flags: Option<u16>,
     sgr_pixel_mouse_status: Option<u8>,
+    bidi_status: Option<u8>,
     primary_device_attributes: bool,
 }
 
@@ -168,12 +184,30 @@ pub(super) struct HostTerminalProbe {
     pub(super) escape_disambiguation: bool,
     /// None when the host did not answer; exact pixel input stays disabled.
     pub(super) sgr_pixel_mouse: Option<bool>,
+    /// The host's ECMA-48 BiDi mode (BDSM). None when the host does not
+    /// recognize the mode or did not answer.
+    pub(super) host_bidi: Option<HostBidiMode>,
+}
+
+/// The outer terminal's ECMA-48 BiDi mode (BDSM, ANSI mode 8) from DECRPM.
+// Windows clients do not probe the host, so they never construct a mode.
+#[cfg_attr(windows, allow(dead_code))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum HostBidiMode {
+    /// Status 1: the host reorders text itself and can be switched to
+    /// explicit mode.
+    Implicit,
+    /// Status 3: the host always reorders text itself; `CSI 8 l` cannot stop
+    /// it.
+    PermanentlyImplicit,
+    /// Status 2 or 4: the host draws text in the order it receives it.
+    Explicit,
 }
 
 #[cfg(not(windows))]
 fn query_host_capabilities(query_keyboard: bool) -> (HostTerminalProbe, Vec<u8>) {
-    const FULL_QUERY: &[u8] = b"\x1b[?1016$p\x1b[?u\x1b[c";
-    const PIXEL_MOUSE_QUERY: &[u8] = b"\x1b[?1016$p\x1b[c";
+    const FULL_QUERY: &[u8] = b"\x1b[?1016$p\x1b[?u\x1b[8$p\x1b[c";
+    const PIXEL_MOUSE_QUERY: &[u8] = b"\x1b[?1016$p\x1b[8$p\x1b[c";
 
     let mut buffered_input = Vec::new();
     let query = if query_keyboard {
@@ -243,9 +277,16 @@ fn host_terminal_probe(responses: &HostKeyboardProbeResponses) -> HostTerminalPr
         Some(0 | 4) => Some(false),
         _ => None,
     };
+    let host_bidi = match responses.bidi_status {
+        Some(1) => Some(HostBidiMode::Implicit),
+        Some(3) => Some(HostBidiMode::PermanentlyImplicit),
+        Some(2 | 4) => Some(HostBidiMode::Explicit),
+        _ => None,
+    };
     HostTerminalProbe {
         escape_disambiguation: host_escape_disambiguation_confirmed(responses),
         sgr_pixel_mouse,
+        host_bidi,
     }
 }
 
@@ -284,6 +325,16 @@ fn consume_host_keyboard_probe_responses(
             };
             offset += control_string_end;
             continue;
+        }
+        // DECRPM for an ANSI mode: CSI 8 ; Ps $ y.
+        match host_bidi_mode_report(&buffered_input[offset..]) {
+            Some(Some((status, len))) => {
+                responses.bidi_status = Some(status);
+                buffered_input.drain(offset..offset + len);
+                continue;
+            }
+            Some(None) => break,
+            None => {}
         }
         if !buffered_input[offset..].starts_with(b"\x1b[?") {
             offset += 1;
@@ -354,6 +405,32 @@ fn parse_sgr_pixel_mouse_status(body: &[u8]) -> Option<u8> {
     (fields.next().is_none() && status <= 4).then_some(status)
 }
 
+/// Matches a BDSM report at the start of `bytes`: Some(Some((status, len)))
+/// for a whole report, Some(None) when the bytes so far could still become
+/// one, and None otherwise.
+#[cfg(not(windows))]
+fn host_bidi_mode_report(bytes: &[u8]) -> Option<Option<(u8, usize)>> {
+    const PREFIX: &[u8] = b"\x1b[8;";
+    if bytes.len() < PREFIX.len() {
+        return PREFIX.starts_with(bytes).then_some(None);
+    }
+    if !bytes.starts_with(PREFIX) {
+        return None;
+    }
+    let rest = &bytes[PREFIX.len()..];
+    let Some(&status) = rest.first() else {
+        return Some(None);
+    };
+    if !(b'0'..=b'4').contains(&status) {
+        return None;
+    }
+    match &rest[1..] {
+        [] | [b'$'] => Some(None),
+        [b'$', b'y', ..] => Some(Some((status - b'0', PREFIX.len() + 3))),
+        _ => None,
+    }
+}
+
 #[cfg(not(windows))]
 fn host_control_string_end(bytes: &[u8]) -> Option<Option<usize>> {
     if bytes.first() != Some(&0x1b) {
@@ -403,7 +480,11 @@ pub(super) fn write_host_color_scheme_report_mode(
 pub(super) fn write_terminal_restore_postlude(
     writer: &mut impl io::Write,
     reset_host_color_scheme_reports: bool,
+    restore_host_bidi_implicit: bool,
 ) -> io::Result<()> {
+    if restore_host_bidi_implicit {
+        writer.write_all(HOST_BIDI_IMPLICIT)?;
+    }
     if reset_host_color_scheme_reports {
         writer.write_all(
             crate::terminal_theme::HOST_COLOR_SCHEME_REPORT_DISABLE_SEQUENCE.as_bytes(),
@@ -413,6 +494,11 @@ pub(super) fn write_terminal_restore_postlude(
     writer.write_all(b"\x1b[?25h\x1b[0 q")?;
     writer.flush()
 }
+
+/// ECMA-48 BDSM: the host reorders text itself.
+const HOST_BIDI_IMPLICIT: &[u8] = b"\x1b[8h";
+/// ECMA-48 BDSM: the application already laid out text in visual order.
+const HOST_BIDI_EXPLICIT: &[u8] = b"\x1b[8l";
 
 pub(super) fn should_draw_host_cursor(mode: crate::config::HostCursorModeConfig) -> bool {
     match mode {
@@ -664,6 +750,7 @@ fn restore_terminal_state_once(
     reset_keyboard_enhancements: bool,
     reset_modify_other_keys: bool,
     reset_host_color_scheme_reports: bool,
+    host_bidi_explicit: &AtomicBool,
     #[cfg(windows)] restore_windows_input_mode: &WindowsInputModeRestore,
 ) -> io::Result<()> {
     if restore_claimed.swap(true, Ordering::AcqRel) {
@@ -675,6 +762,7 @@ fn restore_terminal_state_once(
         reset_keyboard_enhancements,
         reset_modify_other_keys,
         reset_host_color_scheme_reports,
+        host_bidi_explicit.swap(false, Ordering::AcqRel),
         #[cfg(windows)]
         restore_windows_input_mode,
     )
@@ -684,6 +772,7 @@ fn restore_terminal_state(
     reset_keyboard_enhancements: bool,
     reset_modify_other_keys: bool,
     reset_host_color_scheme_reports: bool,
+    restore_host_bidi_implicit: bool,
     #[cfg(windows)] restore_windows_input_mode: Option<u32>,
 ) -> io::Result<()> {
     let _ = clear_received_kitty_graphics(&mut io::stdout());
@@ -715,8 +804,11 @@ fn restore_terminal_state(
     }
 
     let restore_result = ratatui::try_restore();
-    let postlude_result =
-        write_terminal_restore_postlude(&mut io::stdout(), reset_host_color_scheme_reports);
+    let postlude_result = write_terminal_restore_postlude(
+        &mut io::stdout(),
+        reset_host_color_scheme_reports,
+        restore_host_bidi_implicit,
+    );
 
     #[cfg(windows)]
     if windows_win32_input_mode_enabled() {
@@ -815,6 +907,43 @@ impl TerminalGuard {
         std::mem::take(&mut self.buffered_host_input)
     }
 
+    /// Whether the host reorders text itself and cannot be switched to
+    /// explicit mode. The client then leaves pane rows in logical order,
+    /// because laying them out too would reorder text twice.
+    pub(super) fn host_reorders_text_permanently(&self) -> bool {
+        self.host_bidi == Some(HostBidiMode::PermanentlyImplicit)
+    }
+
+    /// Holds a host that reorders text itself in explicit BiDi mode while this
+    /// client reorders pane rows, so text is not reordered twice. Herdr only
+    /// ever returns the host to implicit mode after switching it away, and
+    /// never writes to a host whose mode is permanent.
+    /// Returns whether the host mode changed.
+    pub(super) fn set_host_bidi_explicit(
+        &self,
+        writer: &mut impl io::Write,
+        explicit: bool,
+    ) -> io::Result<bool> {
+        if self.host_bidi != Some(HostBidiMode::Implicit)
+            || self.restore_claimed.load(Ordering::Acquire)
+        {
+            return Ok(false);
+        }
+        if self.host_bidi_explicit.load(Ordering::Acquire) == explicit {
+            return Ok(false);
+        }
+        writer.write_all(if explicit {
+            HOST_BIDI_EXPLICIT
+        } else {
+            HOST_BIDI_IMPLICIT
+        })?;
+        writer.flush()?;
+        // Record the mode only once the host has it, so a failed switch is
+        // retried and restore does not undo a switch that never happened.
+        self.host_bidi_explicit.store(explicit, Ordering::Release);
+        Ok(true)
+    }
+
     /// Re-sends the keyboard and input modes enabled at setup. A host that
     /// reset its terminal state (a reconnect or window reload) forgets them,
     /// which turns Shift+Enter and Ctrl+Enter into plain Enter.
@@ -827,6 +956,10 @@ impl TerminalGuard {
         // Direct attach leaves these modes to the attached pane.
         if !self.reset_keyboard_enhancements || self.restore_claimed.load(Ordering::Acquire) {
             return Ok(());
+        }
+        // A host reset also returns BDSM to its implicit default.
+        if self.host_bidi_explicit.load(Ordering::Acquire) {
+            writer.write_all(HOST_BIDI_EXPLICIT)?;
         }
         write_host_keyboard_protocol_refresh(
             writer,
@@ -859,6 +992,7 @@ impl TerminalGuard {
         let reset_keyboard_enhancements = self.reset_keyboard_enhancements;
         let reset_modify_other_keys = self.reset_modify_other_keys;
         let reset_host_color_scheme_reports = self.reset_host_color_scheme_reports;
+        let host_bidi_explicit = self.host_bidi_explicit.clone();
         #[cfg(windows)]
         let restore_windows_input_mode = self.restore_windows_input_mode.clone();
         move || {
@@ -867,6 +1001,7 @@ impl TerminalGuard {
                 reset_keyboard_enhancements,
                 reset_modify_other_keys,
                 reset_host_color_scheme_reports,
+                &host_bidi_explicit,
                 #[cfg(windows)]
                 &restore_windows_input_mode,
             );
@@ -880,6 +1015,7 @@ impl TerminalGuard {
             self.reset_keyboard_enhancements,
             self.reset_modify_other_keys,
             self.reset_host_color_scheme_reports,
+            &self.host_bidi_explicit,
             #[cfg(windows)]
             &self.restore_windows_input_mode,
         )
@@ -894,6 +1030,7 @@ impl Drop for TerminalGuard {
                 self.reset_keyboard_enhancements,
                 self.reset_modify_other_keys,
                 self.reset_host_color_scheme_reports,
+                &self.host_bidi_explicit,
                 #[cfg(windows)]
                 &self.restore_windows_input_mode,
             );
@@ -978,6 +1115,8 @@ mod tests {
             reset_modify_other_keys: modify_other_keys_sequence.is_some(),
             modify_other_keys_sequence,
             reset_host_color_scheme_reports: false,
+            host_bidi: None,
+            host_bidi_explicit: Arc::new(AtomicBool::new(false)),
             restore_claimed: Arc::new(AtomicBool::new(false)),
             // Keep Drop from writing restore sequences to the test's stdout.
             restored: true,
@@ -1224,6 +1363,185 @@ mod tests {
             buffered,
             b"a\x1b[?7;1ub\x1b[?65536uc\x1b[?1016;5$y\x1b[?1006;2$y"
         );
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn host_capability_probe_consumes_fragmented_bidi_mode_reports() {
+        let stream = b"be\x1b[?1016;2$yfore\x1b[8;1$y-mid\x1b[?7u-\x1b[?1;2cafter";
+
+        for split in 1..stream.len() {
+            let mut buffered = Vec::new();
+            let mut responses = HostKeyboardProbeResponses::default();
+            buffered.extend_from_slice(&stream[..split]);
+            consume_host_keyboard_probe_responses(&mut buffered, &mut responses);
+            buffered.extend_from_slice(&stream[split..]);
+            consume_host_keyboard_probe_responses(&mut buffered, &mut responses);
+
+            assert_eq!(responses.bidi_status, Some(1), "split {split}");
+            assert_eq!(responses.sgr_pixel_mouse_status, Some(2), "split {split}");
+            assert_eq!(responses.flags, Some(7), "split {split}");
+            assert!(responses.primary_device_attributes, "split {split}");
+            assert_eq!(buffered, b"before-mid-after", "split {split}");
+        }
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn host_capability_probe_maps_bidi_mode_states() {
+        for (status, expected) in [
+            (0, None),
+            (1, Some(HostBidiMode::Implicit)),
+            (2, Some(HostBidiMode::Explicit)),
+            (3, Some(HostBidiMode::PermanentlyImplicit)),
+            (4, Some(HostBidiMode::Explicit)),
+        ] {
+            let mut buffered = format!("a\x1b[?1016;2$y\x1b[8;{status}$yb\x1b[?1;2c").into_bytes();
+            let mut responses = HostKeyboardProbeResponses::default();
+
+            consume_host_keyboard_probe_responses(&mut buffered, &mut responses);
+
+            let probe = host_terminal_probe(&responses);
+            assert_eq!(probe.host_bidi, expected, "status {status}");
+            assert_eq!(probe.sgr_pixel_mouse, Some(true), "status {status}");
+            assert_eq!(buffered, b"ab", "status {status}");
+        }
+        // No reply at all leaves the host mode unknown.
+        let mut buffered = b"\x1b[?1;2c".to_vec();
+        let mut responses = HostKeyboardProbeResponses::default();
+        consume_host_keyboard_probe_responses(&mut buffered, &mut responses);
+        assert_eq!(host_terminal_probe(&responses).host_bidi, None);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn host_bidi_probe_preserves_typed_input_and_malformed_reports() {
+        // Typed bytes, a pasted report, and malformed or other-mode reports stay input.
+        let kept = b"8;1$y\x1b[8;5$y\x1b[8;1$x\x1b[18;1$y\x1b[8;1y\x1b[200~\x1b[8;1$y\x1b[201~";
+        let mut buffered = [kept.as_slice(), b"\x1b[8;2$y\x1b[?1;2c"].concat();
+        let mut responses = HostKeyboardProbeResponses::default();
+
+        consume_host_keyboard_probe_responses(&mut buffered, &mut responses);
+
+        assert_eq!(
+            host_terminal_probe(&responses).host_bidi,
+            Some(HostBidiMode::Explicit)
+        );
+        assert_eq!(buffered, kept);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn host_bidi_explicit_mode_follows_the_bidi_setting_and_survives_refresh() {
+        let mut guard = refresh_test_guard(true, true, None);
+        guard.host_bidi = Some(HostBidiMode::Implicit);
+        let mut output = Vec::new();
+        // The result says whether the host mode changed, so a live reload
+        // knows to repaint rows drawn under the previous mode.
+        assert!(guard.set_host_bidi_explicit(&mut output, true).unwrap());
+        assert!(!guard.set_host_bidi_explicit(&mut output, true).unwrap());
+        assert_eq!(output, b"\x1b[8l");
+        assert_eq!(
+            refresh_bytes(&guard, false, false),
+            b"\x1b[8l\x1b[<1u\x1b[>7u\x1b[?2004h"
+        );
+        // A live reload that turns BiDi layout off hands reordering back.
+        output.clear();
+        guard.set_host_bidi_explicit(&mut output, false).unwrap();
+        guard.set_host_bidi_explicit(&mut output, false).unwrap();
+        assert_eq!(output, b"\x1b[8h");
+        output.clear();
+        guard.set_host_bidi_explicit(&mut output, true).unwrap();
+        assert_eq!(output, b"\x1b[8l");
+        assert!(guard.host_bidi_explicit.load(Ordering::Acquire));
+
+        // Hosts that do not reorder text, did not answer, or reorder text
+        // permanently are never switched.
+        for host_bidi in [
+            None,
+            Some(HostBidiMode::Explicit),
+            Some(HostBidiMode::PermanentlyImplicit),
+        ] {
+            let mut guard = refresh_test_guard(true, true, None);
+            guard.host_bidi = host_bidi;
+            let mut output = Vec::new();
+            assert!(!guard.set_host_bidi_explicit(&mut output, true).unwrap());
+            assert!(!guard.set_host_bidi_explicit(&mut output, false).unwrap());
+            assert!(output.is_empty(), "host_bidi {host_bidi:?}");
+            assert!(!guard.host_bidi_explicit.load(Ordering::Acquire));
+            assert_eq!(
+                refresh_bytes(&guard, false, false),
+                b"\x1b[<1u\x1b[>7u\x1b[?2004h",
+                "host_bidi {host_bidi:?}"
+            );
+            assert_eq!(
+                guard.host_reorders_text_permanently(),
+                host_bidi == Some(HostBidiMode::PermanentlyImplicit)
+            );
+        }
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn permanently_implicit_host_bidi_is_left_alone_and_restore_writes_nothing() {
+        let mut buffered = b"\x1b[8;3$y\x1b[?1;2c".to_vec();
+        let mut responses = HostKeyboardProbeResponses::default();
+        consume_host_keyboard_probe_responses(&mut buffered, &mut responses);
+        let mut guard = refresh_test_guard(true, true, None);
+        guard.host_bidi = host_terminal_probe(&responses).host_bidi;
+        assert!(guard.host_reorders_text_permanently());
+
+        let mut output = Vec::new();
+        assert!(!guard.set_host_bidi_explicit(&mut output, true).unwrap());
+        assert!(output.is_empty(), "CSI 8 l cannot switch a permanent mode");
+        // Nothing was switched, so restore owes the host no CSI 8 h.
+        assert!(!guard.host_bidi_explicit.load(Ordering::Acquire));
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn host_bidi_explicit_mode_is_recorded_only_after_the_host_write_succeeds() {
+        struct FailingWriter {
+            fail_flush: bool,
+        }
+        impl io::Write for FailingWriter {
+            fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+                if self.fail_flush {
+                    Ok(buf.len())
+                } else {
+                    Err(io::Error::other("write failed"))
+                }
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Err(io::Error::other("flush failed"))
+            }
+        }
+
+        let mut guard = refresh_test_guard(true, true, None);
+        guard.host_bidi = Some(HostBidiMode::Implicit);
+        for fail_flush in [false, true] {
+            assert!(guard
+                .set_host_bidi_explicit(&mut FailingWriter { fail_flush }, true)
+                .is_err());
+            assert!(!guard.host_bidi_explicit.load(Ordering::Acquire));
+        }
+        // The failed switch is retried rather than treated as already applied,
+        // and restore does not emit implicit mode for a switch that never landed.
+        let mut output = Vec::new();
+        assert!(guard.set_host_bidi_explicit(&mut output, true).unwrap());
+        assert_eq!(output, b"\x1b[8l");
+        assert!(guard.host_bidi_explicit.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn terminal_restore_postlude_returns_host_bidi_only_when_switched() {
+        let mut output = Vec::new();
+        write_terminal_restore_postlude(&mut output, false, true).unwrap();
+        assert_eq!(output, b"\x1b[8h\x1b[?25h\x1b[0 q");
+
+        output.clear();
+        write_terminal_restore_postlude(&mut output, false, false).unwrap();
+        assert!(!output.windows(4).any(|bytes| bytes == b"\x1b[8h"));
     }
 
     #[test]

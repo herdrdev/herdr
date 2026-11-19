@@ -1000,6 +1000,12 @@
           "description": "Show agent labels in split pane borders when no manual pane label is set."
         },
         {
+          "key": "ui.bidi",
+          "type": "boolean",
+          "default": "true",
+          "description": "Show right-to-left text such as Hebrew and Arabic in reading order, using the Unicode Bidirectional Algorithm with a left-to-right base direction inside each pane. Copied text, selection text, and pane reads keep logical order; the cursor, mouse, and selection highlight follow the drawn glyphs. When the outer terminal reports that it reorders text itself (ECMA-48 BiDi mode), Herdr switches it to explicit mode while running and back on exit. A terminal that reports this mode as permanently set lays pane text out itself, so Herdr leaves it in logical order. A pane application that already draws visual order opts out for its own pane with CSI 8 l and back in with CSI 8 h; a Herdr nested in a pane does this automatically. Set it to false to draw logical order everywhere. Changes apply on config reload."
+        },
+        {
           "key": "ui.hide_tab_bar_when_single_tab",
           "type": "boolean",
           "default": "false",

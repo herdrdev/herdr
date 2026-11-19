@@ -2595,7 +2595,12 @@ impl PaneRuntime {
                 let title_requested =
                     result.terminal_title_changed && render_dirty.request_terminal_title(pane_id);
                 let render_requested = result.request_render && render_dirty.request_pty(pane_id);
-                if title_requested || render_requested {
+                // A BiDi mode switch changes how clients lay out this pane, and
+                // only a full render republishes the pane projection.
+                if result.bidi_mode_changed {
+                    render_dirty.request_generic();
+                }
+                if title_requested || render_requested || result.bidi_mode_changed {
                     render_notify.notify_one();
                 }
                 if let Some(delay) = result.render_delay {
@@ -2800,7 +2805,12 @@ impl PaneRuntime {
                 let title_requested =
                     result.terminal_title_changed && render_dirty.request_terminal_title(pane_id);
                 let render_requested = result.request_render && render_dirty.request_pty(pane_id);
-                if title_requested || render_requested {
+                // A BiDi mode switch changes how clients lay out this pane, and
+                // only a full render republishes the pane projection.
+                if result.bidi_mode_changed {
+                    render_dirty.request_generic();
+                }
+                if title_requested || render_requested || result.bidi_mode_changed {
                     render_notify.notify_one();
                 }
                 if let Some(delay) = result.render_delay {
@@ -3484,6 +3494,12 @@ impl PaneRuntime {
 
     pub fn sgr_pixel_mouse_enabled(&self) -> bool {
         self.terminal.sgr_pixel_mouse_enabled()
+    }
+
+    /// Whether the pane application drew its text in visual order and asked,
+    /// with ECMA-48 `CSI 8 l`, not to be reordered again.
+    pub fn bidi_explicit(&self) -> bool {
+        self.terminal.bidi_explicit()
     }
 
     pub fn plain_page_keys_use_host_scrollback(&self) -> Option<bool> {

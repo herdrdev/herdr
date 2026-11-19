@@ -111,7 +111,9 @@ impl ClientShellState {
             content_revision: pane.content_revision,
             offset_from_bottom: pane.scroll.map(|scroll| scroll.offset_from_bottom),
             row: mouse.row.saturating_sub(hit.inner_rect.y),
-            col: mouse.column.saturating_sub(hit.inner_rect.x),
+            col: self
+                .content_column(mouse.column, mouse.row)
+                .saturating_sub(hit.inner_rect.x),
         };
         if !self.link_hover_target_current(&target) || !target.content_revision.is_multiple_of(2) {
             outcome.repaint |= self.clear_link_hover();

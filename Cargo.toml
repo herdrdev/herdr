@@ -52,6 +52,8 @@ tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 unicode-width = "0.2"
 unicode-segmentation = "1.13.1"
+# UAX #9 visual reordering for BiDi pane row layout (`[ui] bidi`).
+unicode-bidi = "0.3.18"
 schemars = { version = "1.2.1", features = ["derive"] }
 
 [patch.crates-io]

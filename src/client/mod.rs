@@ -202,6 +202,9 @@ fn run_client_with_mode(
             .with_process_endpoint_preferences(&socket_path)
     });
     let mouse_capture = loaded_config.config.ui.mouse_capture;
+    let bidi = shell_config
+        .as_ref()
+        .is_some_and(shell::ClientShellConfig::bidi_enabled);
     let mouse_scroll_lines = loaded_config.config.ui.mouse_scroll_lines();
     let redraw_on_focus_gained = loaded_config.config.ui.redraw_on_focus_gained;
     let host_cursor = loaded_config.config.ui.host_cursor;
@@ -263,7 +266,7 @@ fn run_client_with_mode(
     let mut terminal_guard = if direct_attach {
         setup_direct_attach_terminal(mouse_capture)
     } else {
-        setup_terminal(mouse_capture)
+        setup_terminal(mouse_capture, bidi)
     }
     .map_err(|err| {
         eprintln!("herdr: failed to set up terminal: {err}");
@@ -272,6 +275,9 @@ fn run_client_with_mode(
     loop_config.host_escape_disambiguation_active =
         terminal_guard.host_escape_disambiguation_active();
     loop_config.host_sgr_pixel_mouse = terminal_guard.host_sgr_pixel_mouse();
+    if let Some(shell) = loop_config.shell_config.as_mut() {
+        shell.set_host_reorders_text(terminal_guard.host_reorders_text_permanently());
+    }
     loop_config.initial_host_input = terminal_guard.take_buffered_host_input();
 
     let shell_surface_size = loop_config
@@ -2034,6 +2040,7 @@ async fn run_client_loop(
                         &host_mouse_capture_active,
                         &host_sgr_pixels_active,
                         &mut prefix_input_source,
+                        _terminal_guard,
                     )?,
                     ServerMessage::MouseCapture {
                         enabled,

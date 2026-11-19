@@ -1064,6 +1064,11 @@ pub struct ClientShellPane {
     pub foreground_cwd: Option<String>,
     pub focused: bool,
     pub right_click_passthrough: bool,
+    /// The pane application switched ECMA-48 BiDi to explicit mode
+    /// (`CSI 8 l`): it draws text in visual order, so clients must not
+    /// reorder its rows. Older endpoints omit it, which means implicit mode.
+    #[serde(default)]
+    pub bidi_explicit: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2850,6 +2855,7 @@ mod tests {
                 foreground_cwd: Some("/repo".into()),
                 focused: true,
                 right_click_passthrough: false,
+                bidi_explicit: false,
             }],
             agents: Vec::new(),
             commands: vec![ClientShellCommand {
