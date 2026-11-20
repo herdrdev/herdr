@@ -47,6 +47,7 @@ mod pty;
 mod raw_input;
 mod release_notes;
 mod remote;
+mod rex;
 mod render_prof;
 mod render_signal;
 mod selection;

@@ -50,6 +50,9 @@ toml = "0.8"
 toml_edit = "0.22"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+tokio-tungstenite = { version = "0.27", features = ["unix"] }
+tungstenite = "0.27"
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 unicode-width = "0.2"
 unicode-segmentation = "1.13.1"
 schemars = { version = "1.2.1", features = ["derive"] }
