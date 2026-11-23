@@ -362,7 +362,11 @@ fn read_line_unbuffered(stream: &mut UnixStream) -> io::Result<String> {
     let mut bytes = Vec::new();
     let mut byte = [0u8; 1];
     loop {
-        let read = stream.read(&mut byte)?;
+        let read = match stream.read(&mut byte) {
+            Ok(read) => read,
+            Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
+            Err(err) => return Err(err),
+        };
         if read == 0 {
             return Err(io::Error::new(
                 io::ErrorKind::UnexpectedEof,
@@ -474,10 +478,17 @@ fn recv_fd_batch(stream: &UnixStream, wanted: usize) -> io::Result<Vec<RawFd>> {
     msg.msg_control = control.as_mut_ptr() as *mut libc::c_void;
     msg.msg_controllen = control.len() as _;
 
-    let read = unsafe { libc::recvmsg(stream.as_raw_fd(), &mut msg, 0) };
-    if read < 0 {
-        return Err(io::Error::last_os_error());
-    }
+    let read = loop {
+        msg.msg_controllen = control.len() as _;
+        let read = unsafe { libc::recvmsg(stream.as_raw_fd(), &mut msg, 0) };
+        if read >= 0 {
+            break read;
+        }
+        let err = io::Error::last_os_error();
+        if err.kind() != io::ErrorKind::Interrupted {
+            return Err(err);
+        }
+    };
 
     let mut out = Vec::new();
     unsafe {

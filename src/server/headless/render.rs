@@ -717,10 +717,11 @@ impl HeadlessServer {
                         broken_clients.push(client_id);
                         continue;
                     };
-                    if projection_framed.is_some_and(|framed| writer.control.send(framed).is_err())
-                        || writer.control.send(completion_framed).is_err()
-                        || writer.control.send(snapshot_framed).is_err()
-                    {
+                    let mut state_framed = projection_framed.unwrap_or_default();
+                    state_framed.reserve_exact(completion_framed.len() + snapshot_framed.len());
+                    state_framed.extend_from_slice(&completion_framed);
+                    state_framed.extend_from_slice(&snapshot_framed);
+                    if writer.control.send_state(state_framed).is_err() {
                         broken_clients.push(client_id);
                         continue;
                     }

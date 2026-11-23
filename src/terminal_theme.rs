@@ -21,6 +21,23 @@ impl HostAppearance {
 }
 
 impl RgbColor {
+    pub(crate) fn contrast_ratio(self, other: Self) -> f64 {
+        fn luminance(color: RgbColor) -> f64 {
+            let channel = |value: u8| {
+                let value = f64::from(value) / 255.0;
+                if value <= 0.04045 {
+                    value / 12.92
+                } else {
+                    ((value + 0.055) / 1.055).powf(2.4)
+                }
+            };
+            0.2126 * channel(color.r) + 0.7152 * channel(color.g) + 0.0722 * channel(color.b)
+        }
+        let a = luminance(self);
+        let b = luminance(other);
+        (a.max(b) + 0.05) / (a.min(b) + 0.05)
+    }
+
     pub fn inferred_appearance(self) -> HostAppearance {
         let luminance = u32::from(self.r) * 299 + u32::from(self.g) * 587 + u32::from(self.b) * 114;
         if luminance >= 128_000 {

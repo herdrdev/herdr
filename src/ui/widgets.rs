@@ -1,16 +1,4 @@
-use ratatui::{
-    layout::{Constraint, Layout, Rect},
-    style::Color,
-};
-
-use crate::app::state::Palette;
-
-pub(super) fn panel_contrast_fg(palette: &Palette) -> Color {
-    match palette.panel_bg {
-        Color::Reset => palette.surface_dim,
-        color => color,
-    }
-}
+use ratatui::layout::{Constraint, Layout, Rect};
 
 pub(crate) fn centered_popup_rect(area: Rect, popup_width: u16, popup_height: u16) -> Option<Rect> {
     let popup_width = popup_width.min(area.width.saturating_sub(4));

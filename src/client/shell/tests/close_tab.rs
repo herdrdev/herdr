@@ -66,6 +66,70 @@ fn assert_tab_close(outcome: &ClientShellInput) {
 }
 
 #[test]
+fn destructive_buttons_keep_their_own_foreground_when_accent_text_changes() {
+    use crate::terminal_theme::{RgbColor, TerminalTheme};
+    let mut host = TerminalTheme {
+        foreground: Some(RgbColor {
+            r: 238,
+            g: 238,
+            b: 238,
+        }),
+        background: Some(RgbColor {
+            r: 16,
+            g: 16,
+            b: 16,
+        }),
+        ..Default::default()
+    };
+    host.palette[4] = Some(RgbColor {
+        r: 20,
+        g: 20,
+        b: 245,
+    });
+    host.palette[8] = Some(RgbColor {
+        r: 24,
+        g: 24,
+        b: 24,
+    });
+    host.palette[9] = Some(RgbColor {
+        r: 255,
+        g: 200,
+        b: 200,
+    });
+    let palette = Palette::terminal_for_host(&host);
+    let danger = crate::protocol::color_to_u32(palette.fill_foreground());
+    let accent = crate::protocol::color_to_u32(palette.accent_foreground());
+    assert_ne!(danger, accent);
+
+    for overlay in [
+        ClientShellOverlay::ConfirmClose(ClientConfirmCloseOverlay {
+            workspace_id: "ws_1".into(),
+            close_group: false,
+            tab_target: None,
+            title: "close".into(),
+            detail: "confirm".into(),
+        }),
+        ClientShellOverlay::WorktreeRemove(ClientWorktreeRemoveOverlay {
+            workspace_id: "ws_1".into(),
+            path: "path".into(),
+            error: None,
+            removing: false,
+            force_confirmation: false,
+        }),
+    ] {
+        let mut state = close_state(true, 1);
+        state.config.palette = palette.clone();
+        state.overlay = Some(overlay);
+        let frame = state.compose(106, 24).unwrap();
+        let primary = state.hits.overlay_primary;
+        assert!(primary.width > 3);
+        let cell = &frame.cells[usize::from(primary.y) * 106 + usize::from(primary.x + 3)];
+        assert_eq!(cell.bg, crate::protocol::color_to_u32(palette.red));
+        assert_eq!(cell.fg, danger);
+    }
+}
+
+#[test]
 fn last_tab_close_waits_for_keyboard_or_mouse_confirmation() {
     for menu in [false, true] {
         let mut state = close_state(true, 1);

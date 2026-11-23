@@ -21,7 +21,7 @@ describe("official publishing workflow boundaries", () => {
     expect(checks.run.trim().split("\n")).toEqual(["just ci", "just docs-contract-test"]);
     expect(preview.jobs.build.strategy.matrix.include).toContainEqual({
       target: "x86_64-pc-windows-msvc",
-      os: "windows-latest",
+      os: "windows-2022",
       name: "herdr-windows-x86_64.zip",
     });
     expect(preview.jobs.publish.needs).toContain("build");

@@ -100,6 +100,7 @@ impl App {
         let (palette, theme_name) = super::resolve_effective_theme(
             &self.state.theme_runtime,
             self.state.host_terminal_appearance,
+            None,
         );
         if self.state.theme_name == theme_name && self.state.palette == palette {
             return false;

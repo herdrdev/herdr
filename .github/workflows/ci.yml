@@ -60,7 +60,7 @@ jobs:
           - os: macos-latest
             kind: unix
             nextest_filter: not binary(live_handoff)
-          - os: windows-latest
+          - os: windows-2022
             kind: windows
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15

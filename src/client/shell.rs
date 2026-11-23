@@ -236,13 +236,6 @@ fn status_color(
     }
 }
 
-fn panel_contrast_fg(palette: &Palette) -> ratatui::style::Color {
-    match palette.panel_bg {
-        ratatui::style::Color::Reset => palette.surface_dim,
-        color => color,
-    }
-}
-
 fn blit_pane_surface(target: &mut FrameData, source: &FrameData, area: Rect) {
     let copy_width = source.width.min(area.width);
     let copy_height = source.height.min(area.height);
