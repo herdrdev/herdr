@@ -274,10 +274,42 @@ pub(super) fn snapshot_with_completions(
                     crate::api::schema::SidebarWidgetSlot::Top => {
                         protocol::ClientShellSidebarWidgetSlot::Top
                     }
+                    crate::api::schema::SidebarWidgetSlot::Bottom => {
+                        protocol::ClientShellSidebarWidgetSlot::Bottom
+                    }
                 },
                 title: widget.title,
                 right: widget.right,
                 lines: widget.lines,
+                rows: widget
+                    .rows
+                    .into_iter()
+                    .map(|row| protocol::ClientShellSidebarWidgetRow {
+                        left: row.left,
+                        right: row.right,
+                        tone: match row.tone {
+                            crate::api::schema::SidebarWidgetTone::Normal => {
+                                protocol::ClientShellSidebarWidgetTone::Normal
+                            }
+                            crate::api::schema::SidebarWidgetTone::Ok => {
+                                protocol::ClientShellSidebarWidgetTone::Ok
+                            }
+                            crate::api::schema::SidebarWidgetTone::Warn => {
+                                protocol::ClientShellSidebarWidgetTone::Warn
+                            }
+                            crate::api::schema::SidebarWidgetTone::Err => {
+                                protocol::ClientShellSidebarWidgetTone::Err
+                            }
+                            crate::api::schema::SidebarWidgetTone::Accent => {
+                                protocol::ClientShellSidebarWidgetTone::Accent
+                            }
+                            crate::api::schema::SidebarWidgetTone::Muted => {
+                                protocol::ClientShellSidebarWidgetTone::Muted
+                            }
+                        },
+                    })
+                    .collect(),
+                action: widget.action,
             })
             .collect(),
     };

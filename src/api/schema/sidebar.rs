@@ -21,6 +21,30 @@ use crate::cli::sidebar_bindings as bindings;
 pub enum SidebarWidgetSlot {
     #[default]
     Top,
+    Bottom,
+}
+
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum SidebarWidgetTone {
+    #[default]
+    Normal,
+    Ok,
+    Warn,
+    Err,
+    Accent,
+    Muted,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct SidebarWidgetRow {
+    pub left: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub right: Option<String>,
+    #[serde(default)]
+    pub tone: SidebarWidgetTone,
 }
 
 cli_params! {
@@ -41,6 +65,12 @@ cli_params! {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         pub lines: Vec<String> => Field::new(Vec::new())
             .input(bindings::line()),
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        pub rows: Vec<SidebarWidgetRow> => Field::new(Vec::new())
+            .input(bindings::row()),
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub action: Option<String> => Field::new(None)
+            .input(bindings::action()),
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[schemars(range(min = 1, max = 86_400_000))]
         pub ttl_ms: Option<u64> => Field::new(None)
@@ -70,4 +100,8 @@ pub struct SidebarWidgetInfo {
     pub right: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub lines: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rows: Vec<SidebarWidgetRow>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action: Option<String>,
 }

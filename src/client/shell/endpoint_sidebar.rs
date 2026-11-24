@@ -249,15 +249,40 @@ pub(super) fn render_expanded(
     } else {
         Rect::new(area.right().saturating_sub(1), area.y, 1, area.height)
     };
-    let top_widgets = active_snapshot
+    let sidebar_widgets = active_snapshot
         .map(|snapshot| snapshot.sidebar_widgets.as_slice())
         .unwrap_or(&[]);
     let sections_area =
-        super::sidebar::render_top_sidebar_widgets(buffer, area, top_widgets, palette);
-    let (workspace_area, detail_area) =
-        crate::ui::expanded_sidebar_sections(sections_area, state.sidebar_section_split);
-    hits.sidebar_section_divider =
-        crate::ui::sidebar_section_divider_rect(sections_area, state.sidebar_section_split);
+        super::sidebar::render_top_sidebar_widgets(buffer, area, sidebar_widgets, palette, hits);
+    let (middle_area, rendered_bottom_widgets) = super::sidebar::render_bottom_sidebar_widgets(
+        buffer,
+        sections_area,
+        sidebar_widgets,
+        palette,
+        config.show_agents,
+        hits,
+    );
+    let (workspace_area, detail_area) = if config.show_agents {
+        hits.sidebar_section_divider =
+            crate::ui::sidebar_section_divider_rect(middle_area, state.sidebar_section_split);
+        crate::ui::expanded_sidebar_sections(middle_area, state.sidebar_section_split)
+    } else {
+        hits.sidebar_section_divider = Rect::default();
+        let ws_height = if rendered_bottom_widgets {
+            middle_area.height
+        } else {
+            middle_area.height.saturating_sub(1)
+        };
+        (
+            Rect::new(
+                middle_area.x,
+                middle_area.y,
+                middle_area.width.saturating_sub(1),
+                ws_height,
+            ),
+            Rect::default(),
+        )
+    };
     put_text(
         buffer,
         workspace_area.x,
@@ -558,16 +583,18 @@ pub(super) fn render_expanded(
             }),
         );
     }
-    super::endpoint_agents::render_expanded(
-        buffer,
-        detail_area,
-        active_snapshot.and_then(|snapshot| snapshot.agent_view_label.as_deref()),
-        state.endpoints,
-        state.active_endpoint_id,
-        config,
-        state.agent_scroll,
-        hits,
-    );
+    if config.show_agents {
+        super::endpoint_agents::render_expanded(
+            buffer,
+            detail_area,
+            active_snapshot.and_then(|snapshot| snapshot.agent_view_label.as_deref()),
+            state.endpoints,
+            state.active_endpoint_id,
+            config,
+            state.agent_scroll,
+            hits,
+        );
+    }
     hits.sidebar_toggle = Rect::new(
         area.right().saturating_sub(2),
         area.bottom().saturating_sub(1),

@@ -2038,6 +2038,16 @@ impl ClientShellState {
                     outcome.repaint = true;
                     return;
                 }
+                if let Some(action) = self.hits.sidebar_widgets.iter().find_map(|(rect, action)| {
+                    super::contains(*rect, point).then(|| action.clone())
+                }) {
+                    if let Some(method) =
+                        super::render::sidebar::parse_sidebar_widget_action(&action)
+                    {
+                        self.push_endpoint_method(method, outcome);
+                    }
+                    return;
+                }
                 if self.handle_endpoint_machine_click(point, outcome) {
                     return;
                 }

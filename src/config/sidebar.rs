@@ -475,11 +475,27 @@ impl Default for SpacesSidebarConfig {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize, Serialize)]
+fn default_show_agents() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(default)]
 pub struct SidebarConfig {
+    #[serde(default = "default_show_agents")]
+    pub show_agents: bool,
     pub agents: AgentsSidebarConfig,
     pub spaces: SpacesSidebarConfig,
+}
+
+impl Default for SidebarConfig {
+    fn default() -> Self {
+        Self {
+            show_agents: true,
+            agents: AgentsSidebarConfig::default(),
+            spaces: SpacesSidebarConfig::default(),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -489,6 +505,7 @@ mod tests {
     #[test]
     fn defaults_match_the_compact_agent_and_existing_space_layouts() {
         let config = SidebarConfig::default();
+        assert!(config.show_agents);
         assert_eq!(
             config.agents.rows,
             vec![
@@ -725,5 +742,20 @@ rows = [[{ token = "$status", rules = [{ contains = "error", bold = true }] }]]
                 "accepted key {key:?}"
             );
         }
+    }
+
+    #[test]
+    fn show_agents_defaults_true_and_can_be_disabled() {
+        let default_cfg: crate::config::Config = toml::from_str("").expect("empty config");
+        assert!(default_cfg.ui.sidebar.show_agents);
+
+        let hidden_cfg: crate::config::Config = toml::from_str(
+            r#"
+[ui.sidebar]
+show_agents = false
+"#,
+        )
+        .expect("show_agents = false config");
+        assert!(!hidden_cfg.ui.sidebar.show_agents);
     }
 }

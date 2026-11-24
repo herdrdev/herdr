@@ -196,39 +196,333 @@ pub(crate) fn render_collapsed_sidebar(
     );
 }
 
+fn widget_tone_color(
+    tone: crate::protocol::ClientShellSidebarWidgetTone,
+    palette: &Palette,
+) -> ratatui::style::Color {
+    match tone {
+        crate::protocol::ClientShellSidebarWidgetTone::Ok => palette.green,
+        crate::protocol::ClientShellSidebarWidgetTone::Warn => palette.yellow,
+        crate::protocol::ClientShellSidebarWidgetTone::Err => palette.red,
+        crate::protocol::ClientShellSidebarWidgetTone::Accent => palette.accent,
+        crate::protocol::ClientShellSidebarWidgetTone::Muted => palette.overlay0,
+        crate::protocol::ClientShellSidebarWidgetTone::Normal
+        | crate::protocol::ClientShellSidebarWidgetTone::Unknown => palette.text,
+    }
+}
+
+fn widget_right_style(
+    tone: crate::protocol::ClientShellSidebarWidgetTone,
+    palette: &Palette,
+) -> Style {
+    match tone {
+        crate::protocol::ClientShellSidebarWidgetTone::Ok => Style::default().fg(palette.green),
+        crate::protocol::ClientShellSidebarWidgetTone::Warn => Style::default().fg(palette.yellow),
+        crate::protocol::ClientShellSidebarWidgetTone::Err => Style::default().fg(palette.red),
+        crate::protocol::ClientShellSidebarWidgetTone::Accent => {
+            Style::default().fg(palette.accent)
+        }
+        crate::protocol::ClientShellSidebarWidgetTone::Normal
+        | crate::protocol::ClientShellSidebarWidgetTone::Muted
+        | crate::protocol::ClientShellSidebarWidgetTone::Unknown => {
+            Style::default().fg(palette.subtext0)
+        }
+    }
+}
+
+fn is_widget_status_glyph(ch: char) -> bool {
+    matches!(
+        ch,
+        '·' | '●' | '✓' | '↑' | '×' | '!' | '○' | '◐' | '◔' | '▸' | '▪'
+    )
+}
+
+fn render_widget_row_left(
+    buffer: &mut Buffer,
+    x: u16,
+    y: u16,
+    max_width: u16,
+    text: &str,
+    tone: crate::protocol::ClientShellSidebarWidgetTone,
+    palette: &Palette,
+) {
+    if max_width == 0 {
+        return;
+    }
+    let truncated = crate::ui::truncate_end(text, usize::from(max_width));
+    let base_style = if tone == crate::protocol::ClientShellSidebarWidgetTone::Muted {
+        Style::default().fg(palette.overlay0)
+    } else {
+        Style::default().fg(palette.text)
+    };
+    let bar_filled_style = Style::default().fg(match tone {
+        crate::protocol::ClientShellSidebarWidgetTone::Ok => palette.green,
+        crate::protocol::ClientShellSidebarWidgetTone::Warn => palette.yellow,
+        crate::protocol::ClientShellSidebarWidgetTone::Err => palette.red,
+        _ => palette.accent,
+    });
+    let bar_empty_style = Style::default()
+        .fg(palette.overlay0)
+        .add_modifier(Modifier::DIM);
+    let glyph_style = Style::default().fg(widget_tone_color(tone, palette));
+    let color_leading_glyph = !matches!(
+        tone,
+        crate::protocol::ClientShellSidebarWidgetTone::Normal
+            | crate::protocol::ClientShellSidebarWidgetTone::Muted
+            | crate::protocol::ClientShellSidebarWidgetTone::Unknown
+    );
+
+    let mut col = x;
+    let limit = x.saturating_add(max_width);
+    for (index, ch) in truncated.chars().enumerate() {
+        let mut buf = [0u8; 4];
+        let symbol = ch.encode_utf8(&mut buf);
+        let ch_width = display_width(symbol).max(1);
+        if col.saturating_add(ch_width) > limit {
+            break;
+        }
+        let style = if index == 0 && color_leading_glyph && is_widget_status_glyph(ch) {
+            glyph_style
+        } else if ch == '▓' {
+            bar_filled_style
+        } else if ch == '░' {
+            bar_empty_style
+        } else {
+            base_style
+        };
+        put_text(buffer, col, y, ch_width, symbol, style);
+        col = col.saturating_add(ch_width);
+    }
+}
+
+enum WidgetBodyRow<'a> {
+    Structured(&'a crate::protocol::ClientShellSidebarWidgetRow),
+    Plain(&'a str),
+}
+
+fn widget_body_rows(widget: &crate::protocol::ClientShellSidebarWidget) -> Vec<WidgetBodyRow<'_>> {
+    if !widget.rows.is_empty() {
+        widget
+            .rows
+            .iter()
+            .take(crate::sidebar_widgets::MAX_SIDEBAR_WIDGET_ROWS)
+            .map(WidgetBodyRow::Structured)
+            .collect()
+    } else {
+        widget
+            .lines
+            .iter()
+            .take(crate::sidebar_widgets::MAX_SIDEBAR_WIDGET_LINES)
+            .map(|line| WidgetBodyRow::Plain(line.as_str()))
+            .collect()
+    }
+}
+
+fn widget_height(widget: &crate::protocol::ClientShellSidebarWidget) -> u16 {
+    let body_count = widget_body_rows(widget).len() as u16;
+    if body_count == 0 {
+        1
+    } else {
+        // Header + 1 blank spacer row + body rows
+        2 + body_count
+    }
+}
+
+fn render_single_widget(
+    buffer: &mut Buffer,
+    area_x: u16,
+    mut y: u16,
+    body_limit: u16,
+    content_width: u16,
+    widget: &crate::protocol::ClientShellSidebarWidget,
+    palette: &Palette,
+    hits: &mut ShellHitMap,
+) -> u16 {
+    if y >= body_limit {
+        return y;
+    }
+    let header_style = Style::default()
+        .fg(palette.overlay0)
+        .add_modifier(Modifier::BOLD);
+    let header_right_style = Style::default().fg(palette.subtext0);
+    let inner_width = content_width.saturating_sub(1);
+    let start_y = y;
+
+    // Header line: left-aligned title, optional right-aligned status text.
+    let right_text = widget
+        .right
+        .as_deref()
+        .filter(|text| !text.is_empty())
+        .map(|text| format!("{text} "));
+    let right_width = right_text
+        .as_deref()
+        .map(|text| display_width(text).min(content_width.saturating_sub(2)))
+        .unwrap_or(0);
+    let title_budget =
+        inner_width.saturating_sub(right_width.saturating_add(u16::from(right_width > 0)));
+    let title = crate::ui::truncate_end(&widget.title, usize::from(title_budget));
+    put_text(
+        buffer,
+        area_x,
+        y,
+        content_width.saturating_sub(right_width),
+        &format!(" {title}"),
+        header_style,
+    );
+    if let Some(right_text) = right_text {
+        if right_width > 0 {
+            let row_rect = Rect::new(area_x, y, content_width, 1);
+            let truncated_right = crate::ui::truncate_end(&right_text, usize::from(right_width));
+            put_right_text(buffer, row_rect, y, &truncated_right, header_right_style);
+        }
+    }
+    y = y.saturating_add(1);
+
+    let rows = widget_body_rows(widget);
+    if !rows.is_empty() && y < body_limit {
+        // 1 blank spacer row between widget header and first row (matches spaces/machines).
+        y = y.saturating_add(1);
+    }
+
+    for row in rows {
+        if y >= body_limit {
+            break;
+        }
+        match row {
+            WidgetBodyRow::Plain(line) => {
+                let truncated = crate::ui::truncate_end(line, usize::from(inner_width));
+                put_text(
+                    buffer,
+                    area_x,
+                    y,
+                    content_width,
+                    &format!(" {truncated}"),
+                    Style::default().fg(palette.text),
+                );
+            }
+            WidgetBodyRow::Structured(row) => {
+                let right_text = row
+                    .right
+                    .as_deref()
+                    .filter(|text| !text.is_empty())
+                    .map(|text| format!("{text} "));
+                let right_width = right_text
+                    .as_deref()
+                    .map(|text| display_width(text).min(content_width.saturating_sub(2)))
+                    .unwrap_or(0);
+                let left_budget = inner_width
+                    .saturating_sub(right_width.saturating_add(u16::from(right_width > 0)));
+                render_widget_row_left(
+                    buffer,
+                    area_x.saturating_add(1),
+                    y,
+                    left_budget,
+                    &row.left,
+                    row.tone,
+                    palette,
+                );
+                if let Some(right_text) = right_text {
+                    if right_width > 0 {
+                        let row_rect = Rect::new(area_x, y, content_width, 1);
+                        let truncated_right =
+                            crate::ui::truncate_end(&right_text, usize::from(right_width));
+                        put_right_text(
+                            buffer,
+                            row_rect,
+                            y,
+                            &truncated_right,
+                            widget_right_style(row.tone, palette),
+                        );
+                    }
+                }
+            }
+        }
+        y = y.saturating_add(1);
+    }
+
+    if let Some(action) = widget.action.as_ref().filter(|action| !action.is_empty()) {
+        let height = y.saturating_sub(start_y);
+        if height > 0 {
+            hits.sidebar_widgets.push((
+                Rect::new(area_x, start_y, content_width, height),
+                action.clone(),
+            ));
+        }
+    }
+
+    y
+}
+
+pub(in crate::client::shell) fn parse_sidebar_widget_action(
+    spec: &str,
+) -> Option<crate::api::schema::Method> {
+    let mut parts = spec.split(':');
+    if parts.next()? != "plugin" {
+        return None;
+    }
+    let plugin_id = parts.next()?.trim();
+    let entrypoint = parts.next()?.trim();
+    if plugin_id.is_empty() || entrypoint.is_empty() {
+        return None;
+    }
+    let placement = match parts.next().map(str::trim) {
+        None | Some("") => None,
+        Some("overlay") => Some(crate::api::schema::PluginPanePlacement::Overlay),
+        Some("popup") => Some(crate::api::schema::PluginPanePlacement::Popup),
+        Some("split") => Some(crate::api::schema::PluginPanePlacement::Split),
+        Some("tab") => Some(crate::api::schema::PluginPanePlacement::Tab),
+        Some("zoomed") => Some(crate::api::schema::PluginPanePlacement::Zoomed),
+        Some(_) => return None,
+    };
+    if parts.next().is_some() {
+        return None;
+    }
+    Some(crate::api::schema::Method::PluginPaneOpen(
+        crate::api::schema::PluginPaneOpenParams {
+            plugin_id: plugin_id.to_owned(),
+            entrypoint: entrypoint.to_owned(),
+            placement,
+            width: None,
+            height: None,
+            workspace_id: None,
+            target_pane_id: None,
+            direction: None,
+            cwd: None,
+            focus: true,
+            env: std::collections::HashMap::new(),
+        },
+    ))
+}
+
 pub(in crate::client::shell) fn render_top_sidebar_widgets(
     buffer: &mut Buffer,
     area: Rect,
     widgets: &[crate::protocol::ClientShellSidebarWidget],
     palette: &Palette,
+    hits: &mut ShellHitMap,
 ) -> Rect {
     let content_width = area.width.saturating_sub(1);
     if content_width == 0 || area.height < 8 {
         return area;
     }
-    let top_widgets: Vec<&crate::protocol::ClientShellSidebarWidget> = widgets
+    let mut top_widgets: Vec<&crate::protocol::ClientShellSidebarWidget> = widgets
         .iter()
         .filter(|widget| widget.slot == crate::protocol::ClientShellSidebarWidgetSlot::Top)
         .collect();
     if top_widgets.is_empty() {
         return area;
     }
+    top_widgets.sort_by(|a, b| a.source.cmp(&b.source));
 
     let max_widget_rows = area.height.saturating_sub(6);
     if max_widget_rows < 2 {
         return area;
     }
 
-    let header_style = Style::default()
-        .fg(palette.overlay0)
-        .add_modifier(Modifier::BOLD);
-    let right_style = Style::default().fg(palette.subtext0);
-    let line_style = Style::default().fg(palette.text);
     let divider_style = Style::default().fg(palette.surface_dim);
 
     let mut y = area.y;
     let body_limit = area.y.saturating_add(max_widget_rows.saturating_sub(1));
-    let inner_width = content_width.saturating_sub(1);
     let mut rendered_any = false;
 
     for widget in top_widgets {
@@ -239,60 +533,27 @@ pub(in crate::client::shell) fn render_top_sidebar_widgets(
             if y.saturating_add(1) >= body_limit {
                 break;
             }
-            y = y.saturating_add(1);
-        }
-        rendered_any = true;
-
-        // Header line: left-aligned title, optional right-aligned status text.
-        let right_text = widget
-            .right
-            .as_deref()
-            .filter(|text| !text.is_empty())
-            .map(|text| format!("{text} "));
-        let right_width = right_text
-            .as_deref()
-            .map(|text| display_width(text).min(content_width.saturating_sub(2)))
-            .unwrap_or(0);
-        let title_budget =
-            inner_width.saturating_sub(right_width.saturating_add(u16::from(right_width > 0)));
-        let title = crate::ui::truncate_end(&widget.title, usize::from(title_budget));
-        put_text(
-            buffer,
-            area.x,
-            y,
-            content_width.saturating_sub(right_width),
-            &format!(" {title}"),
-            header_style,
-        );
-        if let Some(right_text) = right_text {
-            if right_width > 0 {
-                let row_rect = Rect::new(area.x, y, content_width, 1);
-                let truncated_right =
-                    crate::ui::truncate_end(&right_text, usize::from(right_width));
-                put_right_text(buffer, row_rect, y, &truncated_right, right_style);
-            }
-        }
-        y = y.saturating_add(1);
-
-        for line in widget
-            .lines
-            .iter()
-            .take(crate::sidebar_widgets::MAX_SIDEBAR_WIDGET_LINES)
-        {
-            if y >= body_limit {
-                break;
-            }
-            let truncated = crate::ui::truncate_end(line, usize::from(inner_width));
             put_text(
                 buffer,
                 area.x,
                 y,
                 content_width,
-                &format!(" {truncated}"),
-                line_style,
+                &"─".repeat(usize::from(content_width)),
+                divider_style,
             );
             y = y.saturating_add(1);
         }
+        rendered_any = true;
+        y = render_single_widget(
+            buffer,
+            area.x,
+            y,
+            body_limit,
+            content_width,
+            widget,
+            palette,
+            hits,
+        );
     }
 
     if !rendered_any {
@@ -313,6 +574,78 @@ pub(in crate::client::shell) fn render_top_sidebar_widgets(
     Rect::new(area.x, y, area.width, area.height.saturating_sub(used))
 }
 
+pub(in crate::client::shell) fn render_bottom_sidebar_widgets(
+    buffer: &mut Buffer,
+    area: Rect,
+    widgets: &[crate::protocol::ClientShellSidebarWidget],
+    palette: &Palette,
+    show_agents: bool,
+    hits: &mut ShellHitMap,
+) -> (Rect, bool) {
+    let content_width = area.width.saturating_sub(1);
+    let min_middle_rows: u16 = if show_agents { 8 } else { 5 };
+    let toggle_reserve: u16 = 1;
+    if content_width == 0 || area.height < min_middle_rows + toggle_reserve + 2 {
+        return (area, false);
+    }
+    let mut bottom_widgets: Vec<&crate::protocol::ClientShellSidebarWidget> = widgets
+        .iter()
+        .filter(|widget| widget.slot == crate::protocol::ClientShellSidebarWidgetSlot::Bottom)
+        .collect();
+    if bottom_widgets.is_empty() {
+        return (area, false);
+    }
+    bottom_widgets.sort_by(|a, b| a.source.cmp(&b.source));
+
+    let max_bottom_rows = area.height.saturating_sub(min_middle_rows + toggle_reserve);
+    if max_bottom_rows < 2 {
+        return (area, false);
+    }
+
+    // Each bottom widget has a leading separator line plus its own height.
+    let needed: u16 = bottom_widgets
+        .iter()
+        .map(|widget| 1u16.saturating_add(widget_height(widget)))
+        .fold(0u16, u16::saturating_add);
+    let used = needed.min(max_bottom_rows);
+
+    let start_y = area.bottom().saturating_sub(toggle_reserve + used);
+    let limit_y = area.bottom().saturating_sub(toggle_reserve);
+    let divider_style = Style::default().fg(palette.surface_dim);
+
+    let mut y = start_y;
+    for widget in bottom_widgets {
+        if y.saturating_add(1) >= limit_y {
+            break;
+        }
+        put_text(
+            buffer,
+            area.x,
+            y,
+            content_width,
+            &"─".repeat(usize::from(content_width)),
+            divider_style,
+        );
+        y = y.saturating_add(1);
+        y = render_single_widget(
+            buffer,
+            area.x,
+            y,
+            limit_y,
+            content_width,
+            widget,
+            palette,
+            hits,
+        );
+    }
+
+    let remaining_height = start_y.saturating_sub(area.y);
+    (
+        Rect::new(area.x, area.y, area.width, remaining_height),
+        true,
+    )
+}
+
 pub(crate) fn render_sidebar(
     buffer: &mut Buffer,
     area: Rect,
@@ -329,11 +662,36 @@ pub(crate) fn render_sidebar(
         Rect::new(area.right().saturating_sub(1), area.y, 1, area.height)
     };
     let sections_area =
-        render_top_sidebar_widgets(buffer, area, &snapshot.sidebar_widgets, palette);
-    let (workspace_area, detail_area) =
-        crate::ui::expanded_sidebar_sections(sections_area, state.sidebar_section_split);
-    hits.sidebar_section_divider =
-        crate::ui::sidebar_section_divider_rect(sections_area, state.sidebar_section_split);
+        render_top_sidebar_widgets(buffer, area, &snapshot.sidebar_widgets, palette, hits);
+    let (middle_area, rendered_bottom_widgets) = render_bottom_sidebar_widgets(
+        buffer,
+        sections_area,
+        &snapshot.sidebar_widgets,
+        palette,
+        config.show_agents,
+        hits,
+    );
+    let (workspace_area, detail_area) = if config.show_agents {
+        hits.sidebar_section_divider =
+            crate::ui::sidebar_section_divider_rect(middle_area, state.sidebar_section_split);
+        crate::ui::expanded_sidebar_sections(middle_area, state.sidebar_section_split)
+    } else {
+        hits.sidebar_section_divider = Rect::default();
+        let ws_height = if rendered_bottom_widgets {
+            middle_area.height
+        } else {
+            middle_area.height.saturating_sub(1)
+        };
+        (
+            Rect::new(
+                middle_area.x,
+                middle_area.y,
+                middle_area.width.saturating_sub(1),
+                ws_height,
+            ),
+            Rect::default(),
+        )
+    };
     put_text(
         buffer,
         workspace_area.x,
@@ -549,14 +907,16 @@ pub(crate) fn render_sidebar(
         }
     }
 
-    super::render_agent_panel(
-        buffer,
-        detail_area,
-        snapshot,
-        config,
-        state.agent_scroll,
-        hits,
-    );
+    if config.show_agents {
+        super::render_agent_panel(
+            buffer,
+            detail_area,
+            snapshot,
+            config,
+            state.agent_scroll,
+            hits,
+        );
+    }
 
     hits.sidebar_toggle = Rect::new(
         area.right().saturating_sub(2),

@@ -24,6 +24,8 @@ impl App {
             params.title,
             params.right,
             params.lines,
+            params.rows,
+            params.action,
             ttl,
             std::time::Instant::now(),
         ) {
@@ -85,6 +87,8 @@ mod tests {
                 title: "drover".into(),
                 right: Some("2/5".into()),
                 lines: vec!["● 2 working".into(), "✓ 3 done".into()],
+                rows: vec![],
+                action: None,
                 ttl_ms: Some(1_000),
             }),
         });
@@ -116,6 +120,8 @@ mod tests {
                 title: "drover".into(),
                 right: None,
                 lines: vec!["idle".into()],
+                rows: vec![],
+                action: None,
                 ttl_ms: None,
             }),
         });
@@ -146,6 +152,8 @@ mod tests {
                 title: "drover".into(),
                 right: None,
                 lines: vec![],
+                rows: vec![],
+                action: None,
                 ttl_ms: None,
             }),
         });
@@ -160,6 +168,8 @@ mod tests {
                 title: "   ".into(),
                 right: None,
                 lines: vec![],
+                rows: vec![],
+                action: None,
                 ttl_ms: None,
             }),
         });

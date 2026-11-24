@@ -1,7 +1,8 @@
 use clap::{Arg, ArgMatches, Command};
 
 use crate::api::schema::sidebar::{
-    SidebarClearWidgetProjection, SidebarReportWidgetProjection, SidebarWidgetSlot,
+    SidebarClearWidgetProjection, SidebarReportWidgetProjection, SidebarWidgetRow,
+    SidebarWidgetSlot, SidebarWidgetTone,
 };
 use crate::api::schema::{Method, Request};
 
@@ -28,8 +29,12 @@ pub(crate) fn slot() -> Input<SidebarWidgetSlot> {
             *slot = SidebarWidgetSlot::Top;
             Ok(())
         }
+        "bottom" => {
+            *slot = SidebarWidgetSlot::Bottom;
+            Ok(())
+        }
         other => Err(ParseError::Usage(format!(
-            "unsupported --slot {other:?}; expected: top"
+            "unsupported --slot {other:?}; expected: top, bottom"
         ))),
     })
 }
@@ -59,6 +64,54 @@ pub(crate) fn right() -> Input<Option<String>> {
 pub(crate) fn line() -> Input<Vec<String>> {
     Input::<Vec<String>>::value("line", "TEXT", |slot, value| {
         slot.push(value.to_owned());
+        Ok(())
+    })
+}
+
+fn parse_widget_tone(raw: &str) -> Result<SidebarWidgetTone, ParseError> {
+    match raw.trim() {
+        "" | "normal" => Ok(SidebarWidgetTone::Normal),
+        "ok" => Ok(SidebarWidgetTone::Ok),
+        "warn" => Ok(SidebarWidgetTone::Warn),
+        "err" => Ok(SidebarWidgetTone::Err),
+        "accent" => Ok(SidebarWidgetTone::Accent),
+        "muted" => Ok(SidebarWidgetTone::Muted),
+        other => Err(ParseError::Usage(format!(
+            "unsupported --row tone {other:?}; expected: normal, ok, warn, err, accent, muted"
+        ))),
+    }
+}
+
+pub(crate) fn parse_widget_row(spec: &str) -> Result<SidebarWidgetRow, ParseError> {
+    let mut parts = spec.split('|');
+    let left = parts.next().unwrap_or_default().to_owned();
+    let right = parts
+        .next()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+    let tone = match parts.next() {
+        Some(raw) => parse_widget_tone(raw)?,
+        None => SidebarWidgetTone::Normal,
+    };
+    if parts.next().is_some() {
+        return Err(ParseError::Usage(format!(
+            "invalid --row {spec:?}; expected left[|right[|tone]]"
+        )));
+    }
+    Ok(SidebarWidgetRow { left, right, tone })
+}
+
+pub(crate) fn row() -> Input<Vec<SidebarWidgetRow>> {
+    Input::<Vec<SidebarWidgetRow>>::value("row", "SPEC", |slot, value| {
+        slot.push(parse_widget_row(value)?);
+        Ok(())
+    })
+}
+
+pub(crate) fn action() -> Input<Option<String>> {
+    Input::value("action", "SPEC", |slot, value| {
+        *slot = Some(value.to_owned());
         Ok(())
     })
 }
@@ -190,5 +243,63 @@ mod tests {
                 }
             })
         );
+    }
+
+    #[test]
+    fn report_widget_parses_structured_rows_bottom_slot_and_action() {
+        let req = request(
+            "report-widget",
+            &[
+                "--source",
+                "plugin:drover:sprints",
+                "--slot",
+                "bottom",
+                "--title",
+                "sprints",
+                "--right",
+                "7/10",
+                "--row",
+                "▓▓▓▓▓▓▓░░░|70%|ok",
+                "--row",
+                "● 2 working||warn",
+                "--row",
+                "plain row",
+                "--action",
+                "plugin:herdr-projects:compute:split",
+            ],
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(req).unwrap(),
+            serde_json::json!({
+                "id": "cli:request",
+                "method": "sidebar.report_widget",
+                "params": {
+                    "source": "plugin:drover:sprints",
+                    "slot": "bottom",
+                    "title": "sprints",
+                    "right": "7/10",
+                    "rows": [
+                        { "left": "▓▓▓▓▓▓▓░░░", "right": "70%", "tone": "ok" },
+                        { "left": "● 2 working", "tone": "warn" },
+                        { "left": "plain row", "tone": "normal" }
+                    ],
+                    "action": "plugin:herdr-projects:compute:split"
+                }
+            })
+        );
+
+        assert!(request(
+            "report-widget",
+            &[
+                "--source",
+                "drover",
+                "--title",
+                "drover",
+                "--row",
+                "a|b|bogus"
+            ]
+        )
+        .is_err());
     }
 }

@@ -1,10 +1,11 @@
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
-use crate::api::schema::{SidebarWidgetInfo, SidebarWidgetSlot};
+use crate::api::schema::{SidebarWidgetInfo, SidebarWidgetRow, SidebarWidgetSlot};
 
 pub(crate) const MAX_SIDEBAR_WIDGETS: usize = 8;
 pub(crate) const MAX_SIDEBAR_WIDGET_LINES: usize = 4;
+pub(crate) const MAX_SIDEBAR_WIDGET_ROWS: usize = 8;
 pub(crate) const MAX_SIDEBAR_WIDGET_TEXT_CHARS: usize = 256;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -12,6 +13,8 @@ struct SidebarWidgetEntry {
     title: String,
     right: Option<String>,
     lines: Vec<String>,
+    rows: Vec<SidebarWidgetRow>,
+    action: Option<String>,
     expires_at: Option<Instant>,
 }
 
@@ -48,6 +51,7 @@ pub(crate) fn sanitize_widget_text(raw: &str) -> String {
 }
 
 impl SidebarWidgetStore {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn report(
         &mut self,
         slot: SidebarWidgetSlot,
@@ -55,6 +59,8 @@ impl SidebarWidgetStore {
         title: String,
         right: Option<String>,
         lines: Vec<String>,
+        rows: Vec<SidebarWidgetRow>,
+        action: Option<String>,
         ttl: Option<Duration>,
         now: Instant,
     ) -> Result<bool, &'static str> {
@@ -70,6 +76,21 @@ impl SidebarWidgetStore {
             .take(MAX_SIDEBAR_WIDGET_LINES)
             .map(|line| sanitize_widget_text(&line))
             .collect();
+        let rows: Vec<SidebarWidgetRow> = rows
+            .into_iter()
+            .take(MAX_SIDEBAR_WIDGET_ROWS)
+            .map(|row| SidebarWidgetRow {
+                left: sanitize_widget_text(&row.left),
+                right: row
+                    .right
+                    .map(|value| sanitize_widget_text(&value))
+                    .filter(|value| !value.is_empty()),
+                tone: row.tone,
+            })
+            .collect();
+        let action = action
+            .map(|value| sanitize_widget_text(&value))
+            .filter(|value| !value.is_empty());
         let key = (slot, source);
         if !self.entries.contains_key(&key) && self.entries.len() >= MAX_SIDEBAR_WIDGETS {
             return Err("sidebar widget limit reached");
@@ -79,6 +100,8 @@ impl SidebarWidgetStore {
             title,
             right,
             lines,
+            rows,
+            action,
             expires_at,
         };
         if self.entries.get(&key) == Some(&entry) {
@@ -115,6 +138,8 @@ impl SidebarWidgetStore {
                 title: entry.title.clone(),
                 right: entry.right.clone(),
                 lines: entry.lines.clone(),
+                rows: entry.rows.clone(),
+                action: entry.action.clone(),
             })
             .collect()
     }
@@ -123,6 +148,7 @@ impl SidebarWidgetStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::api::schema::SidebarWidgetTone;
 
     #[test]
     fn report_update_clear_and_line_cap() {
@@ -142,6 +168,8 @@ mod tests {
                     "line 4".into(),
                     "line 5 should be dropped".into(),
                 ],
+                vec![],
+                Some("plugin:herdr-projects:compute:split".into()),
                 None,
                 now,
             )
@@ -155,6 +183,10 @@ mod tests {
         assert_eq!(widgets[0].right.as_deref(), Some("2/5"));
         assert_eq!(widgets[0].lines.len(), MAX_SIDEBAR_WIDGET_LINES);
         assert_eq!(widgets[0].lines[3], "line 4");
+        assert_eq!(
+            widgets[0].action.as_deref(),
+            Some("plugin:herdr-projects:compute:split")
+        );
 
         // Identical report is a no-op.
         let changed = store
@@ -169,6 +201,8 @@ mod tests {
                     "line 3".into(),
                     "line 4".into(),
                 ],
+                vec![],
+                Some("plugin:herdr-projects:compute:split".into()),
                 None,
                 now,
             )
@@ -178,6 +212,41 @@ mod tests {
         assert!(store.clear(SidebarWidgetSlot::Top, "drover"));
         assert!(!store.clear(SidebarWidgetSlot::Top, "drover"));
         assert!(store.snapshot().is_empty());
+    }
+
+    #[test]
+    fn report_structured_rows_capped_at_eight_and_bottom_slot() {
+        let mut store = SidebarWidgetStore::default();
+        let now = Instant::now();
+
+        let rows: Vec<SidebarWidgetRow> = (0..10)
+            .map(|idx| SidebarWidgetRow {
+                left: format!("● row {idx}"),
+                right: Some(format!("{idx}/10")),
+                tone: SidebarWidgetTone::Ok,
+            })
+            .collect();
+        store
+            .report(
+                SidebarWidgetSlot::Bottom,
+                "plugin:drover:sprints".into(),
+                "sprints".into(),
+                Some("2 active".into()),
+                vec![],
+                rows,
+                None,
+                None,
+                now,
+            )
+            .unwrap();
+
+        let widgets = store.snapshot();
+        assert_eq!(widgets.len(), 1);
+        assert_eq!(widgets[0].slot, SidebarWidgetSlot::Bottom);
+        assert_eq!(widgets[0].rows.len(), MAX_SIDEBAR_WIDGET_ROWS);
+        assert_eq!(widgets[0].rows[7].left, "● row 7");
+        assert_eq!(widgets[0].rows[7].right.as_deref(), Some("7/10"));
+        assert_eq!(widgets[0].rows[7].tone, SidebarWidgetTone::Ok);
     }
 
     #[test]
@@ -192,6 +261,8 @@ mod tests {
                 "short".into(),
                 None,
                 vec!["a".into()],
+                vec![],
+                None,
                 Some(Duration::from_secs(5)),
                 now,
             )
@@ -203,6 +274,8 @@ mod tests {
                 "long".into(),
                 None,
                 vec!["b".into()],
+                vec![],
+                None,
                 Some(Duration::from_secs(30)),
                 now,
             )
@@ -231,6 +304,8 @@ mod tests {
                 "   \n\t ".into(),
                 None,
                 vec![],
+                vec![],
+                None,
                 None,
                 now,
             )
@@ -244,6 +319,8 @@ mod tests {
                     format!("title-{idx}"),
                     None,
                     vec![],
+                    vec![],
+                    None,
                     None,
                     now,
                 )
@@ -256,6 +333,8 @@ mod tests {
                 "overflow".into(),
                 None,
                 vec![],
+                vec![],
+                None,
                 None,
                 now,
             )

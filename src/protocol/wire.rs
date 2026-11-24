@@ -957,9 +957,33 @@ pub struct ClientShellSnapshot {
 pub enum ClientShellSidebarWidgetSlot {
     #[default]
     Top,
+    Bottom,
     /// A future sidebar slot that this client does not render.
     #[serde(other)]
     Unknown,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ClientShellSidebarWidgetTone {
+    #[default]
+    Normal,
+    Ok,
+    Warn,
+    Err,
+    Accent,
+    Muted,
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClientShellSidebarWidgetRow {
+    pub left: String,
+    #[serde(default)]
+    pub right: Option<String>,
+    #[serde(default)]
+    pub tone: ClientShellSidebarWidgetTone,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -972,6 +996,10 @@ pub struct ClientShellSidebarWidget {
     pub right: Option<String>,
     #[serde(default)]
     pub lines: Vec<String>,
+    #[serde(default)]
+    pub rows: Vec<ClientShellSidebarWidgetRow>,
+    #[serde(default)]
+    pub action: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

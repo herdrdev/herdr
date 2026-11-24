@@ -565,6 +565,8 @@ fn top_sidebar_widget_renders_above_spaces_and_zero_rows_when_absent() {
                 "● 2 working · ✓ 3 done".into(),
                 "PR #42 waiting review with a very long status line".into(),
             ],
+            rows: vec![],
+            action: None,
         });
     let mut widget_state =
         ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
@@ -582,27 +584,33 @@ fn top_sidebar_widget_renders_above_spaces_and_zero_rows_when_absent() {
         "widget header must not overwrite sidebar border: {header:?}"
     );
 
-    let line1: String = rows[1].chars().take(sidebar_width).collect();
+    let spacer: String = rows[1].chars().take(sidebar_width).collect();
+    assert!(
+        spacer.trim_end_matches('│').trim().is_empty(),
+        "expected blank spacer row below widget header, got {spacer:?}"
+    );
+
+    let line1: String = rows[2].chars().take(sidebar_width).collect();
     assert!(
         line1.contains("● 2 working"),
         "missing first widget line in {line1:?}"
     );
     assert!(line1.ends_with('│'));
 
-    let line2: String = rows[2].chars().take(sidebar_width).collect();
+    let line2: String = rows[3].chars().take(sidebar_width).collect();
     assert!(
         line2.contains("PR #42"),
         "missing second widget line in {line2:?}"
     );
     assert!(line2.ends_with('│'));
 
-    let divider: String = rows[3].chars().take(sidebar_width).collect();
+    let divider: String = rows[4].chars().take(sidebar_width).collect();
     assert!(
         divider.starts_with("───"),
         "expected subtle divider below widget, got {divider:?}"
     );
 
-    let spaces_row: String = rows[4].chars().take(sidebar_width).collect();
+    let spaces_row: String = rows[5].chars().take(sidebar_width).collect();
     assert!(
         spaces_row.starts_with(" spaces"),
         "expected spaces header directly below widget divider, got {spaces_row:?}"
@@ -620,6 +628,8 @@ fn top_sidebar_widget_renders_above_machines_in_multi_endpoint_sidebar() {
             title: "drover".into(),
             right: Some("live".into()),
             lines: vec!["3 tasks queued".into()],
+            rows: vec![],
+            action: None,
         });
 
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
@@ -645,13 +655,204 @@ fn top_sidebar_widget_renders_above_machines_in_multi_endpoint_sidebar() {
 
     let header: String = rows[0].chars().take(sidebar_width).collect();
     assert!(header.contains("drover") && header.contains("live"));
-    let body: String = rows[1].chars().take(sidebar_width).collect();
+    let spacer: String = rows[1].chars().take(sidebar_width).collect();
+    assert!(spacer.trim_end_matches('│').trim().is_empty());
+    let body: String = rows[2].chars().take(sidebar_width).collect();
     assert!(body.contains("3 tasks queued"));
-    let divider: String = rows[2].chars().take(sidebar_width).collect();
+    let divider: String = rows[3].chars().take(sidebar_width).collect();
     assert!(divider.starts_with("───"));
-    let machines_row: String = rows[3].chars().take(sidebar_width).collect();
+    let machines_row: String = rows[4].chars().take(sidebar_width).collect();
     assert!(
         machines_row.starts_with(" machines"),
         "expected machines header directly below widget divider, got {machines_row:?}"
+    );
+}
+
+#[test]
+fn structured_widget_rows_render_tones_progress_bar_and_right_alignment() {
+    let mut snap = snapshot();
+    snap.sidebar_widgets
+        .push(crate::protocol::ClientShellSidebarWidget {
+            source: "drover".into(),
+            slot: crate::protocol::ClientShellSidebarWidgetSlot::Top,
+            title: "compute".into(),
+            right: Some("ok".into()),
+            lines: vec![],
+            rows: vec![
+                crate::protocol::ClientShellSidebarWidgetRow {
+                    left: "● 2 working".into(),
+                    right: Some("3m".into()),
+                    tone: crate::protocol::ClientShellSidebarWidgetTone::Ok,
+                },
+                crate::protocol::ClientShellSidebarWidgetRow {
+                    left: "× 1 blocked".into(),
+                    right: Some("err".into()),
+                    tone: crate::protocol::ClientShellSidebarWidgetTone::Err,
+                },
+                crate::protocol::ClientShellSidebarWidgetRow {
+                    left: "▓▓▓▓░░".into(),
+                    right: Some("67%".into()),
+                    tone: crate::protocol::ClientShellSidebarWidgetTone::Accent,
+                },
+            ],
+            action: Some("plugin:herdr-projects:compute:split".into()),
+        });
+
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snap));
+    state.set_pane_surface(surface());
+    let frame = state.compose(100, 24).expect("structured widget frame");
+    let rows = frame_rows(&frame);
+    let sidebar_width = usize::from(state.config.sidebar_width);
+
+    // Row 0 = header, Row 1 = spacer, Row 2 = ok row, Row 3 = err row, Row 4 = bar row.
+    let row_ok: String = rows[2].chars().take(sidebar_width).collect();
+    assert!(row_ok.contains("● 2 working") && row_ok.contains("3m"));
+    let row_err: String = rows[3].chars().take(sidebar_width).collect();
+    assert!(row_err.contains("× 1 blocked") && row_err.contains("err"));
+    let row_bar: String = rows[4].chars().take(sidebar_width).collect();
+    assert!(row_bar.contains("▓▓▓▓░░") && row_bar.contains("67%"));
+
+    // Verify leading glyph fg colors match palette tones.
+    let width = frame.width as usize;
+    let ok_glyph = &frame.cells[2 * width + 1];
+    assert_eq!(ok_glyph.symbol, "●");
+    assert_eq!(
+        ok_glyph.fg,
+        crate::protocol::color_to_u32(state.config.palette.green)
+    );
+
+    let err_glyph = &frame.cells[3 * width + 1];
+    assert_eq!(err_glyph.symbol, "×");
+    assert_eq!(
+        err_glyph.fg,
+        crate::protocol::color_to_u32(state.config.palette.red)
+    );
+
+    // Verify progress bar filled vs empty colors.
+    let bar_filled = &frame.cells[4 * width + 1];
+    let bar_empty = &frame.cells[4 * width + 5];
+    assert_eq!(bar_filled.symbol, "▓");
+    assert_eq!(
+        bar_filled.fg,
+        crate::protocol::color_to_u32(state.config.palette.accent)
+    );
+    assert_eq!(bar_empty.symbol, "░");
+    assert_eq!(
+        bar_empty.fg,
+        crate::protocol::color_to_u32(state.config.palette.overlay0)
+    );
+
+    // Verify clicking the widget header dispatches PluginPaneOpen.
+    let click = state.handle_input_bytes(b"\x1b[<0;3;1M");
+    let [ClientShellAction::Endpoint { request, .. }] = &click.actions[..] else {
+        panic!(
+            "expected PluginPaneOpen endpoint action, got {:?}",
+            click.actions
+        );
+    };
+    assert!(matches!(
+        &request.method,
+        crate::api::schema::Method::PluginPaneOpen(params)
+            if params.plugin_id == "herdr-projects"
+                && params.entrypoint == "compute"
+                && params.placement == Some(crate::api::schema::PluginPanePlacement::Split)
+    ));
+}
+
+#[test]
+fn show_agents_false_hides_agents_and_renders_top_and_bottom_widgets() {
+    let mut cfg = Config::default();
+    cfg.ui.sidebar.show_agents = false;
+
+    let mut snap = snapshot();
+    snap.sidebar_widgets
+        .push(crate::protocol::ClientShellSidebarWidget {
+            source: "plugin:drover:01-compute".into(),
+            slot: crate::protocol::ClientShellSidebarWidgetSlot::Top,
+            title: "compute".into(),
+            right: Some("ok".into()),
+            lines: vec![],
+            rows: vec![crate::protocol::ClientShellSidebarWidgetRow {
+                left: "● 2 active".into(),
+                right: None,
+                tone: crate::protocol::ClientShellSidebarWidgetTone::Ok,
+            }],
+            action: None,
+        });
+    snap.sidebar_widgets
+        .push(crate::protocol::ClientShellSidebarWidget {
+            source: "plugin:drover:02-feed".into(),
+            slot: crate::protocol::ClientShellSidebarWidgetSlot::Bottom,
+            title: "feed".into(),
+            right: None,
+            lines: vec![],
+            rows: vec![crate::protocol::ClientShellSidebarWidgetRow {
+                left: "✓ merged #12".into(),
+                right: Some("1m".into()),
+                tone: crate::protocol::ClientShellSidebarWidgetTone::Ok,
+            }],
+            action: None,
+        });
+    snap.sidebar_widgets
+        .push(crate::protocol::ClientShellSidebarWidget {
+            source: "plugin:drover:01-sprints".into(),
+            slot: crate::protocol::ClientShellSidebarWidgetSlot::Bottom,
+            title: "sprints".into(),
+            right: Some("3/5".into()),
+            lines: vec![],
+            rows: vec![crate::protocol::ClientShellSidebarWidgetRow {
+                left: "▓▓▓░░".into(),
+                right: Some("60%".into()),
+                tone: crate::protocol::ClientShellSidebarWidgetTone::Accent,
+            }],
+            action: None,
+        });
+
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&cfg));
+    state.set_snapshot(Box::new(snap));
+    state.set_pane_surface(surface());
+    let frame = state.compose(100, 30).expect("no-agents frame");
+    let rows = frame_rows(&frame);
+    let sidebar_width = usize::from(state.config.sidebar_width);
+    let sidebar_rows: Vec<String> = rows
+        .iter()
+        .map(|row| row.chars().take(sidebar_width).collect())
+        .collect();
+
+    assert!(
+        !sidebar_rows.iter().any(|row| row.starts_with(" agents")),
+        "stock agents header should be hidden when show_agents = false: {sidebar_rows:#?}"
+    );
+    let compute_idx = sidebar_rows
+        .iter()
+        .position(|row| row.contains("compute"))
+        .expect("top compute widget");
+    let spaces_idx = sidebar_rows
+        .iter()
+        .position(|row| row.starts_with(" spaces"))
+        .expect("spaces section");
+    let sprints_idx = sidebar_rows
+        .iter()
+        .position(|row| row.contains("sprints"))
+        .expect("bottom sprints widget");
+    let feed_idx = sidebar_rows
+        .iter()
+        .position(|row| row.contains("feed"))
+        .expect("bottom feed widget");
+
+    assert!(compute_idx < spaces_idx);
+    assert!(spaces_idx < sprints_idx);
+    assert!(
+        sprints_idx < feed_idx,
+        "bottom widgets should sort deterministically by source"
+    );
+    assert!(
+        sidebar_rows[sprints_idx - 1].starts_with("───"),
+        "expected separator above sprints widget"
+    );
+    assert!(
+        sidebar_rows[feed_idx - 1].starts_with("───"),
+        "expected separator above feed widget"
     );
 }

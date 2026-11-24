@@ -3910,6 +3910,12 @@
         },
         "SidebarReportWidgetParams": {
           "properties": {
+            "action": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "lines": {
               "items": {
                 "type": "string"
@@ -3921,6 +3927,12 @@
                 "string",
                 "null"
               ]
+            },
+            "rows": {
+              "items": {
+                "$ref": "#/schemas/request/$defs/SidebarWidgetRow"
+              },
+              "type": "array"
             },
             "slot": {
               "$ref": "#/schemas/request/$defs/SidebarWidgetSlot",
@@ -3948,9 +3960,42 @@
           ],
           "type": "object"
         },
+        "SidebarWidgetRow": {
+          "properties": {
+            "left": {
+              "type": "string"
+            },
+            "right": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "tone": {
+              "$ref": "#/schemas/request/$defs/SidebarWidgetTone",
+              "default": "normal"
+            }
+          },
+          "required": [
+            "left"
+          ],
+          "type": "object"
+        },
         "SidebarWidgetSlot": {
           "enum": [
-            "top"
+            "top",
+            "bottom"
+          ],
+          "type": "string"
+        },
+        "SidebarWidgetTone": {
+          "enum": [
+            "normal",
+            "ok",
+            "warn",
+            "err",
+            "accent",
+            "muted"
           ],
           "type": "string"
         },
@@ -10628,6 +10673,12 @@
         },
         "SidebarWidgetInfo": {
           "properties": {
+            "action": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "lines": {
               "items": {
                 "type": "string"
@@ -10639,6 +10690,12 @@
                 "string",
                 "null"
               ]
+            },
+            "rows": {
+              "items": {
+                "$ref": "#/schemas/success_response/$defs/SidebarWidgetRow"
+              },
+              "type": "array"
             },
             "slot": {
               "$ref": "#/schemas/success_response/$defs/SidebarWidgetSlot",
@@ -10657,9 +10714,42 @@
           ],
           "type": "object"
         },
+        "SidebarWidgetRow": {
+          "properties": {
+            "left": {
+              "type": "string"
+            },
+            "right": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "tone": {
+              "$ref": "#/schemas/success_response/$defs/SidebarWidgetTone",
+              "default": "normal"
+            }
+          },
+          "required": [
+            "left"
+          ],
+          "type": "object"
+        },
         "SidebarWidgetSlot": {
           "enum": [
-            "top"
+            "top",
+            "bottom"
+          ],
+          "type": "string"
+        },
+        "SidebarWidgetTone": {
+          "enum": [
+            "normal",
+            "ok",
+            "warn",
+            "err",
+            "accent",
+            "muted"
           ],
           "type": "string"
         },
