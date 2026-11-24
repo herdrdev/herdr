@@ -273,6 +273,7 @@ impl AppState {
                     .iter()
                     .filter_map(|workspace| workspace.metadata_tokens.next_expiry()),
             )
+            .chain(self.sidebar_widgets.next_expiry())
             .min()
     }
 
@@ -370,6 +371,10 @@ impl AppState {
             })
             .collect();
         (changed_panes, changed_workspaces)
+    }
+
+    pub(crate) fn expire_sidebar_widgets(&mut self, now: std::time::Instant) -> bool {
+        self.sidebar_widgets.expire_at(now)
     }
 
     pub(crate) fn pane_is_in_active_tab(&self, ws_idx: usize, pane_id: PaneId) -> bool {

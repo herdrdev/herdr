@@ -527,3 +527,131 @@ fn close_confirmation_error_becomes_client_owned_overlay_and_stable_workspace_cl
             if params.workspace_id == "ws_1" && !params.close_group
     ));
 }
+
+fn frame_rows(frame: &FrameData) -> Vec<String> {
+    frame
+        .cells
+        .chunks(frame.width as usize)
+        .map(|row| {
+            row.iter()
+                .map(|cell| cell.symbol.as_str())
+                .collect::<String>()
+        })
+        .collect()
+}
+
+#[test]
+fn top_sidebar_widget_renders_above_spaces_and_zero_rows_when_absent() {
+    let mut base_state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    base_state.set_snapshot(Box::new(snapshot()));
+    base_state.set_pane_surface(surface());
+    let base_frame = base_state.compose(100, 24).expect("base frame");
+    let base_rows = frame_rows(&base_frame);
+    assert!(
+        base_rows[0].starts_with(" spaces"),
+        "expected spaces header at row 0 when no widgets exist, got: {:?}",
+        base_rows[0]
+    );
+
+    let mut with_widget = snapshot();
+    with_widget
+        .sidebar_widgets
+        .push(crate::protocol::ClientShellSidebarWidget {
+            source: "drover".into(),
+            slot: crate::protocol::ClientShellSidebarWidgetSlot::Top,
+            title: "drover".into(),
+            right: Some("2/5".into()),
+            lines: vec![
+                "● 2 working · ✓ 3 done".into(),
+                "PR #42 waiting review with a very long status line".into(),
+            ],
+        });
+    let mut widget_state =
+        ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    widget_state.set_snapshot(Box::new(with_widget));
+    widget_state.set_pane_surface(surface());
+    let widget_frame = widget_state.compose(100, 24).expect("widget frame");
+    let rows = frame_rows(&widget_frame);
+    let sidebar_width = usize::from(widget_state.config.sidebar_width);
+
+    let header: String = rows[0].chars().take(sidebar_width).collect();
+    assert!(header.contains("drover"), "missing title in {header:?}");
+    assert!(header.contains("2/5"), "missing right text in {header:?}");
+    assert!(
+        header.ends_with('│'),
+        "widget header must not overwrite sidebar border: {header:?}"
+    );
+
+    let line1: String = rows[1].chars().take(sidebar_width).collect();
+    assert!(
+        line1.contains("● 2 working"),
+        "missing first widget line in {line1:?}"
+    );
+    assert!(line1.ends_with('│'));
+
+    let line2: String = rows[2].chars().take(sidebar_width).collect();
+    assert!(
+        line2.contains("PR #42"),
+        "missing second widget line in {line2:?}"
+    );
+    assert!(line2.ends_with('│'));
+
+    let divider: String = rows[3].chars().take(sidebar_width).collect();
+    assert!(
+        divider.starts_with("───"),
+        "expected subtle divider below widget, got {divider:?}"
+    );
+
+    let spaces_row: String = rows[4].chars().take(sidebar_width).collect();
+    assert!(
+        spaces_row.starts_with(" spaces"),
+        "expected spaces header directly below widget divider, got {spaces_row:?}"
+    );
+}
+
+#[test]
+fn top_sidebar_widget_renders_above_machines_in_multi_endpoint_sidebar() {
+    let mut local = snapshot();
+    local
+        .sidebar_widgets
+        .push(crate::protocol::ClientShellSidebarWidget {
+            source: "drover".into(),
+            slot: crate::protocol::ClientShellSidebarWidgetSlot::Top,
+            title: "drover".into(),
+            right: Some("live".into()),
+            lines: vec!["3 tasks queued".into()],
+        });
+
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    let profile = crate::client::endpoint::SavedSshEndpoint {
+        id: crate::client::endpoint::ProfileId::parse("0123456789abcdef0123456789abcdef").unwrap(),
+        label: "Build".into(),
+        target: "dev@build.example".into(),
+        session: "default".into(),
+        enabled: true,
+    };
+    let remote_id = ClientEndpointId::Ssh(profile.id.clone());
+    state.set_endpoint_catalog(&[profile]);
+    state.set_endpoint_status(&remote_id, ClientEndpointStatus::Online);
+    state.set_snapshot(Box::new(local));
+    state.set_pane_surface(surface());
+    let mut remote = snapshot();
+    remote.boot_id = "remote-boot".into();
+    state.set_endpoint_snapshot(&remote_id, Box::new(remote));
+
+    let frame = state.compose(100, 24).expect("multi-endpoint frame");
+    let rows = frame_rows(&frame);
+    let sidebar_width = usize::from(state.config.sidebar_width);
+
+    let header: String = rows[0].chars().take(sidebar_width).collect();
+    assert!(header.contains("drover") && header.contains("live"));
+    let body: String = rows[1].chars().take(sidebar_width).collect();
+    assert!(body.contains("3 tasks queued"));
+    let divider: String = rows[2].chars().take(sidebar_width).collect();
+    assert!(divider.starts_with("───"));
+    let machines_row: String = rows[3].chars().take(sidebar_width).collect();
+    assert!(
+        machines_row.starts_with(" machines"),
+        "expected machines header directly below widget divider, got {machines_row:?}"
+    );
+}

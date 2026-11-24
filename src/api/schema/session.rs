@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use super::agents::AgentInfo;
 use super::panes::{PaneInfo, PaneLayoutSnapshot};
+use super::sidebar::SidebarWidgetInfo;
 use super::tabs::TabInfo;
 use super::workspaces::WorkspaceInfo;
 
@@ -20,4 +21,6 @@ pub struct SessionSnapshot {
     pub panes: Vec<PaneInfo>,
     pub layouts: Vec<PaneLayoutSnapshot>,
     pub agents: Vec<AgentInfo>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sidebar_widgets: Vec<SidebarWidgetInfo>,
 }

@@ -31,6 +31,8 @@ pub(crate) mod projection;
 mod protocol_guard;
 mod server;
 mod server_not_running;
+mod sidebar;
+pub(crate) mod sidebar_bindings;
 mod spec;
 mod status;
 pub(crate) mod tab;
@@ -132,6 +134,7 @@ pub fn maybe_run(args: &[String]) -> std::io::Result<CommandOutcome> {
         "terminal" => run_terminal_command(&args[2..])?,
         "pane" => pane::run_pane_command(&args[2..])?,
         "plugin" => plugin::run_plugin_command(&args[2..])?,
+        "sidebar" => sidebar::run_sidebar_command(&args[2..])?,
         "integration" => integration::run_integration_command(&args[2..])?,
         "session" => run_session_command(&args[2..])?,
         _ => return Ok(CommandOutcome::NotCli),
@@ -150,6 +153,7 @@ fn api_group(name: &str) -> Option<clap::Command> {
         "agent" => agent::command(),
         "pane" => pane::command(),
         "plugin" => plugin::command(),
+        "sidebar" => sidebar_bindings::command(),
         _ => return None,
     })
 }

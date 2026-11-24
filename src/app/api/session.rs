@@ -72,6 +72,7 @@ impl App {
             panes,
             layouts,
             agents: self.collect_agent_infos(),
+            sidebar_widgets: self.state.sidebar_widgets.snapshot(),
         }
     }
 }

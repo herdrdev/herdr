@@ -68,6 +68,7 @@ impl App {
         for ws_idx in workspaces {
             self.emit_workspace_token_updated(ws_idx);
         }
+        let _ = self.state.expire_sidebar_widgets(now);
         self.sync_agent_metadata_deadline();
     }
 

@@ -3893,6 +3893,67 @@
           ],
           "type": "object"
         },
+        "SidebarClearWidgetParams": {
+          "properties": {
+            "slot": {
+              "$ref": "#/schemas/request/$defs/SidebarWidgetSlot",
+              "default": "top"
+            },
+            "source": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "source"
+          ],
+          "type": "object"
+        },
+        "SidebarReportWidgetParams": {
+          "properties": {
+            "lines": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "right": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "slot": {
+              "$ref": "#/schemas/request/$defs/SidebarWidgetSlot",
+              "default": "top"
+            },
+            "source": {
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            },
+            "ttl_ms": {
+              "format": "uint64",
+              "maximum": 86400000,
+              "minimum": 1,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "source",
+            "title"
+          ],
+          "type": "object"
+        },
+        "SidebarWidgetSlot": {
+          "enum": [
+            "top"
+          ],
+          "type": "string"
+        },
         "SplitDirection": {
           "enum": [
             "right",
@@ -6305,6 +6366,38 @@
             },
             "params": {
               "$ref": "#/schemas/request/$defs/PluginPaneCloseParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "sidebar.report_widget",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/SidebarReportWidgetParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "sidebar.clear_widget",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/SidebarClearWidgetParams"
             }
           },
           "required": [
@@ -10500,6 +10593,12 @@
               "minimum": 0,
               "type": "integer"
             },
+            "sidebar_widgets": {
+              "items": {
+                "$ref": "#/schemas/success_response/$defs/SidebarWidgetInfo"
+              },
+              "type": "array"
+            },
             "tabs": {
               "items": {
                 "$ref": "#/schemas/success_response/$defs/TabInfo"
@@ -10526,6 +10625,43 @@
             "agents"
           ],
           "type": "object"
+        },
+        "SidebarWidgetInfo": {
+          "properties": {
+            "lines": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "right": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "slot": {
+              "$ref": "#/schemas/success_response/$defs/SidebarWidgetSlot",
+              "default": "top"
+            },
+            "source": {
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "source",
+            "title"
+          ],
+          "type": "object"
+        },
+        "SidebarWidgetSlot": {
+          "enum": [
+            "top"
+          ],
+          "type": "string"
         },
         "SplitDirection": {
           "enum": [

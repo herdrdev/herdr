@@ -263,6 +263,23 @@ pub(super) fn snapshot_with_completions(
         panes,
         agents,
         commands: app.client_shell_command_manifest(),
+        sidebar_widgets: app
+            .state
+            .sidebar_widgets
+            .snapshot()
+            .into_iter()
+            .map(|widget| protocol::ClientShellSidebarWidget {
+                source: widget.source,
+                slot: match widget.slot {
+                    crate::api::schema::SidebarWidgetSlot::Top => {
+                        protocol::ClientShellSidebarWidgetSlot::Top
+                    }
+                },
+                title: widget.title,
+                right: widget.right,
+                lines: widget.lines,
+            })
+            .collect(),
     };
     (shell, completions)
 }

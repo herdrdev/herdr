@@ -196,6 +196,123 @@ pub(crate) fn render_collapsed_sidebar(
     );
 }
 
+pub(in crate::client::shell) fn render_top_sidebar_widgets(
+    buffer: &mut Buffer,
+    area: Rect,
+    widgets: &[crate::protocol::ClientShellSidebarWidget],
+    palette: &Palette,
+) -> Rect {
+    let content_width = area.width.saturating_sub(1);
+    if content_width == 0 || area.height < 8 {
+        return area;
+    }
+    let top_widgets: Vec<&crate::protocol::ClientShellSidebarWidget> = widgets
+        .iter()
+        .filter(|widget| widget.slot == crate::protocol::ClientShellSidebarWidgetSlot::Top)
+        .collect();
+    if top_widgets.is_empty() {
+        return area;
+    }
+
+    let max_widget_rows = area.height.saturating_sub(6);
+    if max_widget_rows < 2 {
+        return area;
+    }
+
+    let header_style = Style::default()
+        .fg(palette.overlay0)
+        .add_modifier(Modifier::BOLD);
+    let right_style = Style::default().fg(palette.subtext0);
+    let line_style = Style::default().fg(palette.text);
+    let divider_style = Style::default().fg(palette.surface_dim);
+
+    let mut y = area.y;
+    let body_limit = area.y.saturating_add(max_widget_rows.saturating_sub(1));
+    let inner_width = content_width.saturating_sub(1);
+    let mut rendered_any = false;
+
+    for widget in top_widgets {
+        if y >= body_limit {
+            break;
+        }
+        if rendered_any {
+            if y.saturating_add(1) >= body_limit {
+                break;
+            }
+            y = y.saturating_add(1);
+        }
+        rendered_any = true;
+
+        // Header line: left-aligned title, optional right-aligned status text.
+        let right_text = widget
+            .right
+            .as_deref()
+            .filter(|text| !text.is_empty())
+            .map(|text| format!("{text} "));
+        let right_width = right_text
+            .as_deref()
+            .map(|text| display_width(text).min(content_width.saturating_sub(2)))
+            .unwrap_or(0);
+        let title_budget =
+            inner_width.saturating_sub(right_width.saturating_add(u16::from(right_width > 0)));
+        let title = crate::ui::truncate_end(&widget.title, usize::from(title_budget));
+        put_text(
+            buffer,
+            area.x,
+            y,
+            content_width.saturating_sub(right_width),
+            &format!(" {title}"),
+            header_style,
+        );
+        if let Some(right_text) = right_text {
+            if right_width > 0 {
+                let row_rect = Rect::new(area.x, y, content_width, 1);
+                let truncated_right =
+                    crate::ui::truncate_end(&right_text, usize::from(right_width));
+                put_right_text(buffer, row_rect, y, &truncated_right, right_style);
+            }
+        }
+        y = y.saturating_add(1);
+
+        for line in widget
+            .lines
+            .iter()
+            .take(crate::sidebar_widgets::MAX_SIDEBAR_WIDGET_LINES)
+        {
+            if y >= body_limit {
+                break;
+            }
+            let truncated = crate::ui::truncate_end(line, usize::from(inner_width));
+            put_text(
+                buffer,
+                area.x,
+                y,
+                content_width,
+                &format!(" {truncated}"),
+                line_style,
+            );
+            y = y.saturating_add(1);
+        }
+    }
+
+    if !rendered_any {
+        return area;
+    }
+
+    put_text(
+        buffer,
+        area.x,
+        y,
+        content_width,
+        &"─".repeat(usize::from(content_width)),
+        divider_style,
+    );
+    y = y.saturating_add(1);
+
+    let used = y.saturating_sub(area.y);
+    Rect::new(area.x, y, area.width, area.height.saturating_sub(used))
+}
+
 pub(crate) fn render_sidebar(
     buffer: &mut Buffer,
     area: Rect,
@@ -211,10 +328,12 @@ pub(crate) fn render_sidebar(
     } else {
         Rect::new(area.right().saturating_sub(1), area.y, 1, area.height)
     };
+    let sections_area =
+        render_top_sidebar_widgets(buffer, area, &snapshot.sidebar_widgets, palette);
     let (workspace_area, detail_area) =
-        crate::ui::expanded_sidebar_sections(area, state.sidebar_section_split);
+        crate::ui::expanded_sidebar_sections(sections_area, state.sidebar_section_split);
     hits.sidebar_section_divider =
-        crate::ui::sidebar_section_divider_rect(area, state.sidebar_section_split);
+        crate::ui::sidebar_section_divider_rect(sections_area, state.sidebar_section_split);
     put_text(
         buffer,
         workspace_area.x,

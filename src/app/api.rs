@@ -9,6 +9,7 @@ mod panes;
 pub(crate) mod plugins;
 pub(super) mod responses;
 mod session;
+mod sidebar;
 mod tabs;
 mod workspaces;
 mod worktrees;
@@ -1258,6 +1259,12 @@ impl App {
             }
             Method::PluginPaneClose(params) => {
                 return self.handle_plugin_pane_close(request.id, params);
+            }
+            Method::SidebarReportWidget(params) => {
+                return self.handle_sidebar_report_widget(request.id, params);
+            }
+            Method::SidebarClearWidget(params) => {
+                return self.handle_sidebar_clear_widget(request.id, params);
             }
             _ => {
                 return responses::encode_error(

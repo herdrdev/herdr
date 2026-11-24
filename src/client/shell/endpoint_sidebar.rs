@@ -249,10 +249,15 @@ pub(super) fn render_expanded(
     } else {
         Rect::new(area.right().saturating_sub(1), area.y, 1, area.height)
     };
+    let top_widgets = active_snapshot
+        .map(|snapshot| snapshot.sidebar_widgets.as_slice())
+        .unwrap_or(&[]);
+    let sections_area =
+        super::sidebar::render_top_sidebar_widgets(buffer, area, top_widgets, palette);
     let (workspace_area, detail_area) =
-        crate::ui::expanded_sidebar_sections(area, state.sidebar_section_split);
+        crate::ui::expanded_sidebar_sections(sections_area, state.sidebar_section_split);
     hits.sidebar_section_divider =
-        crate::ui::sidebar_section_divider_rect(area, state.sidebar_section_split);
+        crate::ui::sidebar_section_divider_rect(sections_area, state.sidebar_section_split);
     put_text(
         buffer,
         workspace_area.x,

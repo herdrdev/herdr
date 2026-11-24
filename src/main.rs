@@ -52,6 +52,7 @@ mod render_signal;
 mod selection;
 mod server;
 mod session;
+mod sidebar_widgets;
 mod sound;
 mod terminal;
 mod terminal_effects;

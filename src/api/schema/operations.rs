@@ -205,6 +205,8 @@ mod tests {
             "plugin.pane.open",
             "plugin.pane.focus",
             "plugin.pane.close",
+            "sidebar.report_widget",
+            "sidebar.clear_widget",
         ]
         .into_iter()
         .collect::<BTreeSet<_>>();

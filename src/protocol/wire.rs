@@ -948,6 +948,30 @@ pub struct ClientShellSnapshot {
     pub panes: Vec<ClientShellPane>,
     pub agents: Vec<ClientShellAgent>,
     pub commands: Vec<ClientShellCommand>,
+    #[serde(default)]
+    pub sidebar_widgets: Vec<ClientShellSidebarWidget>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ClientShellSidebarWidgetSlot {
+    #[default]
+    Top,
+    /// A future sidebar slot that this client does not render.
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClientShellSidebarWidget {
+    pub source: String,
+    #[serde(default)]
+    pub slot: ClientShellSidebarWidgetSlot,
+    pub title: String,
+    #[serde(default)]
+    pub right: Option<String>,
+    #[serde(default)]
+    pub lines: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2859,6 +2883,7 @@ mod tests {
                 action: ClientShellCommandAction::Shell,
                 description: Some("deploy".into()),
             }],
+            sidebar_widgets: Vec::new(),
         }));
         let encoded = bincode::serde::encode_to_vec(&msg, bincode::config::standard()).unwrap();
         let (decoded, _): (ServerMessage, _) =

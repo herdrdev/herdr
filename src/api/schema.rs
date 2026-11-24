@@ -11,6 +11,7 @@ pub mod plugins;
 pub mod response;
 pub mod server;
 pub mod session;
+pub mod sidebar;
 pub mod tabs;
 pub mod workspaces;
 pub mod worktrees;
@@ -25,6 +26,7 @@ pub use plugins::*;
 pub use response::*;
 pub use server::*;
 pub use session::*;
+pub use sidebar::*;
 pub use tabs::*;
 pub use workspaces::*;
 pub use worktrees::*;
@@ -145,6 +147,8 @@ operations::define_operations! {
     PluginPaneOpen(PluginPaneOpenParams) => "plugin.pane.open", true, false;
     PluginPaneFocus(PluginPaneFocusParams) => "plugin.pane.focus", true, false;
     PluginPaneClose(PluginPaneCloseParams) => "plugin.pane.close", true, false;
+    SidebarReportWidget(SidebarReportWidgetParams) => "sidebar.report_widget", true, false;
+    SidebarClearWidget(SidebarClearWidgetParams) => "sidebar.clear_widget", true, false;
 }
 
 #[cfg(test)]
